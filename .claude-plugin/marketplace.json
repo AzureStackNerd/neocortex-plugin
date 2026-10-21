@@ -1,0 +1,11 @@
+{
+  "name": "azurestacknerd",
+  "description": "NeoCortex, central memory for Claude Code.",
+  "owner": { "name": "AzureStackNerd" },
+  "plugins": [
+    {
+      "name": "neocortex",
+      "source": "./"
+    }
+  ]
+}

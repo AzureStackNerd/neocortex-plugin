@@ -1,0 +1,30 @@
+{
+  "name": "neocortex",
+  "description": "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
+  "author": {
+    "name": "AzureStackNerd"
+  },
+  "userConfig": {
+    "memory_folder": {
+      "type": "directory",
+      "title": "Memory folder",
+      "description": "The folder that holds your memories. It must exist. To share memories between machines, choose a folder that syncs between them.",
+      "required": true
+    }
+  },
+  "mcpServers": {
+    "neocortex": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/mcp.mjs"
+      ],
+      "env": {
+        "NEOCORTEX_ROOT": "${user_config.memory_folder}"
+      }
+    }
+  },
+  "version": "0.1.0",
+  "metadata": {
+    "sourceCommit": "ce9a74609974d88d10ef5719d75b2b2bc430d4e5"
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "index"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "index", "2"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "index", "3"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "full"]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "prompt",
+              "event": "${hook_event_name}",
+              "prompt": "${prompt}"
+            }
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "edit",
+              "event": "${hook_event_name}"
+            }
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "index",
+              "part": 1,
+              "event": "${hook_event_name}"
+            }
+          },
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "full",
+              "event": "${hook_event_name}"
+            }
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "subagent",
+              "event": "${hook_event_name}"
+            }
+          },
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "prompt",
+              "event": "${hook_event_name}"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
