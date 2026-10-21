@@ -2,6 +2,9 @@ Copyright (c) 2026 Remco Vermeer. All rights reserved.
 
 This software, including its source code, built files and documentation, is proprietary.
 
+The built files in server/ also contain third-party components. Each of them keeps its own licence, which this
+notice does not change; their licence texts are in server/THIRD-PARTY-NOTICES.
+
 No licence is granted to use, copy, modify, merge, publish, distribute, sublicense or sell the software, in
 whole or in part, without the prior written permission of the copyright holder. Access to a repository or a
 copy of the software does not grant such permission.
