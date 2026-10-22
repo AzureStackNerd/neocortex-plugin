@@ -113,9 +113,9 @@ Set it for your user account, so it also holds for updates in later sessions: on
 ## Permissions
 
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
-`set_context_labels`, `delete_memory`, `import_auto_memory`, and `hook_context`, which is for the hooks, not for
-Claude. `import_auto_memory` previews the memories Claude Code's auto memory kept for this project, and imports the
-plan of a preview. In a permission rule
+`set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`, and
+`hook_context`, which is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
+memory kept for this project, and imports the plan of a preview. In a permission rule
 a tool of the plugin is `mcp__plugin_neocortex_neocortex__<tool>`, and `mcp__plugin_neocortex_neocortex__*` matches
 all of them (<https://code.claude.com/docs/en/plugins/components>). To let Claude use them without a permission prompt,
 add the rule to `permissions.allow` in `~/.claude/settings.json`, next to the rules already there:
@@ -148,6 +148,15 @@ next to that allow rule:
 "a matching ask rule prompts even when a more specific allow rule also matches the same call"
 (<https://code.claude.com/docs/en/permissions>). The rule names the tool, not its mode, so it prompts for the preview
 too (not measured).
+
+The allow rule does not cover `save_rule`, `update_rule` and `delete_rule`: they write rules, and Claude Code asks
+before every call of them. "Allow rules that match the tool don't skip the prompt either"
+(<https://code.claude.com/docs/en/mcp>, Require approval for a specific tool). In `dontAsk` mode, and with
+`--permission-prompt-tool`, Claude Code denies them. An application built on the Agent SDK is the exception: "The
+Agent SDK's `canUseTool` callback does receive these calls and can approve them" (same page), so there the application
+decides. NeoCortex's own tools refuse a call that would make a rule start or stop loading unless a person confirms it in
+the client's prompt; what stays outside, such as two sessions or machines writing at once, clients that ignore the
+flag and writes that bypass the tools, is in section 7 of `docs/design-rule-guard.md` in the NeoCortex repository.
 
 ## Update
 
