@@ -36030,6 +36030,12 @@ var UNSHOWN_RE = new RegExp(UNSHOWN_CHAR_RE.source, "gu");
 function shownText(text) {
   return text.replace(UNSHOWN_RE, "\uFFFD");
 }
+function truncate(text, max) {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
+}
+function shownCut(text, max) {
+  return shownText(truncate(text, max).toWellFormed());
+}
 function unshownCharOf(text) {
   const found = UNSHOWN_CHAR_RE.exec(text)?.[0];
   return found === void 0 ? null : `U+${(found.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
@@ -36220,6 +36226,7 @@ function memoryProblems(memory) {
   if (!result.success) problems.push(...issueMessages(result.error.issues));
   return problems;
 }
+var KIND_LABELS = /* @__PURE__ */ new Set(["context", "feedback", "reference", "user"]);
 function normalizeLabel(label) {
   return label.trim().toLowerCase().replace(/\s+/g, "-");
 }
@@ -36233,12 +36240,13 @@ function carriesLabel(memory, label) {
 function shortId(id) {
   return id.slice(0, SHORT_ID_LENGTH);
 }
-function findByIdPrefix(memories, prefix) {
+function findByIdPrefix(memories, prefix, unloadedIds = []) {
   const wanted = prefix.trim().toLowerCase();
   if (wanted.length < SHORT_ID_LENGTH) return { error: `id must have at least ${SHORT_ID_LENGTH} characters` };
   const matches = memories.filter((memory) => memory.id.startsWith(wanted));
   if (matches.length === 0) return { error: `no memory with id ${wanted}` };
-  if (matches.length > 1) return { error: `id ${wanted} matches ${matches.length} memories; give more characters` };
+  const count2 = matches.length + new Set(unloadedIds.filter((id) => id.startsWith(wanted))).size;
+  if (count2 > 1) return { error: `id ${wanted} matches ${count2} memories; give more characters` };
   return { memory: matches[0] };
 }
 function toFrontmatter(memory) {
@@ -45157,7 +45165,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.0",
+  version: "0.3.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45354,7 +45362,7 @@ function linkProblem(kind, source, target) {
   if (SCOPE_RANK[target.scope.kind] >= SCOPE_RANK[source.scope.kind]) {
     return `overrides: ${shortId(target.id)} is not in a broader scope; a project memory can only override a user memory`;
   }
-  if (target.enforced) return `overrides: ${shortId(target.id)} "${shownText(target.title)}" is enforced and cannot be overridden`;
+  if (target.enforced) return `overrides: ${shortId(target.id)} "${shownCut(target.title, 80)}" is enforced and cannot be overridden`;
   return null;
 }
 function validateLinks(memory, existing) {
@@ -45625,7 +45633,7 @@ function fullText(kinds, active, byId, budget, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
   if (chosen.length === 0) return "";
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
-  const blocks = chosen.map((m) => ({ memory: m, text: m.delivery === "startup" ? fullBlock(m, byId) : m.body }));
+  const blocks = chosen.map((m) => ({ memory: m, text: loadedText(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
   const order = blocks.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || a - b);
   const fill = (room) => {
@@ -45669,15 +45677,33 @@ async function loadDelivery(store2, session, now) {
   const resolution = resolve4(memories, session, toLocalDate(now));
   return { projectKey: session.project.key, location: store2.location, resolution, problems, newer };
 }
+function loadedText(memory, byId) {
+  switch (memory.delivery) {
+    case "index":
+      return indexLine(memory);
+    case "startup":
+      return fullBlock(memory, byId);
+    case "prompt":
+    case "question":
+    case "subagent":
+    case "edit":
+      return memory.body;
+    case "on-demand":
+      return "";
+    default:
+      throw new Error(`unknown delivery ${JSON.stringify(memory.delivery)}`);
+  }
+}
 function fullBlock(memory, byId) {
   const tag = memory.enforced ? `${memory.scope.kind}, enforced` : memory.scope.kind;
-  const lines = [`### [${tag}] ${shownText(memory.title)} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
+  const lines = [`### [${tag}] ${shownCut(memory.title, 80)} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
   for (const id of memory.overrides) {
     const target = byId.get(id);
     if (target === void 0) continue;
     const problem = linkProblem("overrides", memory, target);
+    const title = shownCut(target.title, 80);
     lines.push(
-      problem === null ? `Deviates from ${shortId(id)} "${shownText(target.title)}" because: ${memory.overrideReason ?? ""}` : `Does not deviate from ${shortId(id)} "${shownText(target.title)}": ${problem}`
+      problem === null ? `Deviates from ${shortId(id)} "${title}" because: ${memory.overrideReason ?? ""}` : `Does not deviate from ${shortId(id)} "${title}": ${problem}`
     );
   }
   if (memory.body !== "") lines.push(memory.body);
@@ -45729,12 +45755,6 @@ function newerNotice(newer) {
 function listed2(items) {
   const shown2 = items.slice(0, MAX_LISTED).join(", ");
   return items.length > MAX_LISTED ? `${shown2} and ${items.length - MAX_LISTED} more` : shown2;
-}
-function truncate(text, max) {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
-}
-function shownCut(text, max) {
-  return shownText(truncate(text, max).toWellFormed());
 }
 function truncateReason(reason, max) {
   const position = POSITION_RE2.exec(reason)?.[0];
@@ -45815,6 +45835,7 @@ var RULE_TOOL = { create: "save_rule", update: "update_rule", remove: "delete_ru
 var TWIN_TOOL = { create: "save_memory", update: "update_memory", remove: "delete_memory" };
 var TITLE_MAX2 = 80;
 var RULE_DELIVERY_WORDS = `${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)}`;
+var TEXT_FIELDS = ["summary", "why", "body", "overrideReason"];
 var RuleRefusedError = class extends Error {
   answer;
   /** The answer without lines, for a refusal too long to send whole (A10): how many rules the call affects. */
@@ -45826,8 +45847,10 @@ var RuleRefusedError = class extends Error {
   }
 };
 var DONE = { create: "saved", update: "changed", remove: "deleted" };
+var carryWords = (carry) => `plus ${carry.length === 1 ? carry[0] : `${carry.slice(0, -1).join(", ")} and ${carry.at(-1)}`} with the text that is to load (get_memory gives the stored text)`;
 var RULE_TEXT = {
-  needsRuleTool: (kind) => `Nothing was ${DONE[kind]}: this call changes which rules load, and only the user can approve that. A rule is a memory that is enforced, or delivered at ${RULE_DELIVERY_WORDS}. If the user asked for this change, call ${RULE_TOOL[kind]} with the same arguments and affects exactly as listed; the user confirms it in a prompt.`,
+  needsRuleTool: (kind, carry) => `Nothing was ${DONE[kind]}: this call changes which rules load, and only the user can approve that. A rule is a memory that is enforced, or delivered at ${RULE_DELIVERY_WORDS}. If the user asked for this change, call ${RULE_TOOL[kind]} with the same arguments${carry.length === 0 ? "" : `, ${carryWords(carry)},`} and affects exactly as listed; the user confirms it in a prompt.`,
+  needsText: (carry) => `Nothing was changed: this change makes text load, and the user sees that text in the prompt only when the call carries it. Call update_rule again with the same arguments, ${carryWords(carry)}, and affects exactly as listed.`,
   noRule: (kind) => `Nothing was ${DONE[kind]}: this call changes no rule, so it needs no confirmation. Call ${TWIN_TOOL[kind]} with the same arguments, without affects.`,
   mismatch: (kind) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${RULE_TOOL[kind]} again with affects exactly as listed.`,
   tooLong: (kind, rules) => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller update_rule calls, each with the affects its own refusal lists.`
@@ -45861,13 +45884,21 @@ var RuleGuard = class {
     const after = applied(before, write);
     const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, this.today());
     const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null);
+    const carry = textToCarry(write, effect);
     const rules = (/* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), ...effect.writtenRule === null ? [] : [effect.writtenRule]])).size;
     const short = { error: RULE_TEXT.tooLong(write.kind, rules), tool: RULE_TOOL[write.kind] };
     if (confirmation === null) {
-      if (changesRules(effect)) throw new RuleRefusedError({ error: RULE_TEXT.needsRuleTool(write.kind), tool: RULE_TOOL[write.kind], affects }, short);
+      if (changesRules(effect)) {
+        const answer = { error: RULE_TEXT.needsRuleTool(write.kind, carry), tool: RULE_TOOL[write.kind], ...carry.length > 0 ? { carry } : {}, affects };
+        throw new RuleRefusedError(answer, short);
+      }
       return this.perform(write);
     }
     if (!changesRules(effect)) throw new RuleRefusedError({ error: RULE_TEXT.noRule(write.kind), tool: TWIN_TOOL[write.kind] });
+    const carried = confirmation.carried ?? [];
+    if (carry.some((field) => !carried.includes(field))) {
+      throw new RuleRefusedError({ error: RULE_TEXT.needsText(carry), tool: RULE_TOOL[write.kind], carry, affects }, short);
+    }
     if (!sameLines(affects, confirmation.affects)) {
       throw new RuleRefusedError({ error: RULE_TEXT.mismatch(write.kind), tool: RULE_TOOL[write.kind], affects }, short);
     }
@@ -45883,15 +45914,43 @@ function cannotChangeRules(write) {
   const records = write.kind === "create" ? [write.memory] : write.kind === "update" ? [write.base.memory, write.memory] : [write.base.memory];
   return records.every((m) => !isRule(m) && m.supersedes.length === 0 && m.overrides.length === 0);
 }
+function loadingFields(memory) {
+  if (!isRule(memory)) return [];
+  switch (memory.delivery) {
+    case "startup":
+      return memory.overrides.length > 0 ? ["why", "body", "overrideReason"] : ["why", "body"];
+    case "prompt":
+    case "question":
+    case "subagent":
+    case "edit":
+      return ["body"];
+    case "index":
+      return ["summary"];
+    case "on-demand":
+      return [];
+    default:
+      throw new Error(`unknown delivery ${JSON.stringify(memory.delivery)}`);
+  }
+}
+function textToCarry(write, effect) {
+  if (write.kind !== "update") return [];
+  const [was, will] = [write.base.memory, write.memory];
+  const starts = effect.changes.some((change) => change.id === will.id && change.after.some((loads, day) => loads && !change.before[day]));
+  if (!isRule(was) && isRule(will) || was.delivery !== will.delivery || starts) return loadingFields(will);
+  const loaded = loadingFields(was);
+  return loadingFields(will).filter((field) => !loaded.includes(field));
+}
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
 function affectsOf(effect, before, after, created) {
   const byId = new Map([...before, ...after].map((m) => [m.id, m]));
+  const afterById = new Map(after.map((m) => [m.id, m]));
+  const size = (id) => `, ${loadedText(afterById.get(id), afterById).length} characters`;
   const marked = (id) => {
     const versions = [before, after].flatMap((memories) => memories.filter((m) => m.id === id));
     return versions.length > 0 && versions.every((m) => m.enforced);
   };
   const who = (id) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(byId.get(id)?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}`;
-  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}`;
+  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.after.some(Boolean) ? size(change.id) : ""}`;
   const lines = [];
   for (const id of new Set(effect.changes.map((change) => change.id))) {
     const at = (place) => effect.changes.find((change) => change.id === id && change.place === place);
@@ -45906,7 +45965,7 @@ function affectsOf(effect, before, after, created) {
   }
   const written = effect.writtenRule;
   if (written !== null && !effect.changes.some((change) => change.id === written)) {
-    lines.push(written === created ? `${who(written)}: saved; it does not load` : `${who(written)}: changed; its loading does not change`);
+    lines.push(written === created ? `${who(written)}: saved; it does not load` : `${who(written)}: changed; its loading does not change${size(written)}`);
   }
   return lines.sort();
 }
@@ -45972,13 +46031,14 @@ var UPDATE_INPUT = {
 var DELETE_INPUT = { id: ID };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
-var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
+var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
 var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason or expires. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
 var DELETE_DESCRIPTION = "Move a memory to the deleted folder, from where it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
 var UPDATE_RULE_DESCRIPTION = "Change a memory when the change touches a rule or makes one start or stop loading, after update_memory refused it. The user confirms every call in a prompt. Pass the arguments of that update_memory call and affects exactly as its refusal listed.";
 var DELETE_RULE_DESCRIPTION = "Delete a memory when the delete makes a rule start or stop loading, after delete_memory refused it. The user confirms every call in a prompt. Pass the id and affects exactly as the refusal listed; only on the user's request.";
 var RELATED_LIMIT = 10;
+var RELATED_TITLE_MAX = 80;
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
   newer: (format) => `the context labels of this place were written by a newer NeoCortex (format ${format}) that this machine cannot read; nothing was changed. Update NeoCortex on this machine`,
@@ -46072,8 +46132,8 @@ function createServer(deps) {
     const id = shortId(memory.id);
     return ok({
       saved: entryOf(memory),
-      related: related.map(entryOf),
-      next: related.length > 0 ? `If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.` : void 0,
+      related: related.map(relatedEntryOf),
+      next: related.length > 0 ? `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.` : void 0,
       affects: confirmation?.affects
     });
   };
@@ -46146,7 +46206,7 @@ function createServer(deps) {
   server.registerTool(
     "update_rule",
     { title: "Change a NeoCortex rule (the user confirms every call)", description: UPDATE_RULE_DESCRIPTION, inputSchema: { affects: AFFECTS, ...UPDATE_INPUT }, _meta: CONFIRMED },
-    ({ affects, ...args2 }) => guarded(() => updateCall(args2, { affects }))
+    ({ affects, ...args2 }) => guarded(() => updateCall(args2, { affects, carried: carriedOf(args2) }))
   );
   server.registerTool(
     "get_memory",
@@ -46493,7 +46553,8 @@ function resolveIds(memories, problems, ids) {
   return { ids: [...new Set(resolved)] };
 }
 function lookup(memories, problems, prefix) {
-  const found = findByIdPrefix(memories, prefix);
+  const unloadedIds = unloaded(memories, problems).flatMap((problem) => problem.id === void 0 ? [] : [problem.id]);
+  const found = findByIdPrefix(memories, prefix, unloadedIds);
   if (!("error" in found) || !found.error.startsWith("no memory with id")) return found;
   const wanted = prefix.trim().toLowerCase();
   const named = problems.filter((problem) => problemNames(problem, wanted));
@@ -46533,6 +46594,9 @@ function baseOf(stored, memory) {
   return base;
 }
 var REFUSAL_MAX = 1e4;
+function carriedOf(args2) {
+  return TEXT_FIELDS.filter((field) => args2[field] !== void 0);
+}
 function ruleAnswer(error62) {
   if (!(error62 instanceof RuleRefusedError)) return void 0;
   const whole = JSON.stringify(error62.answer);
@@ -46571,7 +46635,22 @@ async function labelRefusal(error62, places, place) {
 }
 function relatedTo(memory, resolution) {
   const linked = /* @__PURE__ */ new Set([...memory.supersedes, ...memory.overrides]);
-  return resolution.active.filter((m) => m.id !== memory.id && !linked.has(m.id) && m.labels.some((label) => carriesLabel(memory, label))).slice(0, RELATED_LIMIT);
+  const counts = /* @__PURE__ */ new Map();
+  for (const m of resolution.active) {
+    for (const label of m.labels) counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const ranked = resolution.active.flatMap((m) => {
+    if (m.id === memory.id || linked.has(m.id)) return [];
+    const shared = m.labels.filter((label) => !KIND_LABELS.has(label) && carriesLabel(memory, label));
+    if (shared.length === 0) return [];
+    return [{ memory: m, rarest: Math.min(...shared.map((label) => counts.get(label) ?? 0)), shared: shared.length }];
+  });
+  return ranked.sort(
+    (a, b) => a.rarest - b.rarest || b.shared - a.shared || (a.memory.updated === b.memory.updated ? 0 : a.memory.updated > b.memory.updated ? -1 : 1) || (a.memory.id < b.memory.id ? -1 : 1)
+  ).slice(0, RELATED_LIMIT).map((r) => r.memory);
+}
+function relatedEntryOf(memory) {
+  return { id: shortId(memory.id), scope: memory.scope.kind, title: shownCut(memory.title, RELATED_TITLE_MAX) };
 }
 function entryOf(memory) {
   return {

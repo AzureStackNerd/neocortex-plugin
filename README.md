@@ -150,7 +150,9 @@ next to that allow rule:
 too (not measured).
 
 The allow rule does not cover `save_rule`, `update_rule` and `delete_rule`: they write rules, and Claude Code asks
-before every call of them. "Allow rules that match the tool don't skip the prompt either"
+before every call of them. Such a call carries the text that will load, and each line of its `affects` names how many
+characters a rule puts in front of Claude; how Claude Code shows a long argument in the prompt is not checked. "Allow
+rules that match the tool don't skip the prompt either"
 (<https://code.claude.com/docs/en/mcp>, Require approval for a specific tool). In `dontAsk` mode, and with
 `--permission-prompt-tool`, Claude Code denies them. An application built on the Agent SDK is the exception: "The
 Agent SDK's `canUseTool` callback does receive these calls and can approve them" (same page), so there the application
