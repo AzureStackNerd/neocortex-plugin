@@ -36030,6 +36030,15 @@ var UNSHOWN_RE = new RegExp(UNSHOWN_CHAR_RE.source, "gu");
 function shownText(text) {
   return text.replace(UNSHOWN_RE, "\uFFFD");
 }
+function unshownCharOf(text) {
+  const found = UNSHOWN_CHAR_RE.exec(text)?.[0];
+  return found === void 0 ? null : `U+${(found.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
+}
+var SHOWN_ONLY = {
+  error: (issue2) => `holds the invisible or control character ${unshownCharOf(String(issue2.input))}; remove it`
+};
+var titleInputSchema = external_exports.string().trim().min(1).refine((text) => unshownCharOf(text) === null, SHOWN_ONLY);
+var summaryInputSchema = summarySchema.refine((text) => unshownCharOf(text) === null, SHOWN_ONLY);
 function shownProblem(problem) {
   return { record: shownText(problem.file), reason: shownText(problem.reason) };
 }
@@ -37059,7 +37068,7 @@ async function moveFolderMemories(store2, oldKey, folderPath, apply) {
   const from = projectScope(parseProjectKey(oldKey));
   const { memories, problems } = await store2.load([from]);
   lines.push(`${oldKey}: ${count(memories.length, "memory", "memories")}, ${count(problems.length, "load problem", "load problems")}`);
-  for (const { memory } of memories) lines.push(`  ${shortId(memory.id)} [${memory.delivery}] ${memory.title} \u2014 ${memory.summary}`);
+  for (const { memory } of memories) lines.push(`  ${shortId(memory.id)} [${memory.delivery}] ${shownText(memory.title)} \u2014 ${shownText(memory.summary)}`);
   for (const { record: record2, reason } of problems.map(shownProblem)) lines.push(`  problem ${record2}: ${reason}`);
   if (!apply) {
     lines.push("Nothing was moved. Check the list and the target, then run the same command with --apply.");
@@ -37083,7 +37092,7 @@ async function moveFolderMemories(store2, oldKey, folderPath, apply) {
       await store2.update({ ...stored.memory, scope: to }, stored);
       moved += 1;
     } catch (error62) {
-      lines.push(`not moved ${shortId(stored.memory.id)} ${stored.memory.title}: ${messageOf(error62)}`);
+      lines.push(`not moved ${shortId(stored.memory.id)} ${shownText(stored.memory.title)}: ${messageOf(error62)}`);
     }
   }
   lines.push(`moved ${moved} of ${count(memories.length, "memory", "memories")} from ${oldKey} to ${target}`);
@@ -45148,7 +45157,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.2.1",
+  version: "0.2.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45345,7 +45354,7 @@ function linkProblem(kind, source, target) {
   if (SCOPE_RANK[target.scope.kind] >= SCOPE_RANK[source.scope.kind]) {
     return `overrides: ${shortId(target.id)} is not in a broader scope; a project memory can only override a user memory`;
   }
-  if (target.enforced) return `overrides: ${shortId(target.id)} "${target.title}" is enforced and cannot be overridden`;
+  if (target.enforced) return `overrides: ${shortId(target.id)} "${shownText(target.title)}" is enforced and cannot be overridden`;
   return null;
 }
 function validateLinks(memory, existing) {
@@ -45365,7 +45374,7 @@ function validateLinks(memory, existing) {
   if (memory.enforced) {
     for (const other of existing) {
       if (other.id !== memory.id && other.overrides.includes(memory.id)) {
-        errors.push(`enforced: ${shortId(other.id)} "${other.title}" overrides this memory; remove that override first`);
+        errors.push(`enforced: ${shortId(other.id)} "${shownText(other.title)}" overrides this memory; remove that override first`);
       }
     }
   }
@@ -45517,7 +45526,7 @@ function placeUpdateWarning(state) {
 }
 function indexLine(memory) {
   const mark = memory.enforced ? ", enforced" : memory.importance === "high" ? ", high" : "";
-  return `- [${memory.scope.kind}${mark}] ${truncate(memory.title, 80)} \u2014 ${memory.summary} \xB7 ${shortId(memory.id)}`;
+  return `- [${memory.scope.kind}${mark}] ${shownCut(memory.title, 80)} \u2014 ${shownText(memory.summary)} \xB7 ${shortId(memory.id)}`;
 }
 function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
   const { projectKey, location, resolution, problems } = input2;
@@ -45600,7 +45609,7 @@ function fullText(kinds, active, byId, budget, priority) {
   if (first.skipped.length === 0) return first.kept.join("\n\n");
   const { kept, skipped } = fill(Math.max(0, budget - WARNING_RESERVE));
   const one = skipped.length === 1;
-  const names = skipped.map((m) => `"${truncate(m.title, 40)}" (${shortId(m.id)})`);
+  const names = skipped.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
   const warning = `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(names)}. Say so before answering; get_memory shows the text.`;
   return [warning, ...kept].join("\n\n");
 }
@@ -45621,13 +45630,13 @@ async function loadDelivery(store2, session, now) {
 }
 function fullBlock(memory, byId) {
   const tag = memory.enforced ? `${memory.scope.kind}, enforced` : memory.scope.kind;
-  const lines = [`### [${tag}] ${memory.title} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
+  const lines = [`### [${tag}] ${shownText(memory.title)} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
   for (const id of memory.overrides) {
     const target = byId.get(id);
     if (target === void 0) continue;
     const problem = linkProblem("overrides", memory, target);
     lines.push(
-      problem === null ? `Deviates from ${shortId(id)} "${target.title}" because: ${memory.overrideReason ?? ""}` : `Does not deviate from ${shortId(id)} "${target.title}": ${problem}`
+      problem === null ? `Deviates from ${shortId(id)} "${shownText(target.title)}" because: ${memory.overrideReason ?? ""}` : `Does not deviate from ${shortId(id)} "${shownText(target.title)}": ${problem}`
     );
   }
   if (memory.body !== "") lines.push(memory.body);
@@ -45650,11 +45659,11 @@ function noticeLines({ resolution, problems, newer }, options) {
   if (visit2 !== "") lines.push(`- ${visit2}`);
   const { expired, ignored } = resolution;
   if (expired.length > 0) {
-    const titles = expired.map((m) => `"${truncate(m.title, 40)}" (${shortId(m.id)})`);
+    const titles = expired.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
     lines.push(`- ${expired.length} expired: ${listed2(titles)}; extend with update_memory or delete.`);
   }
   if (ignored.length > 0) {
-    const links = ignored.map((link) => truncate(link, 120));
+    const links = ignored.map((link) => shownCut(link, 120));
     lines.push(`- ${ignored.length} links ignored: ${listed2(links)}; fix them with update_memory.`);
   }
   const ignoredRecords = [...problems, ...options.place?.problems ?? []];
@@ -45682,6 +45691,9 @@ function listed2(items) {
 }
 function truncate(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
+}
+function shownCut(text, max) {
+  return shownText(truncate(text, max).toWellFormed());
 }
 function truncateReason(reason, max) {
   const position = POSITION_RE2.exec(reason)?.[0];
@@ -45819,8 +45831,8 @@ function createServer(deps) {
       description: "Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory.",
       inputSchema: {
         scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
-        title: external_exports.string().trim().min(1),
-        summary: summarySchema.describe("The rule itself in one sentence, at most 300 characters; it is what loads at every start"),
+        title: titleInputSchema,
+        summary: summaryInputSchema.describe("The rule itself in one sentence, at most 300 characters; it is what loads at every start"),
         why: external_exports.string().trim().min(1).describe("Why this memory exists, or why the choice was made"),
         body: external_exports.string().trim().min(1),
         labels: external_exports.array(external_exports.string()).default([]),
@@ -45878,8 +45890,8 @@ function createServer(deps) {
       inputSchema: {
         id: ID,
         scope: external_exports.enum(SCOPES).optional(),
-        title: external_exports.string().trim().min(1).optional(),
-        summary: summarySchema.optional(),
+        title: titleInputSchema.optional(),
+        summary: summaryInputSchema.optional(),
         why: external_exports.string().trim().min(1).optional(),
         body: external_exports.string().trim().min(1).optional(),
         labels: external_exports.array(external_exports.string()).optional(),
@@ -45932,8 +45944,11 @@ function createServer(deps) {
         return fail(refused);
       }
       const bodyOnly = args2.body !== void 0 && args2.body !== previous.body && args2.summary === void 0;
+      const hidden = ["title", "summary"].filter((field) => args2[field] === void 0 && unshownCharOf(previous[field]) !== null);
+      const both = hidden.length === 2;
       const warnings = [
         ...bodyOnly ? ["The body changed but the summary did not; check that the summary still states the rule."] : [],
+        ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
         ...kept.map((link) => link.line)
       ];
       return ok({ updated: entryOf(memory), warning: warnings.length > 0 ? warnings.join("\n") : void 0 });
@@ -46261,7 +46276,7 @@ function previewAnswer(lookedIn, preview, scope) {
   };
 }
 function shown(text, max = PREVIEW_TEXT_MAX) {
-  return shownText(truncate(text, max).toWellFormed());
+  return shownCut(text, max);
 }
 function shownSkip({ source, reason }) {
   return { source: shown(source), reason: shown(reason) };
@@ -46358,8 +46373,8 @@ function entryOf(memory) {
     scope: memory.scope.kind,
     importance: memory.importance,
     enforced: memory.enforced,
-    title: memory.title,
-    summary: memory.summary,
+    title: shownText(memory.title),
+    summary: shownText(memory.summary),
     delivery: memory.delivery,
     labels: memory.labels,
     why: memory.why
