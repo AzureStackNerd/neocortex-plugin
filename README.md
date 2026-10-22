@@ -67,9 +67,16 @@ code bundled into the server.
    ```
 
    Read this first if Claude Code has saved auto memories for you. "When false, Claude doesn't read from or write to
-   the auto memory directory" (<https://code.claude.com/docs/en/settings-reference>), and NeoCortex does not import
-   those memories. Their files are not deleted: "`MEMORY.md` and topic files stay until you or Claude edits or deletes
-   them" (<https://code.claude.com/docs/en/memory>), in `~/.claude/projects/<project>/memory/`.
+   the auto memory directory" (<https://code.claude.com/docs/en/settings-reference>). Their files are not deleted:
+   "`MEMORY.md` and topic files stay until you or Claude edits or deletes them"
+   (<https://code.claude.com/docs/en/memory>), in `~/.claude/projects/<project>/memory/`. To bring them into
+   NeoCortex, run `/plugin:neocortex:neocortex:import_auto_memory` in a session in that repository, before or after you
+   turn auto memory off; it imports one repository at a time. The prompt has Claude show you what would come in and
+   ask you before it imports: one memory per topic file, and one per `MEMORY.md` list item that links no topic file,
+   into that project's scope. The original files are never changed, and a folder set with `autoMemoryDirectory` is
+   not read. A memory you delete after an import does not come back at the next one: the memory labelled
+   `auto-memory-import` lists what was imported, and deleting it lets the next import bring back what you deleted.
+   Each import rewrites that list and keeps only the lines with a hash; any other field you set on that memory stays.
 
 4. Start Claude Code again. A plugin installed from the shell loads "the next time you start Claude Code, or when you
    run `/reload-plugins` in a session that's already open" (<https://code.claude.com/docs/en/plugins/install>).
@@ -103,7 +110,9 @@ Set it for your user account, so it also holds for updates in later sessions: on
 ## Permissions
 
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
-`set_context_labels`, `delete_memory`, and `hook_context`, which is for the hooks, not for Claude. In a permission rule
+`set_context_labels`, `delete_memory`, `import_auto_memory`, and `hook_context`, which is for the hooks, not for
+Claude. `import_auto_memory` previews the memories Claude Code's auto memory kept for this project, and imports the
+plan of a preview. In a permission rule
 a tool of the plugin is `mcp__plugin_neocortex_neocortex__<tool>`, and `mcp__plugin_neocortex_neocortex__*` matches
 all of them (<https://code.claude.com/docs/en/plugins/components>). To let Claude use them without a permission prompt,
 add the rule to `permissions.allow` in `~/.claude/settings.json`, next to the rules already there:
@@ -118,6 +127,24 @@ add the rule to `permissions.allow` in `~/.claude/settings.json`, next to the ru
 
 That includes `delete_memory`. To keep the prompt for a delete, list the other tools one by one instead, such as
 `mcp__plugin_neocortex_neocortex__search_memories`.
+
+It also includes `import_auto_memory`, so Claude Code does not prompt before an import writes; only the conversation
+asks you, as the prompt tells Claude to. To be prompted before every call of it as well, add it to `permissions.ask`
+next to that allow rule:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__plugin_neocortex_neocortex__*"],
+    "ask": ["mcp__plugin_neocortex_neocortex__import_auto_memory"]
+  }
+}
+```
+
+"Rules are evaluated in order: deny, then ask, then allow. The first match in that order determines the outcome", and
+"a matching ask rule prompts even when a more specific allow rule also matches the same call"
+(<https://code.claude.com/docs/en/permissions>). The rule names the tool, not its mode, so it prompts for the preview
+too (not measured).
 
 ## Update
 

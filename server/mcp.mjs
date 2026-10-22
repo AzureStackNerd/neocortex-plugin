@@ -14536,7 +14536,8 @@ var require_dist2 = __commonJS({
 });
 
 // src/mcp.ts
-import { isAbsolute } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { isAbsolute as isAbsolute2 } from "node:path";
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 import process2 from "node:process";
@@ -35893,8 +35894,12 @@ var StdioServerTransport = class {
   }
 };
 
-// src/folder-move.ts
-import { resolve as resolve2 } from "node:path";
+// src/auto-memory-source.ts
+import { readFile, readdir, stat } from "node:fs/promises";
+import { isAbsolute, join as join2 } from "node:path";
+
+// src/auto-memory.ts
+import { createHash } from "node:crypto";
 
 // src/memory.ts
 var import_yaml = __toESM(require_dist(), 1);
@@ -36252,9 +36257,447 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// src/auto-memory.ts
+var AUTO_MEMORY_LABEL = "auto-memory";
+var IMPORT_RECORD_LABEL = "auto-memory-import";
+var FOLDER_NAME_MAX = 200;
+var FILE_SIZE_MAX = 100 * 1024;
+var PREVIEW_MAX = 20;
+var PREVIEW_UNRECORDED_MAX = 10;
+var PREVIEW_IDENTICAL_MAX = 5;
+var PREVIEW_SKIPPED_MAX = 10;
+var INDEX = "MEMORY.md";
+var TOP_LEVEL_MD_RE = /^[^/\\]+\.md$/;
+var HASH_TAIL_RE = /^[A-Za-z0-9]+$/;
+var TYPE_LABELS = /* @__PURE__ */ new Map([
+  ["user", "user"],
+  ["feedback", "feedback"],
+  ["project", "context"],
+  ["reference", "reference"]
+]);
+var FRONT_RE = /^---\n(?:([\s\S]*?)\n)?---(?:\n|$)([\s\S]*)$/;
+var OPENING_RE = /^---(?:\n|$)/;
+var FRONTMATTER_LINE2 = 2;
+var KEY_LINE_RE = /^([ \t]*)([A-Za-z_][\w-]*):(?:[ \t](.*))?$/s;
+var BLOCK_VALUE_RE = /^[|>][+-]?$/;
+var POSITION_RE = / at (line \d+, column \d+)$/;
+var WHY_RE = /\*\*Why:?\*\*:?[ \t]*([\s\S]*?)(?=\n[ \t]*\n|\n\*\*How to apply|$)/;
+var DATE_START_RE = /^\d{4}-\d{2}-\d{2}/;
+var HEADING_RE = /^#{1,6}(?:[ \t]+(.*))?$/s;
+var ITEM_RE = /^(?:[-*+]|\d+[.)])[ \t]/;
+var INDENTED_RE = /^[ \t]/;
+var MD_LINK_RE = /\[([^[\]]*)\]\(\s*(?:<([^<>]*)>|([^()<>\s]+))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/;
+var WIKI_LINK_RE = /\[\[([^[\]]+)\]\]/;
+var SEPARATOR_RE = /^\s*[—–:|-]?\s*/;
+var TITLE_MAX = 80;
+var PLAN_ID_LENGTH = 12;
+var TOPIC_WHY = "Imported from Claude Code auto memory, which recorded no reason.";
+var ITEM_WHY = "Imported from the index of Claude Code auto memory, which recorded no reason.";
+var RECORD_TITLE = "Claude Code auto memory imported here";
+var RECORD_SUMMARY = "Lists the Claude Code auto memories already imported into this place, rewritten by each import, which keeps only the lines with a hash; delete it to import them again.";
+var RECORD_WHY = "So an import never brings back a memory the user deleted (design-auto-memory-import, section 8).";
+var RECORDED_RE = /[0-9a-f]{64}/g;
+var UTF8 = new TextDecoder("utf-8", { fatal: true });
+function encodePath(path) {
+  return path.replace(/[^A-Za-z0-9]/g, "-");
+}
+function wantedName(encoded) {
+  return encoded.length <= FOLDER_NAME_MAX ? { kind: "exact", name: encoded } : { kind: "prefix", prefix: `${encoded.slice(0, FOLDER_NAME_MAX)}-` };
+}
+function matchFolders(names, wanted, platform) {
+  const fold = platform === "win32" || platform === "darwin" ? (name) => name.toLowerCase() : (name) => name;
+  const exact = new Set(wanted.flatMap((want) => want.kind === "exact" ? [fold(want.name)] : []));
+  const prefixes = wanted.flatMap((want) => want.kind === "prefix" ? [fold(want.prefix)] : []);
+  const prefixed = names.filter((name) => prefixes.some((prefix) => fold(name).startsWith(prefix) && HASH_TAIL_RE.test(fold(name).slice(prefix.length))));
+  if (prefixed.length > 1) {
+    throw new Error(
+      `several Claude Code auto memory folders share the first ${FOLDER_NAME_MAX} characters of this place's folder name, so it is not known which one is this place's: ${prefixed.join(", ")}`
+    );
+  }
+  return names.filter((name) => exact.has(fold(name)) || prefixed.includes(name));
+}
+function placeCheck(place, root2) {
+  if (place.kind === "project" || !root2.inRepo || root2.folderKey === place.key) return null;
+  return `this repository has no origin, so NeoCortex keys each folder of it apart; open ${shownText(root2.root)} to import its auto memory there`;
+}
+var SECRET_SHAPES = [
+  { name: "private key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+  { name: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/ },
+  { name: "GitHub fine-grained token", pattern: /\bgithub_pat_[A-Za-z0-9_]{60,}/ },
+  { name: "Anthropic key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
+  { name: "OpenAI-style key", pattern: /\bsk-(?:proj-)?[A-Za-z0-9]{32,}/ },
+  { name: "AWS access key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
+  { name: "Slack token", pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/ },
+  { name: "JSON web token", pattern: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+  { name: "Azure storage key", pattern: /AccountKey=[A-Za-z0-9+/]{40,}={0,2}/ },
+  { name: "Azure DevOps token", pattern: /\b[a-z2-7]{52}\b/ },
+  { name: "Azure DevOps token", pattern: /\b[A-Za-z0-9]{76}AZDO[A-Za-z0-9]{4}\b/ }
+];
+function secretShape(text) {
+  return SECRET_SHAPES.find((shape) => shape.pattern.test(text))?.name ?? null;
+}
+function importId(projectKey, seed) {
+  const h = createHash("sha256").update(`neocortex-auto-memory:${projectKey}:${seed}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+function recordSourceOf(unit) {
+  return `${unit.folder}/memory/${unit.source}`;
+}
+function importRecordId(scope) {
+  return importId(scope.key, "import-record");
+}
+function recordedHashes(body) {
+  const recorded = /* @__PURE__ */ new Map();
+  for (const line of body.split("\n")) {
+    for (const match of line.matchAll(RECORDED_RE)) {
+      if (!recorded.has(match[0])) recorded.set(match[0], line.slice(match.index + match[0].length).trim());
+    }
+  }
+  return recorded;
+}
+function importRecordOf(scope, entries, now, previous) {
+  const body = [...entries].sort(([a], [b]) => byName(a, b)).map(([hash2, source]) => `- ${hash2} ${source}`).join("\n");
+  if (previous !== void 0) return { ...previous, body, updated: now };
+  return {
+    id: importRecordId(scope),
+    scope,
+    title: RECORD_TITLE,
+    summary: RECORD_SUMMARY,
+    why: RECORD_WHY,
+    body,
+    labels: [IMPORT_RECORD_LABEL],
+    importance: "low",
+    delivery: "on-demand",
+    enforced: false,
+    supersedes: [],
+    overrides: [],
+    overrideReason: null,
+    expires: null,
+    created: now,
+    updated: now
+  };
+}
+function unitsOf(folder, scope) {
+  const files = folder.files.filter((file2) => TOP_LEVEL_MD_RE.test(file2.name));
+  const topics = files.filter((file2) => file2.name !== INDEX).sort((a, b) => byName(a.name, b.name));
+  const indexFile = files.find((file2) => file2.name === INDEX);
+  const index = indexFile === void 0 ? NO_INDEX : readIndex(indexFile, new Set(topics.map((file2) => file2.name)), folder.folder);
+  const units = [];
+  const skipped = [];
+  for (const result of [...topics.map((file2) => topicUnit(folder.folder, file2, index.links.get(file2.name))), ...index.results]) {
+    const checked = "reason" in result ? result : checkedUnit(result, scope);
+    if ("reason" in checked) skipped.push(checked);
+    else units.push(checked);
+  }
+  return { units, skipped, notListItems: index.notListItems };
+}
+function previewOf(folders, scope, known) {
+  const ordered = [...folders].sort((a, b) => byName(a.folder, b.folder));
+  const recordedSources = new Set(known.recorded.values());
+  const firstSource = /* @__PURE__ */ new Map();
+  const units = [];
+  const identical = [];
+  const unrecorded = [];
+  const skipped = [];
+  let alreadyImported = 0;
+  let notListItems = 0;
+  for (const folder of ordered) {
+    const found = unitsOf(folder, scope);
+    skipped.push(...found.skipped);
+    notListItems += found.notListItems;
+    for (const unit of found.units) {
+      const sameAs = firstSource.get(unit.hash);
+      if (sameAs !== void 0) {
+        identical.push({ source: unit.source, sameAs });
+        continue;
+      }
+      firstSource.set(unit.hash, unit.source);
+      if (known.recorded.has(unit.hash)) {
+        alreadyImported += 1;
+        continue;
+      }
+      const changed = unit.kind === "topic" && recordedSources.has(recordSourceOf(unit)) ? { ...unit, flags: [...unit.flags, "source-changed"] } : unit;
+      if (known.ids.has(importId(scope.key, unit.hash))) unrecorded.push(changed);
+      else units.push(changed);
+    }
+  }
+  const names = ordered.map((folder) => folder.folder);
+  const plan = JSON.stringify([scope.key, names, units.map(contentOf), unrecorded.map((unit) => [unit.hash, recordSourceOf(unit)])]);
+  const id = createHash("sha256").update(plan).digest("hex").slice(0, PLAN_ID_LENGTH);
+  return { id, folders: names, import: units, identical, alreadyImported, unrecorded, skipped, notListItems };
+}
+function memoryOf(unit, scope) {
+  return { id: importId(scope.key, unit.hash), scope, ...contentOf(unit), created: unit.created, updated: unit.created };
+}
+function contentOf(unit) {
+  return {
+    title: unit.title,
+    summary: unit.summary,
+    why: unit.why,
+    body: unit.body,
+    labels: [...unit.labels],
+    importance: "low",
+    delivery: "index",
+    enforced: false,
+    supersedes: [],
+    overrides: [],
+    overrideReason: null,
+    expires: null
+  };
+}
+var NO_INDEX = { links: /* @__PURE__ */ new Map(), results: [], notListItems: 0 };
+function checkedUnit(unit, scope) {
+  const shape = secretShape([unit.title, unit.summary, unit.why, unit.body].join("\n"));
+  if (shape !== null) return { source: unit.source, reason: `secret (${shape})` };
+  const fields = new Set(memoryProblems(memoryOf(unit, scope)).map((problem) => problem.split(":")[0]));
+  return fields.size === 0 ? unit : { source: unit.source, reason: `invalid (${[...fields].join(", ")})` };
+}
+function decode3(file2) {
+  if (file2.bytes === null) return { source: file2.name, reason: file2.error === "too-large" ? "too-large" : `unreadable (${file2.error ?? "unknown"})` };
+  try {
+    return { text: UTF8.decode(file2.bytes).replace(/\r\n/g, "\n") };
+  } catch {
+    return { source: file2.name, reason: "not-utf8" };
+  }
+}
+function topicUnit(folder, file2, link) {
+  const decoded = decode3(file2);
+  if ("reason" in decoded) return decoded;
+  const source = file2.name;
+  const shape = secretShape(decoded.text);
+  if (shape !== null) return { source, reason: `secret (${shape})` };
+  const parts = FRONT_RE.exec(decoded.text);
+  if (parts === null && OPENING_RE.test(decoded.text)) return { source, reason: "frontmatter-unreadable" };
+  let front = {};
+  let lenient = false;
+  if (parts !== null) {
+    let data;
+    try {
+      data = parseYaml(parts[1] ?? "", FRONTMATTER_LINE2) ?? {};
+    } catch (error62) {
+      data = keyLines(parts[1] ?? "");
+      if (data === null) {
+        const position = POSITION_RE.exec(error62.message)?.[1];
+        return { source, reason: position === void 0 ? "frontmatter-unreadable" : `frontmatter-unreadable (${position})` };
+      }
+      lenient = true;
+    }
+    if (!isMapping(data)) return { source, reason: "frontmatter-unreadable" };
+    front = data;
+  }
+  const metadata = isMapping(front.metadata) ? front.metadata : {};
+  const body = (parts === null ? decoded.text : parts[2]).trim();
+  const description = stringOf(front.description);
+  const content = body || description;
+  if (content === "") return { source, reason: "no-text" };
+  const flags = [];
+  const title = titleLine(link?.title || stringOf(front.name) || file2.name.slice(0, -".md".length).trim() || file2.name);
+  const summary = summaryOf(link?.hook || description || firstSentence(body) || title, flags);
+  const stated = oneLine(WHY_RE.exec(body)?.[1] ?? "");
+  if (stated === "") flags.push(description === "" ? "no-why" : "why-from-description");
+  const type = (stringOf(metadata.type) || stringOf(front.type)).toLowerCase();
+  const label = TYPE_LABELS.get(type);
+  if (type === "") flags.push("no-type");
+  else if (label === void 0) flags.push("unknown-type");
+  if (link === void 0) flags.push("not-in-index");
+  if (lenient) flags.push("frontmatter-lenient");
+  return {
+    kind: "topic",
+    source,
+    folder,
+    hash: hashOf("topic", content),
+    title,
+    summary,
+    why: stated || oneLine(description) || TOPIC_WHY,
+    body: `${content}
+
+Imported from Claude Code auto memory: ${folder}/memory/${file2.name}.`,
+    labels: label === void 0 ? [AUTO_MEMORY_LABEL] : [AUTO_MEMORY_LABEL, label],
+    created: dateOf(metadata.modified) ?? dateOf(front.modified) ?? file2.modified,
+    flags
+  };
+}
+function keyLines(text) {
+  const front = /* @__PURE__ */ new Map();
+  const metadata = /* @__PURE__ */ new Map();
+  let inMetadata = false;
+  let metadataIndent = 0;
+  let open3 = null;
+  const take = (into, key, value) => {
+    if (BLOCK_VALUE_RE.test(value)) return "block";
+    const parts = [value];
+    into.set(key, parts);
+    return parts;
+  };
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    const indent = line.length - line.replace(/^[ \t]+/, "").length;
+    const pair = KEY_LINE_RE.exec(line);
+    const value = (pair?.[3] ?? "").trim();
+    if (indent === 0) {
+      if (pair === null) return null;
+      inMetadata = pair[2] === "metadata" && value === "";
+      metadataIndent = 0;
+      open3 = inMetadata ? null : take(front, pair[2], value);
+    } else if (inMetadata && (metadataIndent === 0 || indent <= metadataIndent)) {
+      if (pair === null || indent < metadataIndent) return null;
+      metadataIndent = indent;
+      open3 = take(metadata, pair[2], value);
+    } else if (open3 === null) {
+      return null;
+    } else if (open3 !== "block") {
+      open3.push(line.trim());
+    }
+  }
+  const values = (parts) => Object.fromEntries([...parts].map(([key, value]) => [key, unquoted(value.join(" ").trim())]));
+  const meta3 = values(metadata);
+  const result = { ...values(front), metadata: meta3 };
+  const read = [result.name, result.description, result.type, result.modified, meta3.type, meta3.modified].some((value) => stringOf(value) !== "");
+  return read ? result : null;
+}
+function unquoted(value) {
+  return value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.endsWith(value[0]) ? value.slice(1, -1) : value;
+}
+function readIndex(file2, topics, folder) {
+  const decoded = decode3(file2);
+  if ("reason" in decoded) return { ...NO_INDEX, results: [decoded] };
+  const links = /* @__PURE__ */ new Map();
+  const results = [];
+  let notListItems = 0;
+  const take = (item) => {
+    const source = `${INDEX} line ${item.line}`;
+    const first = item.lines[0].replace(ITEM_RE, "").trim();
+    const link = linkOf(first);
+    if (link !== null && topics.has(link.target)) {
+      const seen = links.has(link.target);
+      notListItems += seen ? item.lines.length : item.lines.length - 1;
+      if (seen) return;
+      const shape = secretShape(first);
+      if (shape !== null) results.push({ source, reason: `secret (${shape})` });
+      else links.set(link.target, { title: link.title, hook: link.hook });
+      return;
+    }
+    const lead = [first, ...item.lines.slice(1).map((line) => line.trim())].find((line) => line !== "");
+    if (lead === void 0) {
+      results.push({ source, reason: "no-text" });
+      return;
+    }
+    const flags = [];
+    const summary = summaryOf(lead, flags);
+    flags.push("no-why", "no-type");
+    if (link !== null) flags.push("links-missing-file");
+    const heading2 = item.heading === null ? [] : [`Under the heading: ${item.heading}`];
+    results.push({
+      kind: "bullet",
+      source,
+      folder,
+      // Without its marker, so renumbering a list does not make its items new (spec 6.1).
+      hash: hashOf("bullet", [first, ...item.lines.slice(1)].join("\n")),
+      title: titleOf(lead),
+      summary,
+      why: ITEM_WHY,
+      body: [item.lines.join("\n"), ...heading2, `Imported from Claude Code auto memory: ${folder}/memory/${INDEX}, line ${item.line}.`].join("\n\n"),
+      labels: [AUTO_MEMORY_LABEL],
+      created: file2.modified,
+      flags
+    });
+  };
+  let heading = null;
+  let open3 = null;
+  for (const [index, line] of decoded.text.split("\n").entries()) {
+    if (open3 !== null && INDENTED_RE.test(line) && line.trim() !== "") {
+      open3.lines.push(line);
+      continue;
+    }
+    if (open3 !== null) take(open3);
+    open3 = null;
+    const head = HEADING_RE.exec(line);
+    if (head !== null) {
+      const shape = secretShape(line);
+      if (shape !== null) results.push({ source: `${INDEX} line ${index + 1}`, reason: `secret (${shape})` });
+      heading = shape === null ? oneLine(head[1] ?? "") || null : null;
+    } else if (ITEM_RE.test(line)) {
+      open3 = { line: index + 1, lines: [line], heading };
+    } else if (line.trim() !== "") {
+      notListItems += 1;
+    }
+  }
+  if (open3 !== null) take(open3);
+  return { links, results, notListItems };
+}
+function linkOf(line) {
+  const markdown = MD_LINK_RE.exec(line);
+  const wiki = WIKI_LINK_RE.exec(line);
+  let found = null;
+  if (wiki !== null && (markdown === null || wiki.index < markdown.index)) {
+    const name = wiki[1].trim();
+    const file2 = name.split("#")[0];
+    found = { start: wiki.index, end: wiki.index + wiki[0].length, title: "", text: name, target: fileNameOf(file2.endsWith(".md") ? file2 : `${file2}.md`) };
+  } else if (markdown !== null) {
+    const title = markdown[1].trim();
+    found = { start: markdown.index, end: markdown.index + markdown[0].length, title, text: title, target: fileNameOf(markdown[2] ?? markdown[3]) };
+  }
+  if (found === null || found.target === null) return null;
+  const before = line.slice(0, found.start);
+  const after = line.slice(found.end);
+  const hook = before.trim() === "" ? after.replace(SEPARATOR_RE, "") : `${before}${found.text}${after}`;
+  return { title: found.title, target: found.target, hook: hook.trim() };
+}
+function fileNameOf(target) {
+  const path = target.split("#")[0].replace(/^\.\//, "");
+  let name;
+  try {
+    name = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  return name.endsWith(".md") ? name : null;
+}
+function summaryOf(text, flags) {
+  const line = oneLine(text);
+  if (line.length <= SUMMARY_MAX) return line;
+  flags.push("summary-cut");
+  return `${line.slice(0, SUMMARY_MAX - 1).replace(/[\uD800-\uDBFF]$/, "")}\u2026`;
+}
+function firstSentence(text) {
+  const paragraph = text.replace(/\*\*/g, "").trim().split(/\n\s*\n/)[0];
+  return oneLine(/^([\s\S]+?[.!?])(?:\s|$)/.exec(paragraph)?.[1] ?? paragraph.split("\n")[0]);
+}
+function titleOf(line) {
+  const points = Array.from(line);
+  if (points.length <= TITLE_MAX) return line;
+  const head = points.slice(0, TITLE_MAX).join("");
+  const space = head.lastIndexOf(" ");
+  return `${(space > 0 ? head.slice(0, space) : points.slice(0, TITLE_MAX - 1).join("")).trimEnd()}\u2026`;
+}
+function titleLine(text) {
+  return text.split(/[\r\n]+/).map((line) => line.trim()).filter((line) => line !== "").join(" ");
+}
+function hashOf(kind, content) {
+  return createHash("sha256").update(`${kind}
+${oneLine(content)}`).digest("hex");
+}
+function dateOf(value) {
+  if (typeof value !== "string" || !DATE_START_RE.test(value)) return null;
+  const time3 = Date.parse(value);
+  return Number.isNaN(time3) ? null : new Date(time3).toISOString();
+}
+function byName(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+function oneLine(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+function stringOf(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+function isMapping(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 // src/project.ts
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 var AZURE_SSH_HOSTS = /* @__PURE__ */ new Set(["ssh.dev.azure.com", "vs-ssh.visualstudio.com"]);
@@ -36292,7 +36735,7 @@ function folderProjectKey(folderKey) {
   const slug = slugOf(folderKey);
   const key = `local_${slug}`;
   if (key.length <= FOLDER_PROJECT_KEY_MAX) return key;
-  const hash2 = createHash("sha256").update(slug).digest("hex").slice(0, FOLDER_HASH_LENGTH);
+  const hash2 = createHash2("sha256").update(slug).digest("hex").slice(0, FOLDER_HASH_LENGTH);
   return `${key.slice(0, FOLDER_PROJECT_KEY_MAX - FOLDER_HASH_LENGTH - 1)}_${hash2}`;
 }
 function nameKeyOf(dir) {
@@ -36320,9 +36763,23 @@ function identifyDir(dir) {
   const folder = folderKeyOf(realFolder(dir));
   return { projectKey: folderProjectKey(folder), place: { kind: "folder", key: folder } };
 }
+function placeRootOf(placeDir) {
+  const common = gitOutput(placeDir, ["rev-parse", "--path-format=absolute", "--git-common-dir"], "find the repository");
+  if (common !== null && basename(common) !== ".git") {
+    throw new Error(
+      `the git folder of ${placeDir} is ${common}, not a .git folder at the root of its repository (a submodule, a separate git folder or a bare repository), so the folder Claude Code keeps its auto memory in is not known`
+    );
+  }
+  const root2 = common === null ? placeDir : dirname(common);
+  const realRoot = realFolder(root2);
+  return { inRepo: common !== null, root: root2, realRoot, folderKey: folderKeyOf(realRoot), placeIsRoot: realFolder(placeDir) === realRoot };
+}
 function readOriginUrl(dir) {
+  return gitOutput(dir, ["remote", "get-url", "origin"], "read the origin remote", 2);
+}
+function gitOutput(dir, args2, what, nothing = null) {
   try {
-    return execFileSync("git", ["-C", dir, "remote", "get-url", "origin"], {
+    return execFileSync("git", ["-C", dir, ...args2], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 5e3,
@@ -36330,9 +36787,9 @@ function readOriginUrl(dir) {
     }).trim();
   } catch (error62) {
     const failure2 = error62;
-    if (failure2.status === 2 || !insideRepo(dir)) return null;
+    if (nothing !== null && failure2.status === nothing || !insideRepo(dir)) return null;
     const detail = String(failure2.stderr ?? "").trim() || String(failure2.message);
-    throw new Error(`git could not read the origin remote of ${dir}: ${detail}`);
+    throw new Error(`git could not ${what} of ${dir}: ${detail}`);
   }
 }
 function insideRepo(dir) {
@@ -36377,7 +36834,67 @@ function safeDecode3(value) {
   }
 }
 
+// src/auto-memory-source.ts
+function sourceOptionsFromEnv(env, home, placeDir) {
+  const configDir = setValue(env.CLAUDE_CONFIG_DIR);
+  const pinnedName = configDir === void 0 ? void 0 : setValue(env.CLAUDE_CODE_PROJECT_DIR_NAME);
+  return { configDir, pinnedName, home, placeDir, platform: process.platform };
+}
+function createAutoMemorySource(options) {
+  return { find: () => find(options) };
+}
+async function find(options) {
+  if (options.configDir !== void 0 && !isAbsolute(options.configDir)) {
+    throw new Error(
+      `CLAUDE_CONFIG_DIR is ${JSON.stringify(options.configDir)}, which is not an absolute path, so the folder of Claude Code's auto memory is not known; set it to the full path of Claude Code's configuration folder, or unset it`
+    );
+  }
+  const lookedIn = join2(options.configDir ?? join2(options.home, ".claude"), "projects");
+  const root2 = placeRootOf(options.placeDir);
+  const candidates = [root2.root, root2.realRoot, ...root2.placeIsRoot ? [options.placeDir] : []];
+  const wanted = options.pinnedName === void 0 ? [...new Set(candidates.map(encodePath))].map(wantedName) : [{ kind: "exact", name: options.pinnedName }];
+  const lookedFor = wanted.map((want) => want.kind === "exact" ? want.name : `${want.prefix}*`);
+  const names = await listed(lookedIn, "projects folder", (dir) => readdir(dir));
+  const matched = names === null ? [] : matchFolders(names, wanted, options.platform);
+  if (matched.length === 0) return { kind: "none", lookedIn, lookedFor };
+  const folders = await Promise.all(matched.map((name) => readFolder(join2(lookedIn, name), name)));
+  return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot } };
+}
+async function readFolder(dir, folder) {
+  const memory = join2(dir, "memory");
+  const entries = await listed(memory, "memory folder", (path) => readdir(path, { withFileTypes: true })) ?? [];
+  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".md"));
+  return { folder, files: await Promise.all(files.map((entry) => readSourceFile(join2(memory, entry.name), entry.name))) };
+}
+async function readSourceFile(path, name) {
+  let modified = "";
+  try {
+    const info = await stat(path);
+    modified = info.mtime.toISOString();
+    if (info.size > FILE_SIZE_MAX) return { name, bytes: null, error: "too-large", modified };
+    return { name, bytes: await readFile(path), modified };
+  } catch (error62) {
+    return { name, bytes: null, error: codeOf(error62), modified };
+  }
+}
+async function listed(folder, what, list) {
+  try {
+    return await list(folder);
+  } catch (error62) {
+    const code = codeOf(error62);
+    if (code === "ENOENT") return null;
+    throw new Error(`cannot list Claude Code's ${what} ${JSON.stringify(folder)} (${code})`);
+  }
+}
+function codeOf(error62) {
+  return String(error62.code ?? error62.message);
+}
+function setValue(value) {
+  return value?.trim() || void 0;
+}
+
 // src/folder-move.ts
+import { resolve as resolve2 } from "node:path";
 var FOLDER_PREFIX = "local_";
 async function moveFolderMemories(store2, oldKey, folderPath, apply) {
   const lines = [];
@@ -44500,7 +45017,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.1.0",
+  version: "0.2.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -44528,7 +45045,7 @@ var package_default = {
 
 // src/place.ts
 var import_yaml2 = __toESM(require_dist(), 1);
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 var PLACE_REGISTRY = { formats: [{ version: "1.0", fields: ["kind", "key", "labels", "updated"] }], steps: {} };
 var MAX_CONTEXT_LABELS = 10;
 var CONTEXT_LABEL_MAX = 40;
@@ -44544,7 +45061,7 @@ var PlaceFormatError = class extends Error {
   }
 };
 function placeStem(place) {
-  return createHash2("sha256").update(`${place.kind}:${place.key}`).digest("hex").slice(0, 16);
+  return createHash3("sha256").update(`${place.kind}:${place.key}`).digest("hex").slice(0, 16);
 }
 function placeName(place) {
   return place.kind === "project" ? `project ${place.key}` : `folder ${shownFolderKey(place.key)}`;
@@ -44814,7 +45331,7 @@ var INDEX_HEADING = "## Index (get_memory <id> for the full text, search_memorie
 var FULL_HEADING = "# NeoCortex \xB7 in full";
 var MORE_LINE_RESERVE = 90;
 var SEPARATORS = 6;
-var POSITION_RE = / at line \d+, column \d+$/;
+var POSITION_RE2 = / at line \d+, column \d+$/;
 var PLACE_TEXT = {
   line: (labels) => `Context labels: ${labels}`,
   /** The folder is named, escaped by shownFolderKey, because its project key alone does not show which path it is. */
@@ -44953,7 +45470,7 @@ function fullText(kinds, active, byId, budget, priority) {
   const { kept, skipped } = fill(Math.max(0, budget - WARNING_RESERVE));
   const one = skipped.length === 1;
   const names = skipped.map((m) => `"${truncate(m.title, 40)}" (${shortId(m.id)})`);
-  const warning = `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed(names)}. Say so before answering; get_memory shows the text.`;
+  const warning = `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(names)}. Say so before answering; get_memory shows the text.`;
   return [warning, ...kept].join("\n\n");
 }
 function sessionContext(input2, options = NO_PLACE) {
@@ -44990,7 +45507,7 @@ function brokenWarning(kinds, problems) {
   if (ours.length === 0) return "";
   const one = ours.length === 1;
   const records = ours.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
-  return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
+  return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
 function noticeLines({ resolution, problems, newer }, options) {
   const lines = [];
@@ -45003,16 +45520,16 @@ function noticeLines({ resolution, problems, newer }, options) {
   const { expired, ignored } = resolution;
   if (expired.length > 0) {
     const titles = expired.map((m) => `"${truncate(m.title, 40)}" (${shortId(m.id)})`);
-    lines.push(`- ${expired.length} expired: ${listed(titles)}; extend with update_memory or delete.`);
+    lines.push(`- ${expired.length} expired: ${listed2(titles)}; extend with update_memory or delete.`);
   }
   if (ignored.length > 0) {
     const links = ignored.map((link) => truncate(link, 120));
-    lines.push(`- ${ignored.length} links ignored: ${listed(links)}; fix them with update_memory.`);
+    lines.push(`- ${ignored.length} links ignored: ${listed2(links)}; fix them with update_memory.`);
   }
   const ignoredRecords = [...problems, ...options.place?.problems ?? []];
   if (ignoredRecords.length > 0) {
     const records = ignoredRecords.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
-    lines.push(`- ${ignoredRecords.length} records ignored: ${listed(records)}.`);
+    lines.push(`- ${ignoredRecords.length} records ignored: ${listed2(records)}.`);
   }
   return lines;
 }
@@ -45028,15 +45545,15 @@ function newerNotice(newer) {
   const one = newer.length === 1;
   return `${newer.length} ${one ? "memory comes" : "memories come"} from a newer NeoCortex (format ${formats}); this machine reads and changes ${one ? "it" : "them"} and keeps the fields it does not know. Updating NeoCortex is recommended.`;
 }
-function listed(items) {
-  const shown = items.slice(0, MAX_LISTED).join(", ");
-  return items.length > MAX_LISTED ? `${shown} and ${items.length - MAX_LISTED} more` : shown;
+function listed2(items) {
+  const shown2 = items.slice(0, MAX_LISTED).join(", ");
+  return items.length > MAX_LISTED ? `${shown2} and ${items.length - MAX_LISTED} more` : shown2;
 }
 function truncate(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 function truncateReason(reason, max) {
-  const position = POSITION_RE.exec(reason)?.[0];
+  const position = POSITION_RE2.exec(reason)?.[0];
   if (position === void 0 || position.length > max - 2) return truncate(reason, max);
   return `${truncate(reason.slice(0, -position.length), max - position.length)}${position}`;
 }
@@ -45123,6 +45640,28 @@ var LABEL_TEXT = {
   removed: "the record of this place was removed while this change was being written; nothing was written. Call set_context_labels again",
   busy: "the context labels of this place are being written by another session; try again"
 };
+var IMPORT_TEXT = {
+  title: "Import the Claude Code auto memory of this project",
+  description: `Import the memories that Claude Code's auto memory kept for this project into NeoCortex, one to one, into this project's scope. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
+  promptTitle: "Import Claude Code auto memory",
+  promptDescription: "Import the memories Claude Code's auto memory kept for this project into NeoCortex, after the user agreed to a preview.",
+  prompt: 'Call the NeoCortex tool import_auto_memory with mode "preview". Show the user what it found: how many memories would come in, their titles and flags, how many index characters they add, which ones are already in NeoCortex but not yet recorded, and what was skipped and why. Then ask whether to import them into this project. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and the plan from the preview, and report its result. If the user says no, import nothing.',
+  next: (plan) => `Show the user what would come in and ask whether to import it into this project. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and plan ${plan}.`,
+  noSource: "this server was started without an auto memory source",
+  noFolder: "no auto memory folder of this place was found",
+  noFolderNext: "If autoMemoryDirectory is set in Claude Code's settings, Claude Code kept every project's memories in that one folder; this import does not read it.",
+  nothingNew: "nothing new in the auto memory of this place",
+  nothingNext: "Tell the user there is nothing to import.",
+  noPlan: 'mode "apply" needs the plan id of the preview the user agreed to; call import_auto_memory with mode "preview" first',
+  changed: (plan, now) => `the auto memory of this place, or what is already imported, changed since the preview (plan ${plan}, now ${now}); preview again`,
+  unreadable: ({ record: record2, reason }) => `the import record ${record2} could not be read (${reason}); repair or delete it, then preview again`,
+  /** An apply that stopped (spec 9, steps 3 and 4): at a memory the store refused, or at the record, or at both. */
+  failed: (stop, record2) => (stop === void 0 ? "the memories were imported" : `the store refused an imported memory (${stop.cause}); ${stop.written} of ${stop.total} were written`) + (record2 === void 0 ? ", and the import record lists them; preview again to import the rest" : `, but the import record could not be updated (${record2}); run the import again to record them`)
+};
+var PLAN_RE = new RegExp(`^[0-9a-f]{${PLAN_ID_LENGTH}}$`);
+var PREVIEW_SUMMARY_MAX = 120;
+var PREVIEW_TEXT_MAX = 80;
+var UNIT_ID_LENGTH = 8;
 function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   const newId = deps.newId ?? randomUUID;
@@ -45417,6 +45956,41 @@ function createServer(deps) {
       return ok({ deleted: entryOf(found.memory) });
     })
   );
+  server.registerTool(
+    "import_auto_memory",
+    {
+      title: IMPORT_TEXT.title,
+      description: IMPORT_TEXT.description,
+      inputSchema: {
+        mode: external_exports.enum(["preview", "apply"]).describe("preview: list what would come in, writing nothing; apply: write the plan of a preview the user agreed to"),
+        plan: external_exports.string().regex(PLAN_RE).optional().describe("The plan id of that preview; required for apply")
+      }
+    },
+    ({ mode, plan }) => guarded(async () => {
+      if (deps.autoMemory === void 0) return fail(IMPORT_TEXT.noSource);
+      if (mode === "apply" && plan === void 0) return fail(IMPORT_TEXT.noPlan);
+      const found = await deps.autoMemory.find();
+      const place = deps.session.project.key;
+      if (found.kind === "none") {
+        const { lookedIn, lookedFor } = found;
+        return ok({ place, lookedIn, lookedFor, folders: [], nothing: IMPORT_TEXT.noFolder, alreadyImported: 0, skipped: [], notListItems: 0, next: IMPORT_TEXT.noFolderNext });
+      }
+      const refused = placeCheck(deps.session.place, found.root);
+      if (refused !== null) return fail(refused);
+      const readState = async () => importState(await load(), deps.session.project);
+      const state = await readState();
+      const preview = previewOf(found.folders, deps.session.project, state.known);
+      if (mode === "apply" && plan !== void 0) {
+        return applyImport({ store: deps.store, scope: deps.session.project, stamp: now().toISOString(), reload: readState }, preview, state, plan);
+      }
+      if (preview.import.length === 0 && preview.unrecorded.length === 0 && preview.skipped.length === 0) {
+        const { alreadyImported, notListItems } = preview;
+        const next = state.unreadable ?? IMPORT_TEXT.nothingNext;
+        return ok({ place, lookedIn: found.lookedIn, folders: preview.folders, nothing: IMPORT_TEXT.nothingNew, alreadyImported, skipped: [], notListItems, next });
+      }
+      return ok(previewAnswer(found.lookedIn, preview, deps.session.project, state.unreadable ?? IMPORT_TEXT.next(preview.id)));
+    })
+  );
   server.registerPrompt(
     "refresh",
     {
@@ -45433,7 +46007,108 @@ function createServer(deps) {
       return { messages: [{ role: "user", content: { type: "text", text } }] };
     }
   );
+  server.registerPrompt("import_auto_memory", { title: IMPORT_TEXT.promptTitle, description: IMPORT_TEXT.promptDescription }, () => ({
+    messages: [{ role: "user", content: { type: "text", text: IMPORT_TEXT.prompt } }]
+  }));
   return server;
+}
+function importState({ stored, problems }, scope) {
+  const id = importRecordId(scope);
+  const record2 = stored.find((s) => s.memory.id === id);
+  const problem = problems.find((p) => p.id === id);
+  const ids = /* @__PURE__ */ new Set([...stored.map((s) => s.memory.id), ...problems.flatMap((p) => p.id === void 0 ? [] : [p.id])]);
+  return {
+    known: { ids, recorded: recordedHashes(record2?.memory.body ?? "") },
+    record: record2,
+    unreadable: problem === void 0 ? void 0 : IMPORT_TEXT.unreadable(shownProblem(problem))
+  };
+}
+async function applyImport(run, preview, state, plan) {
+  if (state.unreadable !== void 0) return fail(state.unreadable);
+  if (plan !== preview.id) return fail(IMPORT_TEXT.changed(plan, preview.id));
+  const entries = new Map(preview.unrecorded.map((unit) => [unit.hash, recordSourceOf(unit)]));
+  let created = 0;
+  let alreadyThere = 0;
+  let stop;
+  for (const unit of preview.import) {
+    try {
+      await run.store.create(memoryOf(unit, run.scope));
+      created += 1;
+    } catch (error62) {
+      if (!(error62 instanceof AlreadyExistsError)) {
+        stop = { cause: message(error62), written: created, total: preview.import.length };
+        break;
+      }
+      alreadyThere += 1;
+    }
+    entries.set(unit.hash, recordSourceOf(unit));
+  }
+  const recordError = entries.size === 0 ? void 0 : await writeRecord(run, entries, state);
+  if (stop !== void 0 || recordError !== void 0) return fail(IMPORT_TEXT.failed(stop, recordError));
+  return ok({
+    place: run.scope.key,
+    plan,
+    created,
+    alreadyThere,
+    recorded: entries.size,
+    skipped: preview.skipped.slice(0, PREVIEW_SKIPPED_MAX).map(shownSkip),
+    moreSkipped: unlisted(preview.skipped, PREVIEW_SKIPPED_MAX),
+    record: shortId(importRecordId(run.scope))
+  });
+}
+async function writeRecord(run, entries, state) {
+  let current = state;
+  let lost = "";
+  for (const retry of [false, true]) {
+    try {
+      if (retry) current = await run.reload();
+      if (current.unreadable !== void 0) return current.unreadable;
+      const listed3 = new Map([...current.known.recorded, ...entries]);
+      if (current.record === void 0) await run.store.create(importRecordOf(run.scope, listed3, run.stamp));
+      else await run.store.update(importRecordOf(run.scope, listed3, run.stamp, current.record.memory), current.record);
+      return void 0;
+    } catch (error62) {
+      if (!(error62 instanceof AlreadyExistsError || error62 instanceof ConflictError)) return message(error62);
+      lost = message(error62);
+    }
+  }
+  return lost;
+}
+function previewAnswer(lookedIn, preview, scope, next) {
+  return {
+    place: scope.key,
+    lookedIn,
+    folders: preview.folders,
+    plan: preview.id,
+    import: preview.import.slice(0, PREVIEW_MAX).map((unit) => ({
+      unit: unit.hash.slice(0, UNIT_ID_LENGTH),
+      source: shown(unit.source),
+      title: shown(unit.title),
+      summary: shown(unit.summary, PREVIEW_SUMMARY_MAX),
+      labels: unit.labels,
+      flags: unit.flags
+    })),
+    more: unlisted(preview.import, PREVIEW_MAX),
+    indexCharacters: preview.import.reduce((sum, unit) => sum + indexLine(memoryOf(unit, scope)).length + 1, 0),
+    alreadyImported: preview.alreadyImported,
+    unrecorded: preview.unrecorded.slice(0, PREVIEW_UNRECORDED_MAX).map((unit) => shown(unit.source)),
+    moreUnrecorded: unlisted(preview.unrecorded, PREVIEW_UNRECORDED_MAX),
+    identical: preview.identical.slice(0, PREVIEW_IDENTICAL_MAX).map(({ source, sameAs }) => ({ source: shown(source), sameAs: shown(sameAs) })),
+    moreIdentical: unlisted(preview.identical, PREVIEW_IDENTICAL_MAX),
+    skipped: preview.skipped.slice(0, PREVIEW_SKIPPED_MAX).map(shownSkip),
+    moreSkipped: unlisted(preview.skipped, PREVIEW_SKIPPED_MAX),
+    notListItems: preview.notListItems,
+    next
+  };
+}
+function shown(text, max = PREVIEW_TEXT_MAX) {
+  return shownText(truncate(text, max).toWellFormed());
+}
+function shownSkip({ source, reason }) {
+  return { source: shown(source), reason: shown(reason) };
+}
+function unlisted(list, cap) {
+  return Math.max(0, list.length - cap);
 }
 function resolveIds(memories, problems, ids) {
   const resolved = [];
@@ -45552,11 +46227,11 @@ function message(error62) {
 }
 
 // src/store.ts
-import { createHash as createHash3, randomBytes } from "node:crypto";
+import { createHash as createHash4, randomBytes } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { mkdir, open as open2, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname as dirname2, join as join2, relative } from "node:path";
+import { dirname as dirname2, join as join3, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 var PLACES = PLACE_AREA;
 var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -45564,12 +46239,12 @@ var BYTE_ORDER_MARK3 = String.fromCharCode(65279);
 function userLockBase(warn = () => {
 }, account = userInfo, home = homedir) {
   try {
-    return join2(account().homedir, ".neocortex", "locks");
+    return join3(account().homedir, ".neocortex", "locks");
   } catch (error62) {
-    let fallback = join2(tmpdir(), "neocortex-locks");
+    let fallback = join3(tmpdir(), "neocortex-locks");
     try {
       const folder = home();
-      if (folder !== "") fallback = join2(folder, ".neocortex", "locks");
+      if (folder !== "") fallback = join3(folder, ".neocortex", "locks");
     } catch {
     }
     const reason = error62 instanceof Error ? error62.message : String(error62);
@@ -45579,7 +46254,7 @@ function userLockBase(warn = () => {
 }
 function revisionOf(text) {
   const unmarked2 = text.startsWith(BYTE_ORDER_MARK3) ? text.slice(BYTE_ORDER_MARK3.length) : text;
-  return createHash3("sha256").update(unmarked2.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
+  return createHash4("sha256").update(unmarked2.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
 }
 var FileStore = class {
   root;
@@ -45594,7 +46269,7 @@ var FileStore = class {
     this.root = root2;
     this.registry = options.registry ?? REGISTRY;
     this.placeRegistry = options.placeRegistry ?? PLACE_REGISTRY;
-    this.lockBase = options.lockBase ?? join2(tmpdir(), "neocortex-locks");
+    this.lockBase = options.lockBase ?? join3(tmpdir(), "neocortex-locks");
     this.busyBudgetMs = options.busyBudgetMs ?? 2e3;
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
@@ -45618,7 +46293,7 @@ var FileStore = class {
     await this.assertRoot();
     let entries;
     try {
-      entries = await readdir(join2(this.root, "projects"), { withFileTypes: true });
+      entries = await readdir2(join3(this.root, "projects"), { withFileTypes: true });
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -45664,7 +46339,7 @@ var FileStore = class {
   async remove(base) {
     await this.assertRoot();
     const source = this.pathFor(base.memory);
-    const target = join2(this.root, "deleted", ...this.relativeParts(base.memory));
+    const target = join3(this.root, "deleted", ...this.relativeParts(base.memory));
     await this.withLock(base.memory.id, async () => {
       await this.checkBase(source, base);
       await mkdir(dirname2(target), { recursive: true });
@@ -45734,10 +46409,10 @@ var FileStore = class {
   async placeFiles() {
     let names;
     try {
-      names = await readdir(join2(this.root, PLACES));
+      names = await readdir2(join3(this.root, PLACES));
     } catch (error62) {
       if (isNotFound(error62)) return { stems: [], strays: [] };
-      return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf(error62) ?? messageOf2(error62)})` } };
+      return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf2(error62) ?? messageOf2(error62)})` } };
     }
     const stems = [];
     const strays = [];
@@ -45778,23 +46453,23 @@ var FileStore = class {
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
   placePath(stem) {
-    return join2(this.root, PLACES, `${stem}.yaml`);
+    return join3(this.root, PLACES, `${stem}.yaml`);
   }
   /** The lock folder of this root: the same for every spelling of it, such as another case or an 8.3 short name. */
   async lockFolder() {
     if (this.locks === void 0) {
       const real = realpathSync2.native(this.root);
       const key = process.platform === "win32" ? real.toLowerCase() : real;
-      this.locks = join2(this.lockBase, createHash3("sha256").update(key).digest("hex").slice(0, 16));
+      this.locks = join3(this.lockBase, createHash4("sha256").update(key).digest("hex").slice(0, 16));
     }
     await mkdir(this.locks, { recursive: true });
     return this.locks;
   }
   async loadFolder(parts, location, result) {
-    const folder = join2(this.root, ...parts);
+    const folder = join3(this.root, ...parts);
     let names;
     try {
-      names = await readdir(folder);
+      names = await readdir2(folder);
     } catch (error62) {
       if (isNotFound(error62)) return;
       throw error62;
@@ -45809,7 +46484,7 @@ var FileStore = class {
       }
       let text;
       try {
-        text = await readFile(join2(folder, name), "utf8");
+        text = await readFile2(join3(folder, name), "utf8");
         const read = readMemoryFile(text, { ...location, id }, this.registry);
         if (result.memories.some((stored) => stored.memory.id === id)) {
           result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
@@ -45846,14 +46521,14 @@ var FileStore = class {
   }
   /** Holds <lock folder>/<id>.lock while run runs; waits for another holder within the budget, then StoreBusyError. */
   async withLock(id, run) {
-    const path = join2(await this.lockFolder(), `${id}.lock`);
+    const path = join3(await this.lockFolder(), `${id}.lock`);
     const deadline = Date.now() + this.busyBudgetMs;
     for (; ; ) {
       let handle;
       try {
         handle = await open2(path, "wx");
       } catch (error62) {
-        const code = codeOf(error62);
+        const code = codeOf2(error62);
         if (code !== "EEXIST" && !isBusy(code)) throw error62;
         if (code === "EEXIST" && await this.removeIfStale(path)) continue;
         if (Date.now() >= deadline) throw new StoreBusyError(id);
@@ -45882,11 +46557,11 @@ var FileStore = class {
     let age;
     let text;
     try {
-      age = Date.now() - (await stat(path)).mtimeMs;
-      text = await readFile(path, "utf8");
+      age = Date.now() - (await stat2(path)).mtimeMs;
+      text = await readFile2(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return true;
-      if (isBusy(codeOf(error62))) return false;
+      if (isBusy(codeOf2(error62))) return false;
       throw error62;
     }
     const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : void 0;
@@ -45925,7 +46600,7 @@ var FileStore = class {
         await op();
         return;
       } catch (error62) {
-        if (!isBusy(codeOf(error62))) throw error62;
+        if (!isBusy(codeOf2(error62))) throw error62;
         if (Date.now() >= deadline) throw new StoreBusyError(id);
       }
       await pause();
@@ -45933,14 +46608,14 @@ var FileStore = class {
   }
   async readIfPresent(path) {
     try {
-      return await readFile(path, "utf8");
+      return await readFile2(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
     }
   }
   pathFor(memory) {
-    return join2(this.root, ...this.relativeParts(memory));
+    return join3(this.root, ...this.relativeParts(memory));
   }
   relative(path) {
     return relative(this.root, path).replace(/\\/g, "/");
@@ -45951,7 +46626,7 @@ var FileStore = class {
     return [...foldersOf(memory.scope), `${memory.id}.md`];
   }
   async assertRoot() {
-    const info = await stat(this.root).catch((error62) => {
+    const info = await stat2(this.root).catch((error62) => {
       if (isNotFound(error62)) return null;
       throw error62;
     });
@@ -46025,7 +46700,7 @@ function isAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (error62) {
-    return codeOf(error62) === "EPERM";
+    return codeOf2(error62) === "EPERM";
   }
 }
 function pause() {
@@ -46034,12 +46709,12 @@ function pause() {
 function isBusy(code) {
   return code !== void 0 && BUSY_CODES.has(code);
 }
-function codeOf(error62) {
+function codeOf2(error62) {
   const code = typeof error62 === "object" && error62 !== null ? error62.code : void 0;
   return typeof code === "string" ? code : void 0;
 }
 function isNotFound(error62) {
-  return codeOf(error62) === "ENOENT";
+  return codeOf2(error62) === "ENOENT";
 }
 
 // src/mcp.ts
@@ -46056,7 +46731,7 @@ if (root === void 0) {
   console.error(`NeoCortex: NEOCORTEX_ROOT is not set (in the plugin: its option memory_folder); ${stopped}.`);
   process.exit(1);
 }
-var fullPath = (path) => isAbsolute(path) && (process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(path));
+var fullPath = (path) => isAbsolute2(path) && (process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(path));
 if (!fullPath(root)) {
   console.error(`NeoCortex: the memory folder ${JSON.stringify(root)} is not an absolute path; set the plugin option memory_folder, or NEOCORTEX_ROOT, to the full path of the folder; ${stopped}.`);
   process.exit(1);
@@ -46072,13 +46747,15 @@ if (move) {
     process.exitCode = 1;
   }
 } else {
+  const placeDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
   let session;
   try {
-    const { projectKey, place } = identifyDir(process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+    const { projectKey, place } = identifyDir(placeDir);
     session = sessionFor(projectKey, place);
   } catch (error62) {
     console.error(`NeoCortex: ${error62.message}; the MCP server cannot start.`);
     process.exit(1);
   }
-  await createServer({ store, places: store, session }).connect(new StdioServerTransport());
+  const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
+  await createServer({ store, places: store, session, autoMemory }).connect(new StdioServerTransport());
 }
