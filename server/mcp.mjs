@@ -10320,7 +10320,7 @@ var require_compile = __commonJS({
       const schOrFunc = root2.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve4.call(this, root2, ref);
+      let _sch = resolve5.call(this, root2, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root2.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -10347,7 +10347,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve4(root2, ref) {
+    function resolve5(root2, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -11177,7 +11177,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve4(baseURI, relativeURI, options) {
+    function resolve5(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -11546,7 +11546,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve4,
+      resolve: resolve5,
       resolveComponent,
       equal,
       serialize,
@@ -19609,7 +19609,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve4) {
+function isRecursive(inst, stack, resolve5) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -19619,7 +19619,7 @@ function isRecursive(inst, stack, resolve4) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve4);
+      const answer = isRecursive(child, stack, resolve5);
       if (answer > result)
         result = answer;
     }
@@ -19630,7 +19630,7 @@ function isRecursive(inst, stack, resolve4) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve4) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -19694,7 +19694,7 @@ function isRecursive(inst, stack, resolve4) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve4 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -35883,12 +35883,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message2) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       const json2 = serializeMessage(message2);
       if (this._stdout.write(json2)) {
-        resolve4();
+        resolve5();
       } else {
-        this._stdout.once("drain", resolve4);
+        this._stdout.once("drain", resolve5);
       }
     });
   }
@@ -35896,7 +35896,7 @@ var StdioServerTransport = class {
 
 // src/auto-memory-source.ts
 import { readFile, readdir, stat } from "node:fs/promises";
-import { isAbsolute, join as join2 } from "node:path";
+import { isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
 // src/auto-memory.ts
 import { createHash } from "node:crypto";
@@ -36304,8 +36304,11 @@ function encodePath(path) {
 function wantedName(encoded) {
   return encoded.length <= FOLDER_NAME_MAX ? { kind: "exact", name: encoded } : { kind: "prefix", prefix: `${encoded.slice(0, FOLDER_NAME_MAX)}-` };
 }
+function caseFold(platform) {
+  return platform === "win32" || platform === "darwin" ? (name) => name.toLowerCase() : (name) => name;
+}
 function matchFolders(names, wanted, platform) {
-  const fold = platform === "win32" || platform === "darwin" ? (name) => name.toLowerCase() : (name) => name;
+  const fold = caseFold(platform);
   const exact = new Set(wanted.flatMap((want) => want.kind === "exact" ? [fold(want.name)] : []));
   const prefixes = wanted.flatMap((want) => want.kind === "prefix" ? [fold(want.prefix)] : []);
   const prefixed = names.filter((name) => prefixes.some((prefix) => fold(name).startsWith(prefix) && HASH_TAIL_RE.test(fold(name).slice(prefix.length))));
@@ -36835,10 +36838,22 @@ function safeDecode3(value) {
 }
 
 // src/auto-memory-source.ts
+var SETTING = "autoMemoryDirectory";
+var SETTINGS_SIZE_MAX = 1024 * 1024;
+var UNSEEN = [
+  { source: "--settings", reason: "not checked" },
+  { source: "the macOS managed preferences com.anthropic.claudecode", reason: "not checked" },
+  { source: "the Windows registry, HKLM and HKCU SOFTWARE\\Policies\\ClaudeCode", reason: "not checked" },
+  { source: "the managed settings a policyHelper executable computes at startup", reason: "not checked" },
+  { source: "on WSL, the Windows policy chain that wslInheritsWindowsSettings turns on", reason: "not checked" }
+];
+var JSON_SPACE_RE = /[ \t\n\r]*/y;
+var JSON_STRING_RE = /"(?:[^"\\\u0000-\u001F]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"/y;
+var JSON_SCALAR_RE = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null/y;
 function sourceOptionsFromEnv(env, home, placeDir) {
   const configDir = setValue(env.CLAUDE_CONFIG_DIR);
   const pinnedName = configDir === void 0 ? void 0 : setValue(env.CLAUDE_CODE_PROJECT_DIR_NAME);
-  return { configDir, pinnedName, home, placeDir, platform: process.platform };
+  return { configDir, pinnedName, home, placeDir, managedDir: managedDirOf(process.platform), platform: process.platform };
 }
 function createAutoMemorySource(options) {
   return { find: () => find(options) };
@@ -36849,16 +36864,132 @@ async function find(options) {
       `CLAUDE_CONFIG_DIR is ${JSON.stringify(options.configDir)}, which is not an absolute path, so the folder of Claude Code's auto memory is not known; set it to the full path of Claude Code's configuration folder, or unset it`
     );
   }
-  const lookedIn = join2(options.configDir ?? join2(options.home, ".claude"), "projects");
+  const config2 = options.configDir ?? join2(options.home, ".claude");
+  const lookedIn = join2(config2, "projects");
+  const userSettings = join2(config2, "settings.json");
   const root2 = placeRootOf(options.placeDir);
+  const { managedFolders, ...others } = await otherSettings(config2, userSettings, root2, options);
+  const settings = { shared: await sharedFolder(userSettings, managedFolders, options), ...others };
   const candidates = [root2.root, root2.realRoot, ...root2.placeIsRoot ? [options.placeDir] : []];
   const wanted = options.pinnedName === void 0 ? [...new Set(candidates.map(encodePath))].map(wantedName) : [{ kind: "exact", name: options.pinnedName }];
   const lookedFor = wanted.map((want) => want.kind === "exact" ? want.name : `${want.prefix}*`);
   const names = await listed(lookedIn, "projects folder", (dir) => readdir(dir));
   const matched = names === null ? [] : matchFolders(names, wanted, options.platform);
-  if (matched.length === 0) return { kind: "none", lookedIn, lookedFor };
+  if (matched.length === 0) return { kind: "none", lookedIn, lookedFor, ...settings };
   const folders = await Promise.all(matched.map((name) => readFolder(join2(lookedIn, name), name)));
-  return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot } };
+  return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot }, ...settings };
+}
+async function sharedFolder(settings, managedFolders, options) {
+  const read = await settingIn(settings, options.home);
+  if (read.kind === "absent") return { settings, folder: null };
+  if (read.kind === "unchecked") return { settings, folder: null, unchecked: read.why };
+  const { folder } = read;
+  const exists = await listed(folder, "auto memory folder", (dir) => readdir(dir)) !== null;
+  return { settings, folder, exists, managedFolder: managedFolders.find((other) => !samePath(other, folder, options.platform)) ?? null };
+}
+async function otherSettings(config2, userSettings, root2, options) {
+  const notRead = [];
+  const managedFolders = [];
+  const notChecked = [];
+  const report = async (settings, managed) => {
+    const read = await settingIn(settings, options.home);
+    if (read.kind === "unchecked") notChecked.push({ source: settings, reason: `could not be checked (${read.why})` });
+    if (read.kind !== "folder") return;
+    notRead.push({ settings, folder: read.folder });
+    if (managed) managedFolders.push(read.folder);
+  };
+  for (const dir of root2.placeIsRoot ? [options.placeDir] : [options.placeDir, root2.realRoot]) {
+    for (const name of ["settings.json", "settings.local.json"]) {
+      const settings = join2(dir, ".claude", name);
+      if (!samePath(settings, userSettings, options.platform)) await report(settings, false);
+    }
+  }
+  await report(join2(config2, "remote-settings.json"), true);
+  await report(join2(options.managedDir, "managed-settings.json"), true);
+  const dropIns = join2(options.managedDir, "managed-settings.d");
+  let names = [];
+  try {
+    names = await readdir(dropIns);
+  } catch (error62) {
+    if (codeOf(error62) !== "ENOENT") notChecked.push({ source: dropIns, reason: `could not be checked (${codeOf(error62)})` });
+  }
+  for (const name of names.filter((entry) => entry.endsWith(".json") && !entry.startsWith(".")).sort()) await report(join2(dropIns, name), true);
+  return { notRead, managedFolders, notChecked: [...notChecked, ...UNSEEN] };
+}
+async function settingIn(file2, home) {
+  let text;
+  try {
+    const info = await stat(file2);
+    if (!info.isFile()) return { kind: "unchecked", why: "not a file" };
+    if (info.size > SETTINGS_SIZE_MAX) return { kind: "unchecked", why: "too large" };
+    text = await readFile(file2, "utf8");
+  } catch (error62) {
+    const code = codeOf(error62);
+    return code === "ENOENT" ? { kind: "absent" } : { kind: "unchecked", why: code };
+  }
+  if (text.trim() === "") return { kind: "absent" };
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { kind: "unchecked", why: `not valid JSON at ${lineAndColumn(text, jsonErrorAt(text))}` };
+  }
+  const value = typeof data === "object" && data !== null && Object.hasOwn(data, SETTING) ? data[SETTING] : null;
+  if (value === null || value === "") return { kind: "absent" };
+  const folder = typeof value === "string" && value.startsWith("~/") ? join2(home, value.slice(2)) : value;
+  return typeof folder === "string" && isAbsolute(folder) ? { kind: "folder", folder } : { kind: "unchecked", why: "autoMemoryDirectory is not absolute or ~/" };
+}
+function samePath(a, b, platform) {
+  const fold = caseFold(platform);
+  return fold(resolve2(a)) === fold(resolve2(b));
+}
+function jsonErrorAt(text) {
+  const closers = [];
+  let want = "value";
+  let at = 0;
+  const take = (token) => {
+    token.lastIndex = at;
+    if (!token.test(text)) return false;
+    at = token.lastIndex;
+    return true;
+  };
+  for (; ; ) {
+    take(JSON_SPACE_RE);
+    const char = text[at];
+    const closer = closers.at(-1);
+    if (want === "after") {
+      if (closer === void 0 || char !== "," && char !== closer) return at;
+      at += 1;
+      if (char === ",") want = closer === "}" ? "key" : "value";
+      else closers.pop();
+    } else if (want === "colon") {
+      if (char !== ":") return at;
+      at += 1;
+      want = "value";
+    } else if ((want === "first-key" || want === "first-value") && char === closer) {
+      at += 1;
+      closers.pop();
+      want = "after";
+    } else if (want === "key" || want === "first-key") {
+      if (!take(JSON_STRING_RE)) return at;
+      want = "colon";
+    } else if (char === "{" || char === "[") {
+      at += 1;
+      closers.push(char === "{" ? "}" : "]");
+      want = char === "{" ? "first-key" : "first-value";
+    } else {
+      if (!take(JSON_STRING_RE) && !take(JSON_SCALAR_RE)) return at;
+      want = "after";
+    }
+  }
+}
+function lineAndColumn(text, at) {
+  const before = text.slice(0, at);
+  return `line ${before.split("\n").length}, column ${at - before.lastIndexOf("\n")}`;
+}
+function managedDirOf(platform) {
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
+  return platform === "darwin" ? "/Library/Application Support/ClaudeCode" : "/etc/claude-code";
 }
 async function readFolder(dir, folder) {
   const memory = join2(dir, "memory");
@@ -36894,7 +37025,7 @@ function setValue(value) {
 }
 
 // src/folder-move.ts
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 var FOLDER_PREFIX = "local_";
 async function moveFolderMemories(store2, oldKey, folderPath, apply) {
   const lines = [];
@@ -36923,7 +37054,7 @@ async function moveFolderMemories(store2, oldKey, folderPath, apply) {
     lines.push(`refused: ${oldKey} is already the key of this folder; nothing to move`);
     return done(1, target);
   }
-  const nameKey = nameKeyOf(resolve2(folderPath));
+  const nameKey = nameKeyOf(resolve3(folderPath));
   if (oldKey !== nameKey) lines.push(`note: the name key of this folder is ${nameKey}`);
   const from = projectScope(parseProjectKey(oldKey));
   const { memories, problems } = await store2.load([from]);
@@ -42953,7 +43084,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
+        await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error62) {
@@ -42970,7 +43101,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const earlyReject = (error62) => {
         reject(error62);
       };
@@ -43048,7 +43179,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve4(parseResult.data);
+            resolve5(parseResult.data);
           }
         } catch (error62) {
           reject(error62);
@@ -43310,12 +43441,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve4, interval);
+      const timeoutId = setTimeout(resolve5, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -44446,7 +44577,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve4) => setTimeout(resolve4, pollInterval));
+      await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -45017,7 +45148,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.2.0",
+  version: "0.2.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45240,7 +45371,7 @@ function validateLinks(memory, existing) {
   }
   return errors;
 }
-function resolve3(memories, session, today) {
+function resolve4(memories, session, today) {
   const visible = memories.filter((m) => m.scope.kind === "user" || sameScope(m.scope, session.project));
   const byId = new Map(visible.map((m) => [m.id, m]));
   const expired = visible.filter((m) => m.expires !== null && m.expires < today);
@@ -45485,7 +45616,7 @@ async function loadDelivery(store2, session, now) {
   const { memories: stored, problems } = await store2.load(visibleScopes(session));
   const memories = stored.map((s) => s.memory);
   const newer = stored.filter((s) => compareFormats(s.format, CURRENT_FORMAT) > 0);
-  const resolution = resolve3(memories, session, toLocalDate(now));
+  const resolution = resolve4(memories, session, toLocalDate(now));
   return { projectKey: session.project.key, location: store2.location, resolution, problems, newer };
 }
 function fullBlock(memory, byId) {
@@ -45649,9 +45780,18 @@ var IMPORT_TEXT = {
   next: (plan) => `Show the user what would come in and ask whether to import it into this project. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and plan ${plan}.`,
   noSource: "this server was started without an auto memory source",
   noFolder: "no auto memory folder of this place was found",
-  noFolderNext: "If autoMemoryDirectory is set in Claude Code's settings, Claude Code kept every project's memories in that one folder; this import does not read it.",
-  nothingNew: "nothing new in the auto memory of this place",
-  nothingNext: "Tell the user there is nothing to import.",
+  noFolderNext: "Tell the user that no auto memory folder of this place was found.",
+  nothingNew: "nothing new in the auto memory folder of this place",
+  nothingNext: "Tell the user there is nothing new to import from the auto memory folder of this place.",
+  /** #344: a folder autoMemoryDirectory names is named in every answer, never left out of an empty one (F11, F13). */
+  notReadNext: "This version of the import reads only the auto memory folder of this place: also tell the user what shared and notRead name, with the setting and the state of each, and that no folder they name was read.",
+  notCheckedNext: "Name the sources in notChecked as not checked.",
+  notSet: "not set",
+  unchecked: (reason) => `could not be checked (${reason})`,
+  notImported: "not imported by this version",
+  missing: "does not exist",
+  /** Not "no longer used": which managed source applies, and whether a cached one does, is not known here (F13). */
+  managedFolder: (folder) => `a managed setting names another folder: ${folder}`,
   noPlan: 'mode "apply" needs the plan id of the preview the user agreed to; call import_auto_memory with mode "preview" first',
   changed: (plan, now) => `the auto memory of this place, or what is already imported, changed since the preview (plan ${plan}, now ${now}); preview again`,
   unreadable: ({ record: record2, reason }) => `the import record ${record2} could not be read (${reason}); repair or delete it, then preview again`,
@@ -45661,6 +45801,7 @@ var IMPORT_TEXT = {
 var PLAN_RE = new RegExp(`^[0-9a-f]{${PLAN_ID_LENGTH}}$`);
 var PREVIEW_SUMMARY_MAX = 120;
 var PREVIEW_TEXT_MAX = 80;
+var PREVIEW_PATH_MAX = 260;
 var UNIT_ID_LENGTH = 8;
 function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -45669,7 +45810,7 @@ function createServer(deps) {
   const load = async () => {
     const { memories: stored, problems } = await deps.store.load(visibleScopes(deps.session));
     const memories = stored.map((s) => s.memory);
-    return { stored, memories, problems, resolution: resolve3(memories, deps.session, toLocalDate(now())) };
+    return { stored, memories, problems, resolution: resolve4(memories, deps.session, toLocalDate(now())) };
   };
   server.registerTool(
     "save_memory",
@@ -45971,9 +46112,14 @@ function createServer(deps) {
       if (mode === "apply" && plan === void 0) return fail(IMPORT_TEXT.noPlan);
       const found = await deps.autoMemory.find();
       const place = deps.session.project.key;
+      const settings = settingsAnswer(found);
+      const told = found.shared.folder !== null || found.shared.unchecked !== void 0 || found.notRead.length > 0;
+      const notReadNext = told ? [IMPORT_TEXT.notReadNext] : [];
+      const nothingNext = (first) => [first, ...notReadNext, IMPORT_TEXT.notCheckedNext].join(" ");
       if (found.kind === "none") {
         const { lookedIn, lookedFor } = found;
-        return ok({ place, lookedIn, lookedFor, folders: [], nothing: IMPORT_TEXT.noFolder, alreadyImported: 0, skipped: [], notListItems: 0, next: IMPORT_TEXT.noFolderNext });
+        const nothing = { place, lookedIn, lookedFor, folders: [], nothing: IMPORT_TEXT.noFolder, alreadyImported: 0, skipped: [], notListItems: 0 };
+        return ok({ ...nothing, ...settings, next: nothingNext(IMPORT_TEXT.noFolderNext) });
       }
       const refused = placeCheck(deps.session.place, found.root);
       if (refused !== null) return fail(refused);
@@ -45985,10 +46131,11 @@ function createServer(deps) {
       }
       if (preview.import.length === 0 && preview.unrecorded.length === 0 && preview.skipped.length === 0) {
         const { alreadyImported, notListItems } = preview;
-        const next = state.unreadable ?? IMPORT_TEXT.nothingNext;
-        return ok({ place, lookedIn: found.lookedIn, folders: preview.folders, nothing: IMPORT_TEXT.nothingNew, alreadyImported, skipped: [], notListItems, next });
+        const nothing = { place, lookedIn: found.lookedIn, folders: preview.folders, nothing: IMPORT_TEXT.nothingNew, alreadyImported, skipped: [], notListItems };
+        return ok({ ...nothing, ...settings, next: nothingNext(state.unreadable ?? IMPORT_TEXT.nothingNext) });
       }
-      return ok(previewAnswer(found.lookedIn, preview, deps.session.project, state.unreadable ?? IMPORT_TEXT.next(preview.id)));
+      const next = [state.unreadable ?? IMPORT_TEXT.next(preview.id), ...notReadNext].join(" ");
+      return ok({ ...previewAnswer(found.lookedIn, preview, deps.session.project), ...settings, next });
     })
   );
   server.registerPrompt(
@@ -46074,7 +46221,20 @@ async function writeRecord(run, entries, state) {
   }
   return lost;
 }
-function previewAnswer(lookedIn, preview, scope, next) {
+function settingsAnswer({ shared, notRead, notChecked }) {
+  const settingIn2 = (settings) => `autoMemoryDirectory in ${shown(settings, PREVIEW_PATH_MAX)}`;
+  return {
+    shared: { setting: settingIn2(shared.settings), folder: shared.folder === null ? null : shown(shared.folder, PREVIEW_PATH_MAX), state: sharedState(shared) },
+    notRead: notRead.map((entry) => ({ setting: settingIn2(entry.settings), folder: shown(entry.folder, PREVIEW_PATH_MAX) })),
+    notChecked: notChecked.map(({ source, reason }) => ({ source: shown(source, PREVIEW_PATH_MAX), reason: shown(reason) }))
+  };
+}
+function sharedState(shared) {
+  if (shared.folder === null) return shared.unchecked === void 0 ? IMPORT_TEXT.notSet : IMPORT_TEXT.unchecked(shown(shared.unchecked));
+  const state = shared.exists ? IMPORT_TEXT.notImported : IMPORT_TEXT.missing;
+  return shared.managedFolder === null ? state : `${state}; ${IMPORT_TEXT.managedFolder(shown(shared.managedFolder, PREVIEW_PATH_MAX))}`;
+}
+function previewAnswer(lookedIn, preview, scope) {
   return {
     place: scope.key,
     lookedIn,
@@ -46097,8 +46257,7 @@ function previewAnswer(lookedIn, preview, scope, next) {
     moreIdentical: unlisted(preview.identical, PREVIEW_IDENTICAL_MAX),
     skipped: preview.skipped.slice(0, PREVIEW_SKIPPED_MAX).map(shownSkip),
     moreSkipped: unlisted(preview.skipped, PREVIEW_SKIPPED_MAX),
-    notListItems: preview.notListItems,
-    next
+    notListItems: preview.notListItems
   };
 }
 function shown(text, max = PREVIEW_TEXT_MAX) {
