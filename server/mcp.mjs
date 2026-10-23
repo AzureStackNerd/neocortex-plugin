@@ -45175,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.5",
+  version: "0.3.6",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45803,7 +45803,7 @@ function truncateReason(reason, max) {
 var COMMANDS = MOMENTS;
 var PLACE_MOMENTS = ["index", "startup"];
 var MAX_QUESTION_WORDS = 30;
-var QUESTION_RE = /[?\uFF1F\u061F]|^\s*(what|how|why|which|who|wat|hoe|waarom|welke|wie|hoeveel)\b/i;
+var QUESTION_RE = /[?\uFF1F\u061F]/;
 function looksLikeShortQuestion(prompt) {
   const words = prompt.split(/\s+/).filter((word) => word !== "");
   return words.length > 0 && words.length <= MAX_QUESTION_WORDS && QUESTION_RE.test(prompt);

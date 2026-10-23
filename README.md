@@ -23,7 +23,11 @@ code bundled into the server.
 ## Install
 
 1. Create the memory folder, for example `C:\Users\<you>\NeoCortex` on Windows or `~/NeoCortex` on macOS and Linux.
-   Any folder works. To share your memories between machines, choose a folder that syncs between them.
+   Any folder works. A folder that a sync tool keeps in step between your machines shares your memories between them;
+   a local folder that does not sync keeps them on this machine only, and another machine then has memories of its
+   own. When two machines change the same memory before the sync tool has carried the first change across, both
+   versions survive only if the sync tool keeps a conflict copy, which NeoCortex then reports; otherwise one change is
+   lost, and NeoCortex cannot see that.
 
 2. In a terminal, add the marketplace and install the plugin, with the full path of that folder as its option
    `memory_folder`. In PowerShell:

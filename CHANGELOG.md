@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.6 - 2026-10-24
+
+- Changed: a prompt counts as a short question, which loads your memories with `delivery: question`, only when it has
+  at most 30 words and a question mark: `?`, `？` or `؟`. A leading question word without a question mark, such as
+  "what changed in the repo", no longer counts, in any language.
+- Changed: the README says what a folder that does not sync means: your memories stay on that machine. When two
+  machines change the same memory before the sync tool has carried the first change across, both versions survive
+  only if the sync tool keeps a conflict copy.
+
 ## 0.3.5 - 2026-10-23
 
 - Fixed: when the auto memory import finds nothing new, Claude now also tells you how many memories of this place were
