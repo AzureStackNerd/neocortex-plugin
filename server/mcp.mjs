@@ -45175,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.4",
+  version: "0.3.5",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46104,7 +46104,11 @@ var IMPORT_TEXT = {
   noFolder: "no auto memory folder of this place was found",
   noFolderNext: "Tell the user that no auto memory folder of this place was found.",
   nothingNew: "nothing new in the auto memory folder of this place",
-  nothingNext: "Tell the user there is nothing new to import from the auto memory folder of this place.",
+  /**
+   * #351: alreadyImported counts this place's units whose hash is recorded, also those whose memory was deleted from
+   * NeoCortex, so the words never say they are still there (spec 9, step 2).
+   */
+  nothingNext: (imported) => "Tell the user there is nothing new to import from the auto memory folder of this place" + (imported === 0 ? "." : `, and how many of its memories were imported before, counting any deleted from NeoCortex since: ${imported}.`),
   /** #344: a folder autoMemoryDirectory names is named in every answer, never left out of an empty one (F11, F13). */
   notReadNext: "This version of the import reads only the auto memory folder of this place: also tell the user what shared and notRead name, with the setting and the state of each, and that no folder they name was read.",
   notCheckedNext: "Name the sources in notChecked as not checked.",
@@ -46451,7 +46455,7 @@ function createServer(deps) {
       if (preview.import.length === 0 && preview.unrecorded.length === 0 && preview.skipped.length === 0) {
         const { alreadyImported, notListItems } = preview;
         const nothing = { place, lookedIn: found.lookedIn, folders: preview.folders, nothing: IMPORT_TEXT.nothingNew, alreadyImported, skipped: [], notListItems };
-        return ok({ ...nothing, ...settings, next: nothingNext(state.unreadable ?? IMPORT_TEXT.nothingNext) });
+        return ok({ ...nothing, ...settings, next: nothingNext(state.unreadable ?? IMPORT_TEXT.nothingNext(alreadyImported)) });
       }
       const next = [state.unreadable ?? IMPORT_TEXT.next(preview.id), ...notReadNext].join(" ");
       return ok({ ...previewAnswer(found.lookedIn, preview, deps.session.project), ...settings, next });

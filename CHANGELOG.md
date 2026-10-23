@@ -2,6 +2,11 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.5 - 2026-10-23
+
+- Fixed: when the auto memory import finds nothing new, Claude now also tells you how many memories of this place were
+  imported before, counting any you deleted from NeoCortex since.
+
 ## 0.3.4 - 2026-10-23
 
 - Added: for 7 days after a rule that loads in a place is saved or changed, every session start there names it, for
