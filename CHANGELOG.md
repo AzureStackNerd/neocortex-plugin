@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.3 - 2026-10-23
+
+- Fixed: a memory with `overrides` but no override reason is refused at once, by `save_memory` and `update_memory` as
+  well as by the rule tools. Before, a rule change like that first asked you to confirm it in Claude Code, and only then
+  failed.
+
 ## 0.3.2 - 2026-10-23
 
 - Fixed: `save_memory` and `update_memory` refuse a title, summary, why, body or override reason that holds a lone

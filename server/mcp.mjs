@@ -45175,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.2",
+  version: "0.3.3",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45882,8 +45882,15 @@ var RuleGuard = class {
     this.session = session;
     this.today = today;
   }
-  /** Writes when the call changes no rule (confirmation null) or exactly what confirmation states; else throws RuleRefusedError. */
+  /**
+   * Writes when the call changes no rule (confirmation null) or exactly what confirmation states; else throws
+   * RuleRefusedError. A record that would not load again throws StoreError before any of that.
+   */
   async write(write, confirmation) {
+    if (write.kind !== "remove") {
+      const problems = memoryProblems(write.memory);
+      if (problems.length > 0) throw new StoreError(problems.join("; "));
+    }
     if (confirmation === null && cannotChangeRules(write)) return this.perform(write);
     const checked = this.queue.then(() => this.checked(write, confirmation));
     this.queue = checked.then(
