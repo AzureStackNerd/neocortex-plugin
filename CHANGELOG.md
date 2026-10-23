@@ -2,6 +2,11 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.4 - 2026-10-23
+
+- Added: for 7 days after a rule that loads in a place is saved or changed, every session start there names it, for
+  Claude in the index notices and for you in one line on screen.
+
 ## 0.3.3 - 2026-10-23
 
 - Fixed: a memory with `overrides` but no override reason is refused at once, by `save_memory` and `update_memory` as

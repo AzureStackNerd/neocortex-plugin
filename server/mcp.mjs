@@ -45175,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.3",
+  version: "0.3.4",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45534,6 +45534,7 @@ var FULL_HEADING = "# NeoCortex \xB7 in full";
 var MORE_LINE_RESERVE = 90;
 var SEPARATORS = 6;
 var POSITION_RE2 = / at line \d+, column \d+$/;
+var RECENT_MS = 7 * 24 * 60 * 60 * 1e3;
 var PLACE_TEXT = {
   line: (labels) => `Context labels: ${labels}`,
   /** The folder is named, escaped by shownFolderKey, because its project key alone does not show which path it is. */
@@ -45688,7 +45689,7 @@ async function loadDelivery(store2, session, now) {
   const memories = stored.map((s) => s.memory);
   const newer = stored.filter((s) => compareFormats(s.format, CURRENT_FORMAT) > 0);
   const resolution = resolve4(memories, session, toLocalDate(now));
-  return { projectKey: session.project.key, location: store2.location, resolution, problems, newer };
+  return { projectKey: session.project.key, location: store2.location, resolution, problems, newer, recentRules: recentRules(resolution.active, now) };
 }
 function loadedText(memory, byId) {
   switch (memory.delivery) {
@@ -45729,7 +45730,7 @@ function brokenWarning(kinds, problems) {
   const records = ours.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
-function noticeLines({ resolution, problems, newer }, options) {
+function noticeLines({ resolution, problems, newer, recentRules: recent }, options) {
   const lines = [];
   const warning = updateWarning(problems);
   if (warning !== "") lines.push(`- ${warning}`);
@@ -45751,6 +45752,8 @@ function noticeLines({ resolution, problems, newer }, options) {
     const records = ignoredRecords.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
     lines.push(`- ${ignoredRecords.length} records ignored: ${listed2(records)}.`);
   }
+  const changed = recentRulesNotice(recent);
+  if (changed !== "") lines.push(`- ${changed}`);
   return lines;
 }
 function updateWarning(problems) {
@@ -45764,6 +45767,27 @@ function newerNotice(newer) {
   const formats = [...new Set(newer.map((stored) => stored.format))].sort(compareFormats).join(", ");
   const one = newer.length === 1;
   return `${newer.length} ${one ? "memory comes" : "memories come"} from a newer NeoCortex (format ${formats}); this machine reads and changes ${one ? "it" : "them"} and keeps the fields it does not know. Updating NeoCortex is recommended.`;
+}
+function recentRules(active, now) {
+  const since = now.getTime() - RECENT_MS;
+  return active.filter((m) => {
+    if (!isRule(m)) return false;
+    const at = Date.parse(m.updated);
+    return Number.isNaN(at) || at > since;
+  });
+}
+function recentList(rules) {
+  const one = rules.length === 1;
+  const names = rules.map((m) => `"${shownCut(m.title, 80)}" (${shortId(m.id)})`);
+  return `${rules.length} ${one ? "rule is" : "rules are"} new or changed in the last 7 days: ${listed2(names)}`;
+}
+function recentRulesNotice(rules) {
+  if (rules.length === 0) return "";
+  return `${recentList(rules)}; get_memory shows a rule's text, update_rule or delete_rule changes it.`;
+}
+function recentRulesWarning(rules) {
+  if (rules.length === 0) return "";
+  return `NeoCortex: ${recentList(rules)}. If you did not ask for one, ask Claude to show it and to change or delete it.`;
 }
 function listed2(items) {
   const shown2 = items.slice(0, MAX_LISTED).join(", ");
@@ -45816,7 +45840,7 @@ function hookOutput(event, text, systemMessage = "") {
 function systemMessageFor(command, event, input2, part, place) {
   const firstPart = command === "index" && part === 1 || command === "startup";
   if (event !== "SessionStart" || !firstPart) return "";
-  return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place)].filter((text) => text !== "").join(" ");
+  return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), recentRulesWarning(input2.recentRules)].filter((text) => text !== "").join(" ");
 }
 
 // src/instructions.ts

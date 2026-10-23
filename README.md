@@ -156,8 +156,9 @@ rules that match the tool don't skip the prompt either"
 (<https://code.claude.com/docs/en/mcp>, Require approval for a specific tool). In `dontAsk` mode, and with
 `--permission-prompt-tool`, Claude Code denies them. An application built on the Agent SDK is the exception: "The
 Agent SDK's `canUseTool` callback does receive these calls and can approve them" (same page), so there the application
-decides. NeoCortex's own tools refuse a call that would make a rule start or stop loading unless a person confirms it in
-the client's prompt; what stays outside, such as two sessions or machines writing at once, clients that ignore the
+decides. A rule such an application approves is still named for 7 days in the index notices of every session start
+where it loads that runs NeoCortex's hooks. NeoCortex's own tools refuse a call that would make a rule start or stop
+loading unless a person confirms it in the client's prompt; what stays outside, such as two sessions or machines writing at once, clients that ignore the
 flag and writes that bypass the tools, is in section 7 of `docs/design-rule-guard.md` in the NeoCortex repository.
 
 ## Update
