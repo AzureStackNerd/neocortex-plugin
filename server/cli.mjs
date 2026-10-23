@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.1",
+  version: "0.3.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18427,8 +18427,11 @@ var MISSING = {
   edit: "the write-time standards are",
   subagent: "the subagent rules are"
 };
+function hookJson(value) {
+  return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
+}
 function hookFailure(moment, event, reason) {
-  return JSON.stringify({
+  return hookJson({
     systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
     hookSpecificOutput: {
       hookEventName: event,

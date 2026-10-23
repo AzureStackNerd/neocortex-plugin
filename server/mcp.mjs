@@ -36028,23 +36028,33 @@ function isOwnRecord(problem) {
 var UNSHOWN_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
 var UNSHOWN_RE = new RegExp(UNSHOWN_CHAR_RE.source, "gu");
 function shownText(text) {
-  return text.replace(UNSHOWN_RE, "\uFFFD");
+  return text.replace(UNSHOWN_RE, "\uFFFD").toWellFormed();
 }
 function truncate(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
 function shownCut(text, max) {
-  return shownText(truncate(text, max).toWellFormed());
+  return shownText(truncate(text, max));
 }
 function unshownCharOf(text) {
   const found = UNSHOWN_CHAR_RE.exec(text)?.[0];
   return found === void 0 ? null : `U+${(found.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
 }
+function loneSurrogateOf(text) {
+  const found = new RegExp("\\p{Cs}", "u").exec(text)?.[0];
+  return found === void 0 ? null : `U+${found.charCodeAt(0).toString(16).toUpperCase()}`;
+}
 var SHOWN_ONLY = {
   error: (issue2) => `holds the invisible or control character ${unshownCharOf(String(issue2.input))}; remove it`
 };
-var titleInputSchema = external_exports.string().trim().min(1).refine((text) => unshownCharOf(text) === null, SHOWN_ONLY);
-var summaryInputSchema = summarySchema.refine((text) => unshownCharOf(text) === null, SHOWN_ONLY);
+var WHOLE_ONLY = {
+  error: (issue2) => `holds the lone surrogate ${loneSurrogateOf(String(issue2.input))}, half of a character; remove it`
+};
+var whole = (text) => loneSurrogateOf(text) === null;
+var titleInputSchema = external_exports.string().trim().min(1).refine((text) => unshownCharOf(text) === null, SHOWN_ONLY).refine(whole, WHOLE_ONLY);
+var summaryInputSchema = summarySchema.refine((text) => unshownCharOf(text) === null, SHOWN_ONLY).refine(whole, WHOLE_ONLY);
+var textInputSchema = external_exports.string().trim().min(1).refine(whole, WHOLE_ONLY);
+var reasonInputSchema = external_exports.string().refine(whole, WHOLE_ONLY);
 function shownProblem(problem) {
   return { record: shownText(problem.file), reason: shownText(problem.reason) };
 }
@@ -45165,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.1",
+  version: "0.3.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45501,8 +45511,11 @@ var MISSING = {
   edit: "the write-time standards are",
   subagent: "the subagent rules are"
 };
+function hookJson(value) {
+  return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
+}
 function hookFailure(moment, event, reason) {
-  return JSON.stringify({
+  return hookJson({
     systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
     hookSpecificOutput: {
       hookEventName: event,
@@ -45795,7 +45808,7 @@ function indexOptions(command, event, place) {
 }
 function hookOutput(event, text, systemMessage = "") {
   if (text === "" && systemMessage === "") return "";
-  return JSON.stringify({
+  return hookJson({
     ...systemMessage === "" ? {} : { systemMessage },
     ...text === "" ? {} : { hookSpecificOutput: { hookEventName: event, additionalContext: text } }
   });
@@ -46001,15 +46014,15 @@ var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
   summary: summaryInputSchema.describe("The rule itself in one sentence, at most 300 characters; it is what loads at every start"),
-  why: external_exports.string().trim().min(1).describe("Why this memory exists, or why the choice was made"),
-  body: external_exports.string().trim().min(1),
+  why: textInputSchema.describe("Why this memory exists, or why the choice was made"),
+  body: textInputSchema,
   labels: external_exports.array(external_exports.string()).default([]),
   importance: external_exports.enum(IMPORTANCE).default("normal"),
   delivery: external_exports.enum(DELIVERIES).default("index").describe("When the full text reaches Claude: index (only the summary at the start; the default), startup, prompt, question, subagent, edit or on-demand"),
   enforced: external_exports.boolean().default(false).describe("Enforced memories can never be overridden by another scope"),
   supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces"),
   overrides: LINK_IDS.default([]).describe("User memories this project memory deviates from; needs overrideReason"),
-  overrideReason: external_exports.string().optional(),
+  overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads")
 };
 var UPDATE_INPUT = {
@@ -46017,15 +46030,15 @@ var UPDATE_INPUT = {
   scope: external_exports.enum(SCOPES).optional(),
   title: titleInputSchema.optional(),
   summary: summaryInputSchema.optional(),
-  why: external_exports.string().trim().min(1).optional(),
-  body: external_exports.string().trim().min(1).optional(),
+  why: textInputSchema.optional(),
+  body: textInputSchema.optional(),
   labels: external_exports.array(external_exports.string()).optional(),
   importance: external_exports.enum(IMPORTANCE).optional(),
   delivery: external_exports.enum(DELIVERIES).optional(),
   enforced: external_exports.boolean().optional(),
   supersedes: LINK_IDS.optional(),
   overrides: LINK_IDS.optional(),
-  overrideReason: external_exports.string().nullable().optional(),
+  overrideReason: reasonInputSchema.nullable().optional(),
   expires: external_exports.string().regex(DATE_RE).nullable().optional()
 };
 var DELETE_INPUT = { id: ID };
@@ -46189,7 +46202,9 @@ function createServer(deps) {
       return fail(refused);
     }
     const bodyOnly = args2.body !== void 0 && args2.body !== previous.body && args2.summary === void 0;
-    const hidden = ["title", "summary"].filter((field) => args2[field] === void 0 && unshownCharOf(previous[field]) !== null);
+    const hidden = ["title", "summary"].filter(
+      (field) => args2[field] === void 0 && (unshownCharOf(previous[field]) !== null || loneSurrogateOf(previous[field]) !== null)
+    );
     const both = hidden.length === 2;
     const warnings = [
       ...bodyOnly ? ["The body changed but the summary did not; check that the summary still states the rule."] : [],
@@ -46424,7 +46439,7 @@ function createServer(deps) {
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
       }
-      return { messages: [{ role: "user", content: { type: "text", text } }] };
+      return { messages: [{ role: "user", content: { type: "text", text: text.toWellFormed() } }] };
     }
   );
   server.registerPrompt("import_auto_memory", { title: IMPORT_TEXT.promptTitle, description: IMPORT_TEXT.promptDescription }, () => ({
@@ -46599,8 +46614,8 @@ function carriedOf(args2) {
 }
 function ruleAnswer(error62) {
   if (!(error62 instanceof RuleRefusedError)) return void 0;
-  const whole = JSON.stringify(error62.answer);
-  const text = whole.length <= REFUSAL_MAX ? whole : JSON.stringify(error62.short);
+  const whole2 = JSON.stringify(error62.answer);
+  const text = whole2.length <= REFUSAL_MAX ? whole2 : JSON.stringify(error62.short);
   return { content: [{ type: "text", text }], isError: true };
 }
 function refusal(action, error62, memory) {

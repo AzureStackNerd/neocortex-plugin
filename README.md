@@ -177,7 +177,7 @@ Or in a session, run `/plugin` and choose either of these (<https://code.claude.
 
 The new version "loads in your next session, or after you run `/reload-plugins` in a running one"
 (<https://code.claude.com/docs/en/plugins/cli-reference>). Your memories stay: they are in your memory folder, not in
-the plugin.
+the plugin. What each version changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Remove
 
