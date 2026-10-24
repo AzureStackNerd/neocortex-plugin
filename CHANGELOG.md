@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.8 - 2026-10-24
+
+- Added: the auto memory import also reads the folder `autoMemoryDirectory` names in your `~/.claude/settings.json`.
+  Its user and feedback memories come into user scope, where they load in every project, in a preview of their own
+  before this project's folder; its other memories are counted and not imported yet. If you say no to that preview,
+  the import can still preview this project's folder on its own.
+
 ## 0.3.7 - 2026-10-24
 
 - Fixed: a memory that another session deletes while yours loads your memories no longer shows, for that moment, as a

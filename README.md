@@ -77,12 +77,14 @@ code bundled into the server.
    NeoCortex, run `/plugin:neocortex:neocortex:import_auto_memory` in a session in that repository, before or after you
    turn auto memory off; it imports one repository at a time. The prompt has Claude show you what would come in and
    ask you before it imports: one memory per topic file, and one per `MEMORY.md` list item that links no topic file,
-   into that project's scope. The original files are never changed. A folder set with `autoMemoryDirectory` is not
-   imported yet: NeoCortex reads only that key from your `~/.claude/settings.json`, from the repository's
-   `.claude/settings.json` and `.claude/settings.local.json`, and from the managed settings files, and the import's
-   answer names each such folder rather than saying there is nothing to import. A memory you delete after an import
-   does not come back at the next one: the memory labelled `auto-memory-import` lists what was imported, and deleting
-   it lets the next import bring back what you deleted. Each import rewrites that list and keeps only the lines with a
+   into that project's scope. The original files are never changed. A folder set with `autoMemoryDirectory` in your
+   `~/.claude/settings.json` is read too: its user and feedback memories come into user scope, where they load in
+   every project, in a preview of their own before the repository's; its other memories are not imported yet, and the
+   answer counts them. NeoCortex reads only that key from that file, from the repository's `.claude/settings.json` and
+   `.claude/settings.local.json`, and from the managed settings files; the import's answer names each folder those
+   other files set, which it does not read, rather than saying there is nothing to import. A memory you delete after an
+   import does not come back at the next one: the memory labelled `auto-memory-import` lists what was imported, and
+   deleting it lets the next import bring back what you deleted. Each import rewrites that list and keeps only the lines with a
    hash; any other field you set on that memory stays.
 
 4. Start Claude Code again. A plugin installed from the shell loads "the next time you start Claude Code, or when you
@@ -119,7 +121,8 @@ Set it for your user account, so it also holds for updates in later sessions: on
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
 `set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`, and
 `hook_context`, which is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
-memory kept for this project, and imports the plan of a preview. In a permission rule
+memory kept for this project, or the user and feedback memories of the folder `autoMemoryDirectory` names, and imports
+the plan of a preview. In a permission rule
 a tool of the plugin is `mcp__plugin_neocortex_neocortex__<tool>`, and `mcp__plugin_neocortex_neocortex__*` matches
 all of them (<https://code.claude.com/docs/en/plugins/components>). To let Claude use them without a permission prompt,
 add the rule to `permissions.allow` in `~/.claude/settings.json`, next to the rules already there:
