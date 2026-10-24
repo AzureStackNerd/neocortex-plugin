@@ -2,6 +2,11 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.7 - 2026-10-24
+
+- Fixed: a memory that another session deletes while yours loads your memories no longer shows, for that moment, as a
+  memory that cannot be read.
+
 ## 0.3.6 - 2026-10-24
 
 - Changed: a prompt counts as a short question, which loads your memories with `delivery: question`, only when it has

@@ -45175,7 +45175,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.6",
+  version: "0.3.7",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46738,7 +46738,7 @@ function message(error62) {
 // src/store.ts
 import { createHash as createHash4, randomBytes } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname as dirname2, join as join3, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -46773,6 +46773,7 @@ var FileStore = class {
   staleLockMs;
   maxLockMs;
   lockBase;
+  readListed;
   locks;
   constructor(root2, options = {}) {
     this.root = root2;
@@ -46782,6 +46783,7 @@ var FileStore = class {
     this.busyBudgetMs = options.busyBudgetMs ?? 2e3;
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
+    this.readListed = options.readListed ?? ((path) => readFile2(path, "utf8"));
   }
   get location() {
     return this.root;
@@ -46974,6 +46976,10 @@ var FileStore = class {
     await mkdir(this.locks, { recursive: true });
     return this.locks;
   }
+  /**
+   * The memories of one folder into result. A file that went missing since it was listed, and has no name there on a
+   * second look, was deleted or moved meanwhile and is none (#352); any other failure to read or parse it is a problem.
+   */
   async loadFolder(parts, location, result) {
     const folder = join3(this.root, ...parts);
     let names;
@@ -46993,7 +46999,7 @@ var FileStore = class {
       }
       let text;
       try {
-        text = await readFile2(join3(folder, name), "utf8");
+        text = await this.readListed(join3(folder, name));
         const read = readMemoryFile(text, { ...location, id }, this.registry);
         if (result.memories.some((stored) => stored.memory.id === id)) {
           result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
@@ -47002,6 +47008,7 @@ var FileStore = class {
           result.memories.push(Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored);
         }
       } catch (error62) {
+        if (isNotFound(error62) && await isGone(join3(folder, name))) continue;
         const delivery = text === void 0 ? void 0 : deliveryNamedIn(text);
         const reason = error62 instanceof Error ? error62.message : String(error62);
         const newerFormat = error62 instanceof MemoryFormatError ? error62.newerFormat : void 0;
@@ -47224,6 +47231,14 @@ function codeOf2(error62) {
 }
 function isNotFound(error62) {
   return codeOf2(error62) === "ENOENT";
+}
+async function isGone(path) {
+  try {
+    await lstat(path);
+    return false;
+  } catch (error62) {
+    return isNotFound(error62);
+  }
 }
 
 // src/mcp.ts
