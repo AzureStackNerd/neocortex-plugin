@@ -17,8 +17,8 @@ code bundled into the server.
   must list a `node.exe`.
 - git on your `PATH`. In a repository NeoCortex reads the `origin` remote to know which project's memories belong
   there, and its server does not start in a repository where git cannot run.
-- Read access to the private GitHub repository `AzureStackNerd/neocortex-plugin`; see
-  [GitHub over SSH or HTTPS](#github-over-ssh-or-https).
+- Access to the public GitHub repository `AzureStackNerd/neocortex-plugin`, which needs no GitHub account or
+  credentials; see [GitHub over SSH or HTTPS](#github-over-ssh-or-https).
 
 ## Install
 
@@ -102,19 +102,35 @@ In a session, `/mcp` lists the server as `plugin:neocortex:neocortex`, and it mu
 not prove that the memory folder exists; see `memory_folder` above. When the server is not connected, check `node`
 under [Requirements](#requirements) and `memory_folder` under [Install](#install).
 
+## Use
+
+You do not have to do anything. Claude saves a memory on its own when you correct it, confirm an approach, or tell it
+about yourself, a decision or where something lives, and it updates a memory that turns out wrong. You can also ask it
+to remember something, or to forget it. A memory has a scope: `user` loads in every project, `project` only in the
+repository it was saved in, which NeoCortex knows by that repository's `origin` remote. Outside a repository, or in one
+without `origin`, `project` means that folder only, not its subfolders.
+
+At every session start Claude gets an index: one line for each active memory delivered by index, with its scope,
+title, summary and id, as many as fit; the rest are counted, and Claude finds them with `search_memories`. Memories
+delivered at startup come in full. Claude reads a memory in full when the detail matters. `/plugin:neocortex:neocortex:refresh` reloads your memories in a running session, for
+example after another machine changed them.
+
+A rule is a memory that loads on its own, at session start, with every prompt or short question, before every edit or
+when a subagent starts, or that is enforced. Claude changes a rule only with `save_rule`, `update_rule` or
+`delete_rule`, and Claude Code asks you before every call of them; see [Permissions](#permissions).
+
+Claude is told to delete a memory only when you ask; to have Claude Code ask you as well, keep `delete_memory` out of
+the allow rule (see [Permissions](#permissions)). A deleted memory moves to the folder `deleted` in your memory folder,
+under the same path, from where you can put it back by hand.
+
 ## GitHub over SSH or HTTPS
 
-The plugin's repository is private, so the install and every update clone it with the git credentials on your machine,
-without prompting. For `owner/repo` shorthand, as above, "Claude Code checks whether your SSH key authenticates to
-`github.com`, then clones over SSH if it does and over HTTPS if it doesn't"
-(<https://code.claude.com/docs/en/plugins/install>):
+The plugin's repository is public, so the install and every update clone it without a GitHub account or credentials.
+For `owner/repo` shorthand, as above, "Claude Code checks whether your SSH key authenticates to `github.com`, then
+clones over SSH if it does and over HTTPS if it doesn't" (<https://code.claude.com/docs/en/plugins/install>). For SSH,
+"the host must already be in your `known_hosts` file and the key must work without a passphrase prompt" (same page).
 
-- SSH: "the host must already be in your `known_hosts` file and the key must work without a passphrase prompt" (same
-  page).
-- HTTPS: a stored credential. "On GitHub, `gh auth login` followed by `gh auth setup-git` stores one"
-  (<https://code.claude.com/docs/en/plugins/host-marketplace>).
-
-To skip the SSH check and always use HTTPS, as on a machine without an SSH key for GitHub, set
+To skip the SSH check and always use HTTPS, set
 `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` "to clone GitHub owner/repo shorthand sources over HTTPS instead of SSH. Applies to
 plugin install and update, and to /plugin marketplace add and update" (<https://code.claude.com/docs/en/env-vars>).
 Set it for your user account, so it also holds for updates in later sessions: on Windows
@@ -172,6 +188,22 @@ decides. A rule such an application approves is still named for 7 days in the in
 where it loads that runs NeoCortex's hooks. NeoCortex's own tools refuse a call that would make a rule start or stop
 loading unless a person confirms it in the client's prompt; what stays outside, such as two sessions or machines writing at once, clients that ignore the
 flag and writes that bypass the tools, is in section 7 of `docs/design-rule-guard.md` in the NeoCortex repository.
+
+## Known issues
+
+These are open and will be fixed in a later version:
+
+- A memory you deleted after importing it into one project can come back, into user scope, when you run the auto
+  memory import in another project and the folder `autoMemoryDirectory` names holds the same text. Delete it again.
+- A repository cloned through an SSH host alias on one machine, such as a `Host github-work` entry in
+  `~/.ssh/config`, and directly on another gets a different project key on each, so each machine sees only its own
+  project memories for it.
+- Every memory folder NeoCortex writes to leaves an empty folder in `.neocortex/locks` in your home folder, and they
+  add up. They hold no memories.
+- While a memory moves between scopes, a session that loads at that moment can report "same id as a memory in another
+  folder" for it, although nothing is wrong.
+- When two machines change the same memory before your sync tool has carried the first change across, one change can
+  be lost; see step 1 under [Install](#install).
 
 ## Update
 

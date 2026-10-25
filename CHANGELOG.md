@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.0 - 2026-10-25
+
+- Changed: `update_memory`, `delete_memory`, `update_rule` and `delete_rule` require the `revision` from the last
+  answer that showed the memory. `get_memory`, each search result, `saved`, `updated` and a conflict's `current` carry
+  it, so Claude reads a memory again only after a refusal, or first when it knows the memory only from the index.
+- Fixed: when another session changed a memory after Claude read it, Claude's update or delete is refused with the
+  memory as it is now, instead of silently overwriting the other change.
+- Note: a machine still on an older version does not check the revision, so update every machine that shares your
+  memory folder.
+- Changed: the README says the plugin repository is public and needs no GitHub account or credentials, and has new
+  sections on using NeoCortex and its known issues.
+
 ## 0.3.11 - 2026-10-25
 
 - Changed: with `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PROJECT_DIR_NAME` both set, the auto memory import now treats

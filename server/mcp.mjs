@@ -45208,7 +45208,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.11",
+  version: "0.4.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45908,7 +45908,7 @@ How to save:
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-At session start the index shows each memory as "[scope] title \u2014 summary \xB7 id". Call get_memory with the id before you act on a memory whose detail matters.`;
+At session start the index shows each memory as "[scope] title \u2014 summary \xB7 id". Call get_memory with the id before you act on a memory whose detail matters. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.`;
 
 // src/rule-guard.ts
 var RULE_TOOL = { create: "save_rule", update: "update_rule", remove: "delete_rule" };
@@ -45949,10 +45949,6 @@ var RuleGuard = class {
     this.session = session;
     this.today = today;
   }
-  /**
-   * Writes when the call changes no rule (confirmation null) or exactly what confirmation states; else throws
-   * RuleRefusedError. A record that would not load again throws StoreError before any of that.
-   */
   async write(write, confirmation) {
     if (write.kind !== "remove") {
       const problems = memoryProblems(write.memory);
@@ -45992,9 +45988,9 @@ var RuleGuard = class {
     return this.perform(write);
   }
   async perform(write) {
-    if (write.kind === "create") await this.store.create(write.memory);
-    else if (write.kind === "update") await this.store.update(write.memory, write.base);
-    else await this.store.remove(write.base);
+    if (write.kind === "create") return this.store.create(write.memory);
+    if (write.kind === "update") return this.store.update(write.memory, write.base);
+    await this.store.remove(write.base);
   }
 };
 function cannotChangeRules(write) {
@@ -46099,8 +46095,11 @@ var SAVE_INPUT = {
   overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads")
 };
+var MISSING_REVISION = "revision is required: pass the revision from the last response that showed this memory (get_memory, search_memories, save_memory or update_memory), or call get_memory first";
+var REVISION = external_exports.string({ error: MISSING_REVISION }).min(1).describe("The revision of this memory from the last response that showed it; read a memory you know only from the index with get_memory first");
 var UPDATE_INPUT = {
   id: ID,
+  revision: REVISION,
   scope: external_exports.enum(SCOPES).optional(),
   title: titleInputSchema.optional(),
   summary: summaryInputSchema.optional(),
@@ -46115,7 +46114,7 @@ var UPDATE_INPUT = {
   overrideReason: reasonInputSchema.nullable().optional(),
   expires: external_exports.string().regex(DATE_RE).nullable().optional()
 };
-var DELETE_INPUT = { id: ID };
+var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
 var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
@@ -46123,7 +46122,7 @@ var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its
 var DELETE_DESCRIPTION = "Move a memory to the deleted folder, from where it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
 var UPDATE_RULE_DESCRIPTION = "Change a memory when the change touches a rule or makes one start or stop loading, after update_memory refused it. The user confirms every call in a prompt. Pass the arguments of that update_memory call and affects exactly as its refusal listed.";
-var DELETE_RULE_DESCRIPTION = "Delete a memory when the delete makes a rule start or stop loading, after delete_memory refused it. The user confirms every call in a prompt. Pass the id and affects exactly as the refusal listed; only on the user's request.";
+var DELETE_RULE_DESCRIPTION = "Delete a memory when the delete makes a rule start or stop loading, after delete_memory refused it. The user confirms every call in a prompt. Pass the id, its revision and affects exactly as the refusal listed; only on the user's request.";
 var RELATED_LIMIT = 10;
 var RELATED_TITLE_MAX = 80;
 var SEARCH_LIMIT = 50;
@@ -46221,8 +46220,9 @@ function createServer(deps) {
     };
     const errors = validateLinks(memory, memories);
     if (errors.length > 0) return fail(errors.join("; "));
+    let revision;
     try {
-      await guard.write({ kind: "create", memory }, confirmation);
+      revision = await guard.write({ kind: "create", memory }, confirmation);
     } catch (error62) {
       const rule = ruleAnswer(error62);
       if (rule !== void 0) return rule;
@@ -46231,7 +46231,8 @@ function createServer(deps) {
     const related = relatedTo(memory, resolution);
     const id = shortId(memory.id);
     return ok({
-      saved: entryOf(memory),
+      // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none.
+      saved: { ...entryOf(memory), revision },
       related: related.map(relatedEntryOf),
       next: related.length > 0 ? `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.` : void 0,
       affects: confirmation?.affects
@@ -46248,10 +46249,12 @@ function createServer(deps) {
     ({ affects, ...args2 }) => guarded(() => saveCall(args2, { affects }))
   );
   const updateCall = async (args2, confirmation) => {
-    const { stored, memories, problems } = await load();
+    const { stored, memories, problems, resolution } = await load();
     const found = lookup(memories, problems, args2.id);
-    if ("error" in found) return fail(found.error);
+    if ("error" in found) return fail("missing" in found ? CHANGE_TEXT.gone(shortId(found.wanted)) : found.error);
     const previous = found.memory;
+    const base = baseOf(stored, previous);
+    if (base.revision !== args2.revision) return stale(CHANGE_TEXT.staleUpdate(shortId(previous.id), args2.revision), base, resolution);
     const supersedes = args2.supersedes === void 0 ? { ids: previous.supersedes } : resolveIds(memories, problems, args2.supersedes);
     const overrides = args2.overrides === void 0 ? { ids: previous.overrides } : resolveIds(memories, problems, args2.overrides);
     if ("error" in supersedes) return fail(supersedes.error);
@@ -46279,8 +46282,9 @@ function createServer(deps) {
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link) => link.kind === kind2 && link.id === id));
     const errors = validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories);
     if (errors.length > 0) return fail(errors.join("; "));
+    let revision;
     try {
-      await guard.write({ kind: "update", memory, base: baseOf(stored, previous) }, confirmation);
+      revision = await guard.write({ kind: "update", memory, base }, confirmation);
     } catch (error62) {
       const rule = ruleAnswer(error62);
       if (rule !== void 0) return rule;
@@ -46298,7 +46302,7 @@ function createServer(deps) {
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
       ...kept.map((link) => link.line)
     ];
-    return ok({ updated: entryOf(memory), warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
+    return ok({ updated: { ...entryOf(memory), revision }, warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
   };
   server.registerTool(
     "update_memory",
@@ -46318,23 +46322,10 @@ function createServer(deps) {
       inputSchema: { id: ID }
     },
     ({ id }) => guarded(async () => {
-      const { memories, problems, resolution } = await load();
+      const { stored, memories, problems, resolution } = await load();
       const found = lookup(memories, problems, id);
       if ("error" in found) return fail(found.error);
-      const memory = found.memory;
-      const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : "replaced or overridden";
-      return ok({
-        ...entryOf(memory),
-        fullId: memory.id,
-        status,
-        body: memory.body,
-        supersedes: memory.supersedes.map(shortId),
-        overrides: memory.overrides.map(shortId),
-        overrideReason: memory.overrideReason,
-        expires: memory.expires,
-        created: memory.created,
-        updated: memory.updated
-      });
+      return ok(shownMemory(baseOf(stored, found.memory), resolution));
     })
   );
   server.registerTool(
@@ -46349,7 +46340,7 @@ function createServer(deps) {
       }
     },
     (args2) => guarded(async () => {
-      const { memories, problems, resolution } = await load();
+      const { stored, memories, problems, resolution } = await load();
       const pool = args2.includeInactive ? [...resolution.byId.values()].sort(compareForContext) : resolution.active;
       const words = (args2.query ?? "").toLowerCase().split(/\s+/).filter((word) => word !== "");
       const wanted = normalizeLabels(args2.labels ?? []);
@@ -46358,7 +46349,8 @@ function createServer(deps) {
         return words.every((word) => text.includes(word)) && wanted.every((label) => carriesLabel(memory, label));
       });
       const unreadable = unreadablePart(memories, problems, words, wanted);
-      return ok({ total: results.length, results: results.slice(0, SEARCH_LIMIT).map(entryOf), ...unreadable === void 0 ? {} : { unreadable } });
+      const shown2 = results.slice(0, SEARCH_LIMIT).map((memory) => ({ ...entryOf(memory), revision: baseOf(stored, memory).revision }));
+      return ok({ total: results.length, results: shown2, ...unreadable === void 0 ? {} : { unreadable } });
     })
   );
   server.registerTool(
@@ -46447,12 +46439,14 @@ function createServer(deps) {
       }
     }
   );
-  const deleteCall = async ({ id }, confirmation) => {
-    const { stored, memories, problems } = await load();
+  const deleteCall = async ({ id, revision }, confirmation) => {
+    const { stored, memories, problems, resolution } = await load();
     const found = lookup(memories, problems, id);
-    if ("error" in found) return fail(found.error);
+    if ("error" in found) return fail("missing" in found ? CHANGE_TEXT.gone(shortId(found.wanted)) : found.error);
+    const base = baseOf(stored, found.memory);
+    if (base.revision !== revision) return stale(CHANGE_TEXT.staleDelete(shortId(found.memory.id), revision), base, resolution);
     try {
-      await guard.write({ kind: "remove", base: baseOf(stored, found.memory) }, confirmation);
+      await guard.write({ kind: "remove", base }, confirmation);
     } catch (error62) {
       const rule = ruleAnswer(error62);
       if (rule !== void 0) return rule;
@@ -46720,7 +46714,7 @@ function lookup(memories, problems, prefix) {
   const wanted = prefix.trim().toLowerCase();
   const named = problems.filter((problem) => problemNames(problem, wanted));
   const broken = named.find(isOwnRecord) ?? named[0];
-  if (broken === void 0) return found;
+  if (broken === void 0) return { ...found, missing: true, wanted };
   const { reason } = shownProblem(broken);
   return { error: `memory ${wanted} exists but could not be read: ${reason}` };
 }
@@ -46764,11 +46758,33 @@ function ruleAnswer(error62) {
   const text = whole2.length <= REFUSAL_MAX ? whole2 : JSON.stringify(error62.short);
   return { content: [{ type: "text", text }], isError: true };
 }
+var CHANGE_TEXT = {
+  staleUpdate: (id, revision) => `conflict: memory ${id} changed since revision ${revision}; merge your change into "current" and call update_memory again with its revision`,
+  staleDelete: (id, revision) => `conflict: memory ${id} changed since revision ${revision} and was not deleted; "current" is the memory as it is now: show the user what changed and ask before you delete it with delete_memory and its revision`,
+  gone: (id) => `memory ${id} was moved or deleted after it was read; nothing was changed. Call get_memory ${id} to see whether it still exists, and ask the user before saving it as a new memory`
+};
+function stale(error62, base, resolution) {
+  return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };
+}
+function shownMemory({ memory, revision }, resolution) {
+  const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : "replaced or overridden";
+  return {
+    ...entryOf(memory),
+    fullId: memory.id,
+    revision,
+    status,
+    body: memory.body,
+    supersedes: memory.supersedes.map(shortId),
+    overrides: memory.overrides.map(shortId),
+    overrideReason: memory.overrideReason,
+    expires: memory.expires,
+    created: memory.created,
+    updated: memory.updated
+  };
+}
 function refusal(action, error62, memory) {
   const id = shortId(memory.id);
-  if (error62 instanceof ConflictError && error62.gone) {
-    return `memory ${id} was moved or deleted after it was read; nothing was changed. Call get_memory ${id} to see whether it still exists, and ask the user before saving it as a new memory`;
-  }
+  if (error62 instanceof ConflictError && error62.gone) return CHANGE_TEXT.gone(id);
   if (error62 instanceof ConflictError) {
     return action === "update" ? `memory ${id} was changed by another session while this change was being written; nothing was written. Read it again with get_memory and apply your change to the current text` : `memory ${id} was changed by another session and was not deleted; read it again with get_memory and ask the user`;
   }
