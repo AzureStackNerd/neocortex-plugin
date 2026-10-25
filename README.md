@@ -198,8 +198,8 @@ These are open and will be fixed in a later version:
 - A repository cloned through an SSH host alias on one machine, such as a `Host github-work` entry in
   `~/.ssh/config`, and directly on another gets a different project key on each, so each machine sees only its own
   project memories for it.
-- Every memory folder NeoCortex writes to leaves an empty folder in `.neocortex/locks` in your home folder, and they
-  add up. They hold no memories.
+- Versions up to 0.4.0 left an empty folder in `.neocortex/locks` in your home folder for every memory folder they
+  wrote to. They hold no memories; you can delete the empty ones.
 - While a memory moves between scopes, a session that loads at that moment can report "same id as a memory in another
   folder" for it, although nothing is wrong.
 - When two machines change the same memory before your sync tool has carried the first change across, one change can

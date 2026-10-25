@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.1 - 2026-10-25
+
+- Fixed: NeoCortex no longer leaves an empty folder in `.neocortex/locks` in your home folder for every memory folder
+  it writes to; the last write to finish removes its lock folder. Folders that older versions left stay; the empty
+  ones are safe to delete.
+
 ## 0.4.0 - 2026-10-25
 
 - Changed: `update_memory`, `delete_memory`, `update_rule` and `delete_rule` require the `revision` from the last

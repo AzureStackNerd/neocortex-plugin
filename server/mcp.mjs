@@ -45208,7 +45208,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.0",
+  version: "0.4.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46865,7 +46865,7 @@ function message(error62) {
 // src/store.ts
 import { createHash as createHash4, randomBytes } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname as dirname2, join as join3, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -47093,14 +47093,18 @@ var FileStore = class {
   placePath(stem) {
     return join3(this.root, PLACES, `${stem}.yaml`);
   }
-  /** The lock folder of this root: the same for every spelling of it, such as another case or an 8.3 short name. */
+  /** The lock folder of this root, made if missing: the same for every spelling of it, such as another case or an 8.3 short name. */
   async lockFolder() {
+    const folder = this.lockFolderPath();
+    await mkdir(folder, { recursive: true });
+    return folder;
+  }
+  lockFolderPath() {
     if (this.locks === void 0) {
       const real = realpathSync2.native(this.root);
       const key = process.platform === "win32" ? real.toLowerCase() : real;
       this.locks = join3(this.lockBase, createHash4("sha256").update(key).digest("hex").slice(0, 16));
     }
-    await mkdir(this.locks, { recursive: true });
     return this.locks;
   }
   /**
@@ -47162,19 +47166,33 @@ var FileStore = class {
     if (revisionOf(text) !== base.revision) throw new ConflictError(base.memory.id, false);
     return carry;
   }
-  /** Holds <lock folder>/<id>.lock while run runs; waits for another holder within the budget, then StoreBusyError. */
+  /**
+   * Holds <lock folder>/<id>.lock while run runs; waits for another holder within the budget, then StoreBusyError.
+   * The last lock out removes the folder (#360), so every try makes it again before the open. Only an open that created
+   * the lock file proceeds.
+   */
   async withLock(id, run) {
-    const path = join3(await this.lockFolder(), `${id}.lock`);
+    const path = join3(this.lockFolderPath(), `${id}.lock`);
     const deadline = Date.now() + this.busyBudgetMs;
+    let contended = false;
     for (; ; ) {
       let handle;
+      try {
+        await this.lockFolder();
+      } catch (error62) {
+        if (!isNotFound(error62) && !isBusy(codeOf2(error62))) throw error62;
+        if (Date.now() >= deadline) throw contended ? new StoreBusyError(id) : error62;
+        await pause();
+        continue;
+      }
       try {
         handle = await open2(path, "wx");
       } catch (error62) {
         const code = codeOf2(error62);
-        if (code !== "EEXIST" && !isBusy(code)) throw error62;
+        if (code !== "EEXIST" && code !== "ENOENT" && !isBusy(code)) throw error62;
+        if (code !== "ENOENT") contended = true;
         if (code === "EEXIST" && await this.removeIfStale(path)) continue;
-        if (Date.now() >= deadline) throw new StoreBusyError(id);
+        if (Date.now() >= deadline) throw contended ? new StoreBusyError(id) : error62;
         await pause();
         continue;
       }
@@ -47192,6 +47210,8 @@ var FileStore = class {
       return await run();
     } finally {
       await this.retryWhileBusy(id, () => rm(path, { force: true })).catch(() => {
+      });
+      await rmdir(dirname2(path)).catch(() => {
       });
     }
   }
