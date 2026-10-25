@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.9 - 2026-10-25
+
+- Added: the auto memory import also brings in the other memories of the folder `autoMemoryDirectory` names, such as
+  project and reference memories, into user scope unsorted: no index shows them, and the label
+  `auto-memory-unsorted` finds them. After the import Claude offers to sort the ones for this repository, only if you
+  say yes. Files in that folder that are no auto memory are named and never imported.
+
 ## 0.3.8 - 2026-10-24
 
 - Added: the auto memory import also reads the folder `autoMemoryDirectory` names in your `~/.claude/settings.json`.

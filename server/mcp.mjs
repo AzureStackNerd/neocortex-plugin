@@ -36286,6 +36286,7 @@ function isRecord(value) {
 
 // src/auto-memory.ts
 var AUTO_MEMORY_LABEL = "auto-memory";
+var UNSORTED_LABEL = "auto-memory-unsorted";
 var IMPORT_RECORD_LABEL = "auto-memory-import";
 var FOLDER_NAME_MAX = 200;
 var FILE_SIZE_MAX = 100 * 1024;
@@ -36293,10 +36294,12 @@ var PREVIEW_MAX = 20;
 var PREVIEW_UNRECORDED_MAX = 10;
 var PREVIEW_IDENTICAL_MAX = 5;
 var PREVIEW_SKIPPED_MAX = 10;
+var PREVIEW_NOT_AUTO_MEMORY_MAX = 10;
 var INDEX = "MEMORY.md";
 var TOP_LEVEL_MD_RE = /^[^/\\]+\.md$/;
 var HASH_TAIL_RE = /^[A-Za-z0-9]+$/;
 var USER_SCOPE_LABELS = /* @__PURE__ */ new Set(["user", "feedback"]);
+var UNSORTED_KIND = "context";
 var TYPE_LABELS = /* @__PURE__ */ new Map([
   ["user", "user"],
   ["feedback", "feedback"],
@@ -36418,12 +36421,18 @@ function unitsOf(folder, scope) {
   const index = indexFile === void 0 ? NO_INDEX : readIndex(indexFile, new Set(topics.map((file2) => file2.name)), at);
   const units = [];
   const skipped = [];
-  for (const result of [...topics.map((file2) => topicUnit(at, file2, index.links.get(file2.name))), ...index.results]) {
-    const checked = "reason" in result ? result : checkedUnit(result, scope);
+  const notAutoMemory = [];
+  const gated = (name) => folder.flat === true && !index.named.has(name);
+  for (const result of [...topics.map((file2) => topicUnit(at, file2, index.links.get(file2.name), gated(file2.name))), ...index.results]) {
+    if ("notAutoMemory" in result) {
+      notAutoMemory.push(result.notAutoMemory);
+      continue;
+    }
+    const checked = "reason" in result ? result : checkedUnit(sortedFor(result, scope), scope);
     if ("reason" in checked) skipped.push(checked);
     else units.push(checked);
   }
-  return { units, skipped, notListItems: index.notListItems };
+  return { units, skipped, notAutoMemory, notListItems: index.notListItems };
 }
 function previewOf(folders, scope, known) {
   const ordered = [...folders].sort((a, b) => byName(a.folder, b.folder));
@@ -36433,18 +36442,15 @@ function previewOf(folders, scope, known) {
   const identical = [];
   const unrecorded = [];
   const skipped = [];
+  const notAutoMemory = [];
   let alreadyImported = 0;
   let notListItems = 0;
-  let notImported = 0;
   for (const folder of ordered) {
     const found = unitsOf(folder, scope);
     skipped.push(...found.skipped);
+    notAutoMemory.push(...found.notAutoMemory);
     notListItems += found.notListItems;
     for (const unit of found.units) {
-      if (scope.kind === "user" && !unit.labels.some((label) => USER_SCOPE_LABELS.has(label))) {
-        notImported += 1;
-        continue;
-      }
       const sameAs = firstSource.get(unit.hash);
       if (sameAs !== void 0) {
         identical.push({ source: unit.source, sameAs });
@@ -36463,20 +36469,21 @@ function previewOf(folders, scope, known) {
   const names = ordered.map((folder) => folder.folder);
   const plan = JSON.stringify([scopeId(scope), names, units.map(contentOf), unrecorded.map((unit) => [unit.hash, recordSourceOf(unit)])]);
   const id = createHash("sha256").update(plan).digest("hex").slice(0, PLAN_ID_LENGTH);
-  return { id, folders: names, import: units, identical, alreadyImported, unrecorded, skipped, notListItems, notImported };
+  return { id, folders: names, import: units, identical, alreadyImported, unrecorded, skipped, notListItems, notAutoMemory };
 }
 function memoryOf(unit, scope) {
   return { id: importId(scope, unit.hash), scope, ...contentOf(unit), created: unit.created, updated: unit.created };
 }
 function contentOf(unit) {
+  const labels = [...unit.labels];
   return {
     title: unit.title,
     summary: unit.summary,
     why: unit.why,
     body: unit.body,
-    labels: [...unit.labels],
+    labels,
     importance: "low",
-    delivery: "index",
+    delivery: carriesLabel({ labels }, UNSORTED_LABEL) ? "on-demand" : "index",
     enforced: false,
     supersedes: [],
     overrides: [],
@@ -36484,7 +36491,12 @@ function contentOf(unit) {
     expires: null
   };
 }
-var NO_INDEX = { links: /* @__PURE__ */ new Map(), results: [], notListItems: 0 };
+function sortedFor(unit, scope) {
+  if (scope.kind === "project" || unit.labels.some((label) => USER_SCOPE_LABELS.has(label))) return unit;
+  const kind = unit.labels.find((label) => KIND_LABELS.has(label)) ?? UNSORTED_KIND;
+  return { ...unit, labels: [AUTO_MEMORY_LABEL, UNSORTED_LABEL, kind] };
+}
+var NO_INDEX = { links: /* @__PURE__ */ new Map(), named: /* @__PURE__ */ new Set(), results: [], notListItems: 0 };
 function checkedUnit(unit, scope) {
   const shape = secretShape([unit.title, unit.summary, unit.why, unit.body].join("\n"));
   if (shape !== null) return { source: unit.source, reason: `secret (${shape})` };
@@ -36499,12 +36511,10 @@ function decode3(file2) {
     return { source: file2.name, reason: "not-utf8" };
   }
 }
-function topicUnit(folder, file2, link) {
+function topicUnit(folder, file2, link, gated) {
   const decoded = decode3(file2);
   if ("reason" in decoded) return decoded;
   const source = file2.name;
-  const shape = secretShape(decoded.text);
-  if (shape !== null) return { source, reason: `secret (${shape})` };
   const parts = FRONT_RE.exec(decoded.text);
   if (parts === null && OPENING_RE.test(decoded.text)) return { source, reason: "frontmatter-unreadable" };
   let front = {};
@@ -36525,6 +36535,11 @@ function topicUnit(folder, file2, link) {
     front = data;
   }
   const metadata = isMapping(front.metadata) ? front.metadata : {};
+  const type = (stringOf(metadata.type) || stringOf(front.type)).toLowerCase();
+  const label = TYPE_LABELS.get(type);
+  if (gated && label === void 0) return { notAutoMemory: source };
+  const shape = secretShape(decoded.text);
+  if (shape !== null) return { source, reason: `secret (${shape})` };
   const body = (parts === null ? decoded.text : parts[2]).trim();
   const description = stringOf(front.description);
   const content = body || description;
@@ -36534,8 +36549,6 @@ function topicUnit(folder, file2, link) {
   const summary = summaryOf(link?.hook || description || firstSentence(body) || title, flags);
   const stated = oneLine(WHY_RE.exec(body)?.[1] ?? "");
   if (stated === "") flags.push(description === "" ? "no-why" : "why-from-description");
-  const type = (stringOf(metadata.type) || stringOf(front.type)).toLowerCase();
-  const label = TYPE_LABELS.get(type);
   if (type === "") flags.push("no-type");
   else if (label === void 0) flags.push("unknown-type");
   if (link === void 0) flags.push("not-in-index");
@@ -36601,6 +36614,7 @@ function readIndex(file2, topics, folder) {
   const decoded = decode3(file2);
   if ("reason" in decoded) return { ...NO_INDEX, results: [decoded] };
   const links = /* @__PURE__ */ new Map();
+  const named = /* @__PURE__ */ new Set();
   const results = [];
   let notListItems = 0;
   const take = (item) => {
@@ -36610,6 +36624,7 @@ function readIndex(file2, topics, folder) {
     if (link !== null && topics.has(link.target)) {
       const seen = links.has(link.target);
       notListItems += seen ? item.lines.length : item.lines.length - 1;
+      named.add(link.target);
       if (seen) return;
       const shape = secretShape(first);
       if (shape !== null) results.push({ source, reason: `secret (${shape})` });
@@ -36662,7 +36677,7 @@ function readIndex(file2, topics, folder) {
     }
   }
   if (open3 !== null) take(open3);
-  return { links, results, notListItems };
+  return { links, named, results, notListItems };
 }
 function linkOf(line) {
   const markdown = MD_LINK_RE.exec(line);
@@ -45189,7 +45204,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.8",
+  version: "0.3.9",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46109,14 +46124,15 @@ var LABEL_TEXT = {
 };
 var IMPORT_TEXT = {
   title: "Import Claude Code auto memory",
-  description: `Import the memories that Claude Code's auto memory kept into NeoCortex, one to one: those of this project into this project's scope, and the user and feedback memories of the folder autoMemoryDirectory names into user scope. A preview covers one folder and one scope: folder "shared" or "place" picks it, and without folder the shared folder comes first while it has memories on offer. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
+  description: `Import the memories that Claude Code's auto memory kept into NeoCortex, one to one: those of this project into this project's scope, and those of the folder autoMemoryDirectory names into user scope: its user and feedback memories as they are, and the others unsorted, loaded only on request until they are sorted into their project. A preview covers one folder and one scope: folder "shared" or "place" picks it, and without folder the shared folder comes first while it has memories on offer. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
   promptTitle: "Import Claude Code auto memory",
   promptDescription: "Import the memories Claude Code's auto memory kept, for this project and for every project, into NeoCortex, after the user agreed to a preview.",
   prompt: 'Call the NeoCortex tool import_auto_memory with mode "preview". Show the user what it found: how many memories would come in and into which scope, their titles and flags, how many index characters they add, which ones are already in NeoCortex but not yet recorded, and what was skipped and why. Then ask whether to import them into that scope. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and the plan from the preview, report its result and do what its next says. If the user says no, import nothing.',
   next: (plan) => `Show the user what would come in and ask whether to import it into this project. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and plan ${plan}.`,
   /** #354: a preview of the shared folder names how many memories this place's folder still holds for a later preview. */
-  sharedNext: (plan, placeNew) => `Show the user what would come in and ask whether to import it into user scope, where it loads in every project. Only after the user says yes in this conversation, call import_auto_memory with mode "apply", folder "shared" and plan ${plan}. If the user says no, call import_auto_memory with mode "preview" and folder "place" to preview the auto memory folder of this place.` + (placeNew === 0 ? "" : ` Also tell the user that the auto memory folder of this place holds ${placeNew} more not yet imported, which a preview after this import offers into this project.`),
-  sharedApplied: (placeNew) => placeNew === 0 ? "Report the result to the user." : `Report the result to the user, then call import_auto_memory with mode "preview" again: the auto memory folder of this place holds ${placeNew} memories not yet imported.`,
+  sharedNext: (plan, placeNew) => `Show the user what would come in and ask whether to import it into user scope, where its user and feedback memories load in every project and the others, labelled ${UNSORTED_LABEL}, only on request. Only after the user says yes in this conversation, call import_auto_memory with mode "apply", folder "shared" and plan ${plan}. If the user says no, call import_auto_memory with mode "preview" and folder "place" to preview the auto memory folder of this place.` + (placeNew === 0 ? "" : ` Also tell the user that the auto memory folder of this place holds ${placeNew} more not yet imported, which a preview after this import offers into this project.`),
+  /** #355: an apply of the shared folder names how many came in unsorted and offers to sort them, on the user's yes. */
+  sharedApplied: (placeNew, unsorted) => (placeNew === 0 ? "Report the result to the user." : `Report the result to the user, then call import_auto_memory with mode "preview" again: the auto memory folder of this place holds ${placeNew} memories not yet imported.`) + (unsorted === 0 ? "" : ` ${unsorted} of the memories came in unsorted, labelled ${UNSORTED_LABEL} and loaded only on request: offer the user to sort the ones that belong to this project now. Only after the user says yes in this conversation, find them with search_memories and the label ${UNSORTED_LABEL}, and move each one the user agrees belongs here with update_memory: scope project, delivery index, and its labels without ${UNSORTED_LABEL}.`),
   noSource: "this server was started without an auto memory source",
   noFolder: "no auto memory folder of this place was found",
   noFolderNext: "Tell the user that no auto memory folder of this place was found.",
@@ -46130,7 +46146,7 @@ var IMPORT_TEXT = {
    */
   nothingNext: (imported, where) => `Tell the user there is nothing new to import from ${where}` + (imported === 0 ? "." : `, and how many of its memories were imported before, counting any deleted from NeoCortex since: ${imported}.`),
   /** #344: a folder autoMemoryDirectory names is named in every answer, never left out of an empty one (F11, F13). */
-  notReadNext: 'Also tell the user what shared and notRead name, with the setting and the state of each, how many memories of the shared folder this version does not import and how many it skipped, which notImported and skipped count (a preview with folder "shared" names the skipped ones), and that no folder in notRead was read.',
+  notReadNext: 'Also tell the user what shared and notRead name, with the setting and the state of each, how many files of the shared folder are no auto memory and how many it skipped, which notAutoMemory and skipped count (a preview with folder "shared" names them), and that no folder in notRead was read.',
   /** #354: folder "shared" while the user settings name no folder this import read. */
   noShared: (state) => `folder "shared" needs the folder autoMemoryDirectory names in the user settings, which is ${state}; call import_auto_memory without folder`,
   notCheckedNext: "Name the sources in notChecked as not checked.",
@@ -46463,14 +46479,14 @@ function createServer(deps) {
       const { known } = importState(loaded, session, session.project);
       const sharedFolder2 = found.shared.folder === null || found.shared.files === null ? null : { folder: found.shared.folder, flat: true, files: found.shared.files };
       const shared = sharedFolder2 === null ? null : previewOf([sharedFolder2], session.user, known);
-      const settings = settingsAnswer(found, shared?.notImported ?? 0, shared?.skipped.length ?? 0);
+      const settings = settingsAnswer(found, shared?.notAutoMemory.length ?? 0, shared?.skipped.length ?? 0);
       const told = found.shared.folder !== null || found.shared.unchecked !== void 0 || found.notRead.length > 0;
       const notReadNext = told ? [IMPORT_TEXT.notReadNext] : [];
       const nothingNext = (first) => [first, ...notReadNext, IMPORT_TEXT.notCheckedNext].join(" ");
-      const nothingNew = (preview2, lookedIn, where, unreadable) => {
+      const nothingNew = (preview2, lookedIn, where, unreadable, named) => {
         const { alreadyImported, notListItems } = preview2;
         const folders = preview2.folders.map((name) => shown(name, PREVIEW_PATH_MAX));
-        const nothing = { place, lookedIn, folders, nothing: IMPORT_TEXT.nothingNew(where), alreadyImported, skipped: [], notListItems };
+        const nothing = { place, lookedIn, folders, nothing: IMPORT_TEXT.nothingNew(where), alreadyImported, skipped: [], notListItems, ...named };
         return ok({ ...nothing, ...settings, next: nothingNext(unreadable ?? IMPORT_TEXT.nothingNext(alreadyImported, where)) });
       };
       const here = hereOf(found, session, known);
@@ -46483,12 +46499,18 @@ function createServer(deps) {
         const state2 = importState(loaded, session, session.user);
         if (mode === "apply" && plan !== void 0) {
           const reload = async () => importState(await load(), session, session.user);
-          const after = { placeNew, next: IMPORT_TEXT.sharedApplied(placeNew) };
+          const active = new Map(loaded.resolution.active.map((memory) => [memory.id, memory]));
+          const unrecorded = shared.unrecorded.flatMap((unit) => active.get(memoryOf(unit, session.user).id) ?? []);
+          const unsorted = [...shared.import.map((unit) => memoryOf(unit, session.user)), ...unrecorded].filter(
+            (memory) => memory.scope.kind === "user" && carriesLabel(memory, UNSORTED_LABEL)
+          ).length;
+          const after = { placeNew, next: IMPORT_TEXT.sharedApplied(placeNew, unsorted) };
           return applyImport({ guard, place, scope: session.user, stamp: now().toISOString(), reload, after }, shared, state2, plan);
         }
-        if (!shows(shared)) return nothingNew(shared, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), IMPORT_TEXT.sharedFolder, state2.unreadable);
+        const named = notAutoMemoryAnswer(shared);
+        if (!shows(shared)) return nothingNew(shared, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), IMPORT_TEXT.sharedFolder, state2.unreadable, named);
         const next2 = [state2.unreadable ?? IMPORT_TEXT.sharedNext(shared.id, placeNew), ...notReadNext].join(" ");
-        return ok({ ...previewAnswer(place, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), shared, session.user), placeNew, ...settings, next: next2 });
+        return ok({ ...previewAnswer(place, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), shared, session.user), ...named, placeNew, ...settings, next: next2 });
       }
       if (here.kind === "none") {
         const nothing = { place, lookedIn: found.lookedIn, lookedFor: here.lookedFor, folders: [], nothing: IMPORT_TEXT.noFolder, alreadyImported: 0, skipped: [], notListItems: 0 };
@@ -46610,11 +46632,11 @@ async function writeRecord(run, entries, state) {
   }
   return lost;
 }
-function settingsAnswer({ shared, notRead, notChecked }, notImported, skipped) {
+function settingsAnswer({ shared, notRead, notChecked }, notAutoMemory, skipped) {
   const settingIn2 = (settings) => `autoMemoryDirectory in ${shown(settings, PREVIEW_PATH_MAX)}`;
   const folder = shared.folder === null ? null : shown(shared.folder, PREVIEW_PATH_MAX);
   return {
-    shared: { setting: settingIn2(shared.settings), folder, state: sharedState(shared), notImported, skipped },
+    shared: { setting: settingIn2(shared.settings), folder, state: sharedState(shared), notAutoMemory, skipped },
     notRead: notRead.map((entry) => ({ setting: settingIn2(entry.settings), folder: shown(entry.folder, PREVIEW_PATH_MAX) })),
     notChecked: notChecked.map(({ source, reason }) => ({ source: shown(source, PREVIEW_PATH_MAX), reason: shown(reason) }))
   };
@@ -46640,7 +46662,7 @@ function previewAnswer(place, lookedIn, preview, scope) {
       flags: unit.flags
     })),
     more: unlisted(preview.import, PREVIEW_MAX),
-    indexCharacters: preview.import.reduce((sum, unit) => sum + indexLine(memoryOf(unit, scope)).length + 1, 0),
+    indexCharacters: preview.import.map((unit) => memoryOf(unit, scope)).filter((memory) => memory.delivery === "index").reduce((sum, memory) => sum + indexLine(memory).length + 1, 0),
     alreadyImported: preview.alreadyImported,
     unrecorded: preview.unrecorded.slice(0, PREVIEW_UNRECORDED_MAX).map((unit) => shown(unit.source)),
     moreUnrecorded: unlisted(preview.unrecorded, PREVIEW_UNRECORDED_MAX),
@@ -46653,6 +46675,10 @@ function previewAnswer(place, lookedIn, preview, scope) {
 }
 function shown(text, max = PREVIEW_TEXT_MAX) {
   return shownCut(text, max);
+}
+function notAutoMemoryAnswer(preview) {
+  const notAutoMemory = preview.notAutoMemory.slice(0, PREVIEW_NOT_AUTO_MEMORY_MAX).map((name) => shown(name));
+  return { notAutoMemory, moreNotAutoMemory: unlisted(preview.notAutoMemory, PREVIEW_NOT_AUTO_MEMORY_MAX) };
 }
 function shownSkip({ source, reason }) {
   return { source: shown(source), reason: shown(reason) };

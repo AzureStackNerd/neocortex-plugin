@@ -79,8 +79,11 @@ code bundled into the server.
    ask you before it imports: one memory per topic file, and one per `MEMORY.md` list item that links no topic file,
    into that project's scope. The original files are never changed. A folder set with `autoMemoryDirectory` in your
    `~/.claude/settings.json` is read too: its user and feedback memories come into user scope, where they load in
-   every project, in a preview of their own before the repository's; its other memories are not imported yet, and the
-   answer counts them. NeoCortex reads only that key from that file, from the repository's `.claude/settings.json` and
+   every project, in a preview of their own before the repository's; its other memories come into user scope
+   unsorted, labelled `auto-memory-unsorted` and loaded only on request, and after the import Claude offers to move the
+   ones that belong to the repository you are in into its project. A file there that is no auto memory, neither
+   `MEMORY.md`, nor linked from it, nor of an auto memory type, is named and not imported. NeoCortex reads only that
+   key from that file, from the repository's `.claude/settings.json` and
    `.claude/settings.local.json`, and from the managed settings files; the import's answer names each folder those
    other files set, which it does not read, rather than saying there is nothing to import. A memory you delete after an
    import does not come back at the next one: the memory labelled `auto-memory-import` lists what was imported, and
@@ -121,7 +124,7 @@ Set it for your user account, so it also holds for updates in later sessions: on
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
 `set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`, and
 `hook_context`, which is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
-memory kept for this project, or the user and feedback memories of the folder `autoMemoryDirectory` names, and imports
+memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule
 a tool of the plugin is `mcp__plugin_neocortex_neocortex__<tool>`, and `mcp__plugin_neocortex_neocortex__*` matches
 all of them (<https://code.claude.com/docs/en/plugins/components>). To let Claude use them without a permission prompt,
