@@ -36922,13 +36922,17 @@ async function find(options) {
   const { managedFolders, ...others } = await otherSettings(config2, userSettings, root2, options);
   const settings = { shared: await sharedFolder(userSettings, managedFolders, options), ...others };
   const candidates = [root2.root, root2.realRoot, ...root2.placeIsRoot ? [options.placeDir] : []];
-  const wanted = options.pinnedName === void 0 ? [...new Set(candidates.map(encodePath))].map(wantedName) : [{ kind: "exact", name: options.pinnedName }];
+  const wanted = [...new Set(candidates.map(encodePath))].map(wantedName);
   const lookedFor = wanted.map((want) => want.kind === "exact" ? want.name : `${want.prefix}*`);
+  const { pinnedName } = options;
+  const pinnedFolder = pinnedName === void 0 ? void 0 : { ...await readFolder(join2(lookedIn, pinnedName), pinnedName, [settings.shared.folder], options.platform), path: join2(lookedIn, pinnedName, "memory") };
+  const pinned = pinnedFolder === void 0 ? {} : { pinned: pinnedFolder };
+  const apart = [settings.shared.folder, pinnedFolder?.path ?? null];
   const names = await listed(lookedIn, "projects folder", (dir) => readdir(dir));
   const matched = names === null ? [] : matchFolders(names, wanted, options.platform);
-  if (matched.length === 0) return { kind: "none", lookedIn, lookedFor, ...settings };
-  const folders = await Promise.all(matched.map((name) => readFolder(join2(lookedIn, name), name, settings.shared.folder, options.platform)));
-  return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot }, ...settings };
+  if (matched.length === 0) return { kind: "none", lookedIn, lookedFor, ...settings, ...pinned };
+  const folders = await Promise.all(matched.map((name) => readFolder(join2(lookedIn, name), name, apart, options.platform)));
+  return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot }, ...settings, ...pinned };
 }
 async function sharedFolder(settings, managedFolders, options) {
   const read = await settingIn(settings, options.home);
@@ -37042,9 +37046,9 @@ function managedDirOf(platform) {
   if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
   return platform === "darwin" ? "/Library/Application Support/ClaudeCode" : "/etc/claude-code";
 }
-async function readFolder(dir, folder, shared, platform) {
+async function readFolder(dir, folder, apart, platform) {
   const memory = join2(dir, "memory");
-  if (shared !== null && samePath(memory, shared, platform)) return { folder, files: [] };
+  if (apart.some((shared) => shared !== null && samePath(memory, shared, platform))) return { folder, files: [] };
   return { folder, files: await topLevelFiles(memory, "memory folder") ?? [] };
 }
 async function topLevelFiles(dir, what) {
@@ -45204,7 +45208,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.10",
+  version: "0.3.11",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46134,7 +46138,7 @@ var LABEL_TEXT = {
 };
 var IMPORT_TEXT = {
   title: "Import Claude Code auto memory",
-  description: `Import the memories that Claude Code's auto memory kept into NeoCortex, one to one: those of this project into this project's scope, and those of the folder autoMemoryDirectory names into user scope: its user and feedback memories as they are, and the others unsorted, loaded only on request until they are sorted into their project. A preview covers one folder and one scope: folder "shared" or "place" picks it, and without folder the shared folder comes first while it has memories on offer. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
+  description: `Import the memories that Claude Code's auto memory kept into NeoCortex, one to one: those of this project into this project's scope, and those of the shared folders into user scope, the folder autoMemoryDirectory names and the one CLAUDE_CODE_PROJECT_DIR_NAME pins under the projects folder: their user and feedback memories as they are, and the others unsorted, loaded only on request until they are sorted into their project. A preview covers one scope: folder "shared" picks the shared folders, "place" the auto memory folder of this place, and without folder the shared folders come first while they have memories on offer. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
   promptTitle: "Import Claude Code auto memory",
   promptDescription: "Import the memories Claude Code's auto memory kept, for this project and for every project, into NeoCortex, after the user agreed to a preview.",
   prompt: 'Call the NeoCortex tool import_auto_memory with mode "preview". Show the user what it found: how many memories would come in and into which scope, their titles and flags, how many index characters they add, which ones are already in NeoCortex but not yet recorded, and what was skipped and why. Then ask whether to import them into that scope. Only after the user says yes in this conversation, call import_auto_memory with mode "apply" and the plan from the preview, report its result and do what its next says. If the user says no, import nothing.',
@@ -46476,7 +46480,7 @@ function createServer(deps) {
       inputSchema: {
         mode: external_exports.enum(["preview", "apply"]).describe("preview: list what would come in, writing nothing; apply: write the plan of a preview the user agreed to"),
         plan: external_exports.string().regex(PLAN_RE).optional().describe("The plan id of that preview; required for apply"),
-        folder: external_exports.enum(["shared", "place"]).optional().describe("shared: the folder autoMemoryDirectory names, into user scope; place: the auto memory folder of this place, into this project. Without it the shared folder comes first while it has memories on offer")
+        folder: external_exports.enum(["shared", "place"]).optional().describe("shared: the shared folders, the one autoMemoryDirectory names and the one CLAUDE_CODE_PROJECT_DIR_NAME pins, into user scope; place: the auto memory folder of this place, into this project. Without it the shared folders come first while they have memories on offer")
       }
     },
     ({ mode, plan, folder }) => guarded(async () => {
@@ -46488,9 +46492,11 @@ function createServer(deps) {
       const loaded = await load();
       const { known } = importState(loaded, session, session.project);
       const sharedFolder2 = found.shared.folder === null || found.shared.files === null ? null : { folder: found.shared.folder, flat: true, files: found.shared.files };
-      const shared = sharedFolder2 === null ? null : previewOf([sharedFolder2], session.user, known);
+      const sharedFolders = [...sharedFolder2 === null ? [] : [sharedFolder2], ...found.pinned === void 0 ? [] : [found.pinned]];
+      const shared = sharedFolders.length === 0 ? null : previewOf(sharedFolders, session.user, known);
+      const sharedIn = shown(sharedFolder2?.folder ?? found.lookedIn, PREVIEW_PATH_MAX);
       const settings = settingsAnswer(found, shared?.notAutoMemory.length ?? 0, shared?.skipped.length ?? 0);
-      const told = found.shared.folder !== null || found.shared.unchecked !== void 0 || found.notRead.length > 0;
+      const told = found.shared.folder !== null || found.shared.unchecked !== void 0 || found.notRead.length > 0 || (shared?.skipped.length ?? 0) > 0;
       const notReadNext = told ? [IMPORT_TEXT.notReadNext] : [];
       const nothingNext = (first) => [first, ...notReadNext, IMPORT_TEXT.notCheckedNext].join(" ");
       const nothingNew = (preview2, lookedIn, where, unreadable, named) => {
@@ -46504,7 +46510,7 @@ function createServer(deps) {
       const sharedFirst = shared !== null && (offers(shared) || shared.skipped.length > 0 && placeEmpty);
       const placePlan = mode === "apply" && here.kind === "preview" && here.preview.id === plan ? "place" : void 0;
       if ((folder ?? placePlan ?? (sharedFirst ? "shared" : "place")) === "shared") {
-        if (sharedFolder2 === null || shared === null) return fail(IMPORT_TEXT.noShared(sharedState(found.shared)));
+        if (shared === null) return fail(IMPORT_TEXT.noShared(sharedState(found.shared)));
         const placeNew = here.kind === "none" ? 0 : placeNewAfter(here.folders, session.project, known, shared);
         const state2 = importState(loaded, session, session.user);
         if (mode === "apply" && plan !== void 0) {
@@ -46518,9 +46524,11 @@ function createServer(deps) {
           return applyImport({ guard, place, scope: session.user, stamp: now().toISOString(), reload, after }, shared, state2, plan);
         }
         const named = notAutoMemoryAnswer(shared);
-        if (!shows(shared)) return nothingNew(shared, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), IMPORT_TEXT.sharedFolder, state2.unreadable, named);
+        const { pinned } = found;
+        const answered = pinned === void 0 ? shared : { ...shared, folders: [...new Set(shared.folders.map((name) => name === pinned.folder ? pinned.path : name))] };
+        if (!shows(shared)) return nothingNew(answered, sharedIn, IMPORT_TEXT.sharedFolder, state2.unreadable, named);
         const next2 = [state2.unreadable ?? IMPORT_TEXT.sharedNext(shared.id, placeNew), ...notReadNext].join(" ");
-        return ok({ ...previewAnswer(place, shown(sharedFolder2.folder, PREVIEW_PATH_MAX), shared, session.user), ...named, placeNew, ...settings, next: next2 });
+        return ok({ ...previewAnswer(place, sharedIn, answered, session.user), ...named, placeNew, ...settings, next: next2 });
       }
       if (here.kind === "none") {
         const nothing = { place, lookedIn: found.lookedIn, lookedFor: here.lookedFor, folders: [], nothing: IMPORT_TEXT.noFolder, alreadyImported: 0, skipped: [], notListItems: 0 };

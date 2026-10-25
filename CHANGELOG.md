@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.11 - 2026-10-25
+
+- Changed: with `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PROJECT_DIR_NAME` both set, the auto memory import now treats
+  the folder that pins like the folder `autoMemoryDirectory` names: its user and feedback memories come into user
+  scope, the others unsorted. Before, they came into the project you happened to import from.
+- Note: memories imported from such a folder by 0.2.0 stay in that project. The import in another project offers
+  them again into user scope, so after importing there you may have two copies; delete one by hand.
+
 ## 0.3.10 - 2026-10-25
 
 - Added: while imported Claude Code memories wait unsorted, every session start tells Claude how many there are, and
