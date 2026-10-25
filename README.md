@@ -81,7 +81,9 @@ code bundled into the server.
    `~/.claude/settings.json` is read too: its user and feedback memories come into user scope, where they load in
    every project, in a preview of their own before the repository's; its other memories come into user scope
    unsorted, labelled `auto-memory-unsorted` and loaded only on request, and after the import Claude offers to move the
-   ones that belong to the repository you are in into its project. A file there that is no auto memory, neither
+   ones that belong to the repository you are in into its project. As long as one of them is unsorted, every session
+   start, but no subagent start, reminds Claude to offer the sort: into the repository, everywhere, or left to load
+   only on request without the label. A file there that is no auto memory, neither
    `MEMORY.md`, nor linked from it, nor of an auto memory type, is named and not imported. NeoCortex reads only that
    key from that file, from the repository's `.claude/settings.json` and
    `.claude/settings.local.json`, and from the managed settings files; the import's answer names each folder those

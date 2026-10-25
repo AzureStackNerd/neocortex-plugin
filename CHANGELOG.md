@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.3.10 - 2026-10-25
+
+- Added: while imported Claude Code memories wait unsorted, every session start tells Claude how many there are, and
+  Claude offers to sort them: into this repository, everywhere, or left on demand, each only on your yes. Subagents
+  do not get the notice.
+
 ## 0.3.9 - 2026-10-25
 
 - Added: the auto memory import also brings in the other memories of the folder `autoMemoryDirectory` names, such as

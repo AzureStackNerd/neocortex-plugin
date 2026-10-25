@@ -45204,7 +45204,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.3.9",
+  version: "0.3.10",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45576,7 +45576,7 @@ var PLACE_TEXT = {
   folderFirstVisit: `First visit: this folder has no context labels yet. Propose at most ${PROPOSED_MAX}, from the folder's path, the file types and any README, reusing names from list_labels. Tell the user what you propose and why, then call set_context_labels with confirmed false; set confirmed true only for a label the user confirms. If this folder was renamed or moved, its earlier labels and memories stayed under the old path and do not load here. Skip this when no user can answer in this session, such as a claude -p run.`,
   updateWarning: (format) => `NeoCortex on this machine cannot read the context labels of this place: they were written by a newer NeoCortex (format ${format}). Update NeoCortex on this machine.`
 };
-var NO_PLACE = { firstVisit: false };
+var NO_PLACE = { firstVisit: false, unsorted: false };
 async function loadPlace(places, session) {
   const place = session.place;
   const stateOf = (read, problems) => place.kind === "project" ? { kind: "project", place, read, problems } : { kind: "folder", place, read, problems };
@@ -45610,6 +45610,13 @@ function placeLine(state) {
 function firstVisitNotice(state) {
   if (state.read.state !== "none") return "";
   return state.kind === "project" ? PLACE_TEXT.firstVisit(state.place.organisation) : PLACE_TEXT.folderFirstVisit;
+}
+function unsortedNotice(active, place) {
+  const count2 = active.filter((m) => carriesLabel(m, UNSORTED_LABEL)).length;
+  if (count2 === 0) return "";
+  const one = count2 === 1;
+  const here = place?.kind === "folder" ? "this folder" : "this repository";
+  return `${count2} imported Claude Code ${one ? "memory is" : "memories are"} not sorted yet (label ${UNSORTED_LABEL}, on-demand). Offer the user to sort ${one ? "it" : "them"}: search that label, propose which belong to ${here}, which apply everywhere and which belong elsewhere; only on their yes call update_memory for each (${here}: scope project; everywhere: scope user; both with delivery index and without that label). On the user's word a memory can also keep on-demand and lose only the label.`;
 }
 function placeUpdateWarning(state) {
   if (state.read.state !== "unreadable") return "";
@@ -45663,7 +45670,7 @@ function buildIndex(input2, budget = HOOK_CAP, part = 1, options = NO_PLACE) {
 }
 function refreshContext(input2, place) {
   const { active, byId } = input2.resolution;
-  const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true });
+  const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true });
   return [...index, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
 }
 function buildFull(kinds, active, byId, budget = HOOK_CAP, options = {}) {
@@ -45767,6 +45774,8 @@ function noticeLines({ resolution, problems, newer, recentRules: recent }, optio
   if (notice !== "") lines.push(`- ${notice}`);
   const visit2 = options.firstVisit && options.place !== void 0 ? firstVisitNotice(options.place) : "";
   if (visit2 !== "") lines.push(`- ${visit2}`);
+  const unsorted = options.unsorted ? unsortedNotice(resolution.active, options.place) : "";
+  if (unsorted !== "") lines.push(`- ${unsorted}`);
   const { expired, ignored } = resolution;
   if (expired.length > 0) {
     const titles = expired.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
@@ -45857,7 +45866,8 @@ function contextFor(command, event, input2, extra) {
 }
 function indexOptions(command, event, place) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
-  return { place, firstVisit: event === "SessionStart" };
+  const main = event === "SessionStart";
+  return { place, firstVisit: main, unsorted: main };
 }
 function hookOutput(event, text, systemMessage = "") {
   if (text === "" && systemMessage === "") return "";
