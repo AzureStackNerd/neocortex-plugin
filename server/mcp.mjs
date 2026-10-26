@@ -45208,7 +45208,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.1",
+  version: "0.4.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45588,7 +45588,7 @@ async function loadPlace(places, session) {
     const { read, problems } = await places.readPlace(placeRefOf(place));
     return stateOf(read, problems);
   } catch (error62) {
-    const problem = { file: PLACE_AREA, reason: `the place area could not be read (${error62 instanceof Error ? error62.message : String(error62)})` };
+    const problem = { file: "the place area", reason: `could not be read (${error62 instanceof Error ? error62.message : String(error62)})` };
     return stateOf({ state: "unreadable", problem, area: true }, [problem]);
   }
 }
@@ -46119,7 +46119,7 @@ var AFFECTS = external_exports.array(external_exports.string()).describe("The li
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
 var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
 var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason or expires. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
-var DELETE_DESCRIPTION = "Move a memory to the deleted folder, from where it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
+var DELETE_DESCRIPTION = "Delete a memory. NeoCortex keeps the deleted memory, so it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
 var UPDATE_RULE_DESCRIPTION = "Change a memory when the change touches a rule or makes one start or stop loading, after update_memory refused it. The user confirms every call in a prompt. Pass the arguments of that update_memory call and affects exactly as its refusal listed.";
 var DELETE_RULE_DESCRIPTION = "Delete a memory when the delete makes a rule start or stop loading, after delete_memory refused it. The user confirms every call in a prompt. Pass the id, its revision and affects exactly as the refusal listed; only on the user's request.";
@@ -47079,8 +47079,8 @@ var FileStore = class {
   }
   /**
    * What a place write carries through from the stored text (rules V3, V4, V7): a higher minor and the fields this
-   * server does not know. A stored record of a higher major, with an invalid formatVersion, or that cannot be read as
-   * a mapping is never changed.
+   * server does not know. A stored record of a higher major, with an invalid formatVersion, of a lower format NeoCortex
+   * never wrote, or that cannot be read as a mapping is never changed.
    */
   placeCarry(text, stem) {
     const current = currentOf(this.placeRegistry);
@@ -47088,6 +47088,9 @@ var FileStore = class {
     if (stored === null) throw new StoreError(`place record ${placeFile(stem)} has an invalid formatVersion and is not changed; fix the file by hand`);
     if (stored === void 0) throw new StoreError(`place record ${placeFile(stem)} cannot be read and is not changed; fix the file by hand`);
     if (majorOf(stored.format) > majorOf(current)) throw new NewerFormatError(stem, stored.format);
+    if (compareFormats(stored.format, current) < 0 && !this.placeRegistry.formats.some((format) => format.version === stored.format)) {
+      throw new StoreError(`place record ${placeFile(stem)} has format ${stored.format}, which NeoCortex never wrote, and is not changed; fix the file by hand`);
+    }
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
   placePath(stem) {
@@ -47300,7 +47303,7 @@ var FileStore = class {
   /**
    * What a write carries through from a stored file's text (rules V3, V4, V7): its version when that is a higher
    * minor, and the fields this server does not know. A stored file of a higher major, with an invalid formatVersion,
-   * or whose frontmatter cannot be read is never changed (B14).
+   * of a lower format NeoCortex never wrote, or whose frontmatter cannot be read is never changed (B14).
    */
   carryOf(text, id) {
     const current = currentOf(this.registry);
@@ -47310,6 +47313,9 @@ var FileStore = class {
       throw new StoreError(`memory ${shortId(id)} has a stored file whose frontmatter cannot be read, and is not changed; fix the file by hand`);
     }
     if (majorOf(stored.format) > majorOf(current)) throw new NewerFormatError(id, stored.format);
+    if (compareFormats(stored.format, current) < 0 && !this.registry.formats.some((format) => format.version === stored.format)) {
+      throw new StoreError(`memory ${shortId(id)} has format ${stored.format}, which NeoCortex never wrote, and is not changed; fix the file by hand`);
+    }
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
 };

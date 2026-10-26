@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.2 - 2026-10-26
+
+- Fixed: an update, a move to another scope or a delete never writes over a memory or a place record whose format is
+  lower than this version's own and that no NeoCortex ever wrote; it is shown as unreadable, to be fixed by hand. No
+  record can be in that state yet, because every NeoCortex so far writes format 1.0.
+- Changed: the `delete_memory` description that Claude reads no longer names a deleted folder; it says NeoCortex keeps
+  a deleted memory, so it can be restored by hand. A deleted memory still goes to the `deleted` folder of your memory
+  folder.
+- Changed: when reading the context labels fails with an error, the notice names it "the place area" instead of the
+  folder `places`.
+
 ## 0.4.1 - 2026-10-25
 
 - Fixed: NeoCortex no longer leaves an empty folder in `.neocortex/locks` in your home folder for every memory folder
