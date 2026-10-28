@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.6 - 2026-10-28
+
+- Fixed: on Windows, a memory that another session was updating at that moment could be missing from a load, for
+  example from the memories given at session start or from `get_memory`, without any notice, or be reported as a
+  memory that could not be read. Windows briefly leaves the memory's file name absent, or its file busy, while the new
+  version is renamed into place; a load now looks again for up to a quarter of a second before it counts a memory as
+  gone or unreadable.
+
 ## 0.4.5 - 2026-10-28
 
 - Fixed: `/plugin:neocortex:neocortex:status` now shows you the status. Claude Code gives a prompt's text to Claude,

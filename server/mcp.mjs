@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.5",
+  version: "0.4.6",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47184,6 +47184,8 @@ import { dirname as dirname2, join as join3, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 var PLACES = PLACE_AREA;
 var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var SETTLE_MS = 250;
+var TEMP_RE = /^(.+)\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
 var BYTE_ORDER_MARK3 = String.fromCharCode(65279);
 function userLockBase(warn = () => {
 }, account = userInfo, home = homedir) {
@@ -47475,7 +47477,13 @@ var FileStore = class {
       if (isNotFound(error62)) return;
       throw error62;
     }
-    for (const name of names.sort()) {
+    const lower = new Set(names.map((name) => name.toLowerCase()));
+    const pending = [];
+    for (const name of names) {
+      const id = TEMP_RE.exec(name)?.[1];
+      if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join3(folder, name))) pending.push(`${id}.md`);
+    }
+    for (const name of [.../* @__PURE__ */ new Set([...names, ...pending])].sort()) {
       if (!name.toLowerCase().endsWith(".md")) continue;
       const file2 = [...parts, name].join("/");
       const id = name.slice(0, -".md".length);
@@ -47498,7 +47506,7 @@ var FileStore = class {
   async readRecord(path, file2, scope, id) {
     let text;
     try {
-      text = await this.readListed(path);
+      text = await this.readSettled(path);
       const read = readMemoryFile(text, { scope, id }, this.registry);
       const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
       return { stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
@@ -47517,6 +47525,37 @@ var FileStore = class {
           ...text === void 0 ? {} : { text }
         }
       };
+    }
+  }
+  /**
+   * A listed record's text (#387). A not-found while its name is gone, and a busy code, are read again after a pause
+   * until SETTLE_MS has passed; a not-found while its name is still there is read once more, since a link to a missing
+   * target stays one (C7). Any other failure is the record's at once.
+   */
+  async readSettled(path) {
+    const deadline = Date.now() + SETTLE_MS;
+    let named = 0;
+    for (; ; ) {
+      try {
+        return await this.readListed(path);
+      } catch (error62) {
+        const code = codeOf2(error62);
+        if (code !== "ENOENT" && !isBusy(code)) throw error62;
+        if (code === "ENOENT" && !await isGone(path) && ++named > 1) throw error62;
+        if (Date.now() >= deadline) throw error62;
+        await pause();
+      }
+    }
+  }
+  /**
+   * Whether a temp file is older than twice the write budget: writeAtomically renames or removes its own within the
+   * budget, so an older one was left by a writer that stopped. A temp file gone meanwhile was renamed: not stale.
+   */
+  async isStaleTemp(path) {
+    try {
+      return Date.now() - (await stat2(path)).mtimeMs > 2 * this.busyBudgetMs;
+    } catch {
+      return false;
     }
   }
   /** Every scope that can hold a record: the user, then each project folder by key. A listing that fails is busy. */
