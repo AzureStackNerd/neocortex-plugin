@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.5 - 2026-10-28
+
+- Fixed: `/plugin:neocortex:neocortex:status` now shows you the status. Claude Code gives a prompt's text to Claude,
+  not to you, so until now you saw only Claude's own summary of it; the prompt now asks Claude to repeat the status to
+  you as it stands, in a code block.
+
 ## 0.4.4 - 2026-10-28
 
 - Added: the prompt `/plugin:neocortex:neocortex:status` shows that the server of this session is connected, which

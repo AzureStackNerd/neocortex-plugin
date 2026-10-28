@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.4",
+  version: "0.4.5",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45890,6 +45890,13 @@ function statusReport(input2, place, about) {
 function statusUnread(about, error62) {
   const reason = systemErrorCode(error62) ?? (error62 instanceof Error ? error62.message : String(error62));
   return [STATUS_TEXT.unread(shownText(reason)), STATUS_TEXT.store(about.location), STATUS_TEXT.session(about.session), STATUS_TEXT.version(about.version)].join("\n");
+}
+var STATUS_SHOW = "Show the user this NeoCortex status exactly as it stands: repeat the fenced block below, fences included, without rewording, shortening or summarising it.";
+function statusShown(status) {
+  let longest = 0;
+  for (const run of status.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [STATUS_SHOW, "", fence, status, fence].join("\n");
 }
 function updateWarning(problems) {
   const unreadable = problems.filter((problem) => problem.newerFormat !== void 0).length;
@@ -46770,7 +46777,7 @@ function createServer(deps) {
       } catch (error62) {
         text = statusUnread(about, error62);
       }
-      return { messages: [{ role: "user", content: { type: "text", text: text.toWellFormed() } }] };
+      return { messages: [{ role: "user", content: { type: "text", text: statusShown(text).toWellFormed() } }] };
     }
   );
   server.registerPrompt("import_auto_memory", { title: IMPORT_TEXT.promptTitle, description: IMPORT_TEXT.promptDescription }, () => ({

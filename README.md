@@ -104,8 +104,10 @@ under [Requirements](#requirements) and `memory_folder` under [Install](#install
 
 `/plugin:neocortex:neocortex:status` shows that the server of this session is connected, which memory folder it
 reads, its version and format, the memories it loaded per scope and those that are not active, and each record it
-could not load, with the reason. A memory folder that cannot be read gives the reason on its first line. When the
-prompt is missing from the `/` menu, the server is not connected: check `/mcp` or `claude mcp list`, as above.
+could not load, with the reason. A memory folder that cannot be read gives the reason on its first line. Claude Code
+gives the prompt's text to Claude, not to you, so the prompt asks Claude to repeat the status to you as it stands, in
+a code block. When the prompt is missing from the `/` menu, the server is not connected: check `/mcp` or
+`claude mcp list`, as above.
 
 ## Use
 
