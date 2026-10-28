@@ -36009,6 +36009,9 @@ function sessionFor(projectKey, place) {
 function visibleScopes(session) {
   return [session.user, session.project];
 }
+function scopeWords(scope) {
+  return scope.kind === "user" ? "user scope" : `project ${scope.key}`;
+}
 function scopeId(scope) {
   return scope.kind === "user" ? "user" : `project:${scope.key}`;
 }
@@ -36058,6 +36061,11 @@ var reasonInputSchema = external_exports.string().refine(whole, WHOLE_ONLY);
 function shownProblem(problem) {
   return { record: shownText(problem.file), reason: shownText(problem.reason) };
 }
+function systemErrorCode(error62) {
+  if (!(error62 instanceof Error)) return void 0;
+  const { code, syscall } = error62;
+  return typeof code === "string" && typeof syscall === "string" ? code : void 0;
+}
 var StoreError = class extends Error {
 };
 var ConflictError = class extends StoreError {
@@ -36071,12 +36079,22 @@ var ConflictError = class extends StoreError {
 };
 var AlreadyExistsError = class extends StoreError {
   id;
-  /** The record that holds the id, as the store names it: the FileStore gives its path relative to its location, with forward slashes. */
+  /** The record that holds the id, as the store names it, for diagnosis only; absent when the rule guard refused first. */
   file;
-  constructor(id, file2) {
-    super(`memory ${shortId(id)} already has a record at ${file2}`);
+  /** The scope that holds the id, when the refusal is about a memory; with records, the first of them. */
+  scope;
+  /**
+   * Every live record of the id outside the move's source, as recordsOf read it, set only by the rule guard's refusal
+   * of a scope move (#280): the answer shows each beside the moving one. Unset for a create, an import, a place record
+   * and the store's own refusal under its lock, whose answer stays the text without them.
+   */
+  records;
+  constructor(id, file2, scope, records) {
+    super(`memory ${shortId(id)} already has a record${scope === void 0 ? "" : ` in ${scopeWords(scope)}`}`);
     this.id = id;
     this.file = file2;
+    this.scope = scope;
+    this.records = records;
   }
 };
 var StoreBusyError = class extends StoreError {
@@ -45208,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.2",
+  version: "0.4.3",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45446,8 +45464,15 @@ function resolve4(memories, session, today) {
     active: current.filter((m) => !overridden.has(m.id)).sort(compareForContext),
     expired: expired.sort(compareForContext),
     byId,
-    ignored
+    ignored,
+    current
   };
+}
+function hidersOf(memories, target, session, date5) {
+  const { byId, expired, current } = resolve4(memories, session, date5);
+  const live = [...byId.values()].filter((m) => !expired.includes(m));
+  const hiders = [...live.filter((m) => m.supersedes.includes(target)), ...current.filter((m) => m.overrides.includes(target))];
+  return [...new Set(hiders.map((m) => `${m.id} ${scopeId(m.scope)}`))].sort();
 }
 function compareForContext(a, b) {
   return Number(b.enforced) - Number(a.enforced) || IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance] || SCOPE_RANK[b.scope.kind] - SCOPE_RANK[a.scope.kind] || compareText(b.updated, a.updated) || compareText(a.id, b.id);
@@ -45464,16 +45489,21 @@ var PLACE_ORDER = { here: 0, elsewhere: 1, overriding: 2 };
 function ruleEffect(before, after, written, session, today) {
   const ends = [...new Set([...before, ...after].flatMap((m) => m.expires !== null && m.expires >= today ? [m.expires] : []))].sort();
   const days = [{ kind: "today" }, ...ends.map((date5) => ({ kind: "after", date: date5 }))];
-  const samples = [today, ...ends.map((date5) => `${date5}~`)];
+  const samples = days.map((day) => sampleDate(day, today));
   const was = loadingOf(before, session, samples);
   const will = loadingOf(after, session, samples);
-  const none = samples.map(() => false);
+  const none = samples.map(() => null);
   const changes = [.../* @__PURE__ */ new Set([...was.keys(), ...will.keys()])].map((key) => {
     const [id, place] = key.split(" ");
-    return { id, place, before: was.get(key) ?? none, after: will.get(key) ?? none };
-  }).filter((change) => change.before.some((loads, day) => loads !== change.after[day])).sort((a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place]);
+    const [from, to] = [was.get(key) ?? none, will.get(key) ?? none];
+    const swap = id !== written && from.some((scope, day) => scope !== null && to[day] !== null && scope !== to[day]);
+    return { id, place, before: from.map((scope) => scope !== null), after: to.map((scope) => scope !== null), ...swap ? { swap: true } : {} };
+  }).filter((change) => change.swap === true || change.before.some((loads, day) => loads !== change.after[day])).sort((a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place]);
   const ruleIn = (memories) => memories.some((m) => m.id === written && isRule(m));
   return { days, changes, writtenRule: written !== null && (ruleIn(before) || ruleIn(after)) ? written : null };
+}
+function sampleDate(day, today) {
+  return day.kind === "today" ? today : `${day.date}~`;
 }
 function changesRules(effect) {
   return effect.changes.length > 0 || effect.writtenRule !== null;
@@ -45481,18 +45511,18 @@ function changesRules(effect) {
 function loadingOf(memories, session, samples) {
   const user = memories.filter((m) => m.scope.kind === "user");
   const loading = /* @__PURE__ */ new Map();
-  const mark = (id, place, day) => {
-    const key = `${id} ${place}`;
-    const row = loading.get(key) ?? samples.map(() => false);
-    row[day] = true;
+  const mark = (memory, place, day) => {
+    const key = `${memory.id} ${place}`;
+    const row = loading.get(key) ?? samples.map(() => null);
+    row[day] = scopeId(memory.scope);
     loading.set(key, row);
   };
   samples.forEach((sample, day) => {
-    for (const memory of resolve4(memories, session, sample).active) if (isRule(memory)) mark(memory.id, "here", day);
+    for (const memory of resolve4(memories, session, sample).active) if (isRule(memory)) mark(memory, "here", day);
     for (const memory of resolve4(user, session, sample).active) {
       if (!isRule(memory)) continue;
-      mark(memory.id, "elsewhere", day);
-      if (memory.enforced) mark(memory.id, "overriding", day);
+      mark(memory, "elsewhere", day);
+      if (memory.enforced) mark(memory, "overriding", day);
     }
   });
   return loading;
@@ -45933,7 +45963,52 @@ var RULE_TEXT = {
   needsText: (carry) => `Nothing was changed: this change makes text load, and the user sees that text in the prompt only when the call carries it. Call update_rule again with the same arguments, ${carryWords(carry)}, and affects exactly as listed.`,
   noRule: (kind) => `Nothing was ${DONE[kind]}: this call changes no rule, so it needs no confirmation. Call ${TWIN_TOOL[kind]} with the same arguments, without affects.`,
   mismatch: (kind) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${RULE_TOOL[kind]} again with affects exactly as listed.`,
-  tooLong: (kind, rules) => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller update_rule calls, each with the affects its own refusal lists.`
+  tooLong: (kind, rules) => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller update_rule calls, each with the affects its own refusal lists.`,
+  /**
+   * A write that depends on a record the store could not read (spec 4.6, C9). It names no rule tool: no prompt can
+   * show what such a record would load. A problem without text is one whose text itself could not be read (C7).
+   */
+  unknown: (kind, id, problem) => {
+    const { reason } = shownProblem(problem);
+    const [what, then] = problem.newerFormat !== void 0 ? ["was written by a newer NeoCortex that this machine cannot read", "Update NeoCortex on this machine."] : problem.text === void 0 ? ["could not be read just now", `Try again; if it stays so, get_memory ${shortId(id)} says why.`] : [`cannot be read (${reason})`, "Ask the user to repair it."];
+    return `Nothing was ${DONE[kind]}: memory ${shortId(id)} ${what}, and this change depends on it. ${then}`;
+  },
+  /**
+   * A delete of a user record whose id has another record the store could not read (spec 4.6, G-c, C9; #382 review F2).
+   * It names that record's scope, since get_memory finds the user record, which reads, in every session.
+   */
+  unknownOther: (id, problem, where) => {
+    const { reason } = shownProblem(problem);
+    const [what, then] = problem.newerFormat !== void 0 ? ["was written by a newer NeoCortex that this machine cannot read", "Update NeoCortex on this machine."] : problem.text === void 0 ? ["could not be read just now", "Try again."] : [`cannot be read (${reason})`, "Ask the user to repair or remove that record."];
+    return `Nothing was deleted: memory ${shortId(id)} has another record ${where} that ${what}, and this delete depends on it. ${then}`;
+  },
+  /**
+   * A delete of a user record whose id has a record in a project this session does not see, which is a rule or has a
+   * link (spec 4.6, G-c; decision 1 of 2026-10-28). It names no rule tool: no prompt here can show what that changes there.
+   */
+  keepOne: (id, scope) => {
+    const where = scopeWords(scope);
+    return `Nothing was deleted: memory ${shortId(id)} has another record in ${where}, which would load there once this one is deleted; this session cannot check what that changes there. A memory keeps one record: show the user; to keep the one in ${where}, delete this one in a session of ${where}, where both records show.`;
+  }
+};
+var UnknownRecordError = class extends Error {
+  id;
+  problem;
+  /** where: for another record of a deleted user record's id (G-c), its scope in words, "in this project" or "in project <key>". */
+  constructor(kind, id, problem, where) {
+    super(where === void 0 ? RULE_TEXT.unknown(kind, id, problem) : RULE_TEXT.unknownOther(id, problem, where));
+    this.id = id;
+    this.problem = problem;
+  }
+};
+var KeepOneError = class extends Error {
+  id;
+  scope;
+  constructor(id, scope) {
+    super(RULE_TEXT.keepOne(id, scope));
+    this.id = id;
+    this.scope = scope;
+  }
 };
 function readerOf(store2) {
   return { location: store2.location, load: (scopes) => store2.load(scopes) };
@@ -45954,18 +46029,35 @@ var RuleGuard = class {
       const problems = memoryProblems(write.memory);
       if (problems.length > 0) throw new StoreError(problems.join("; "));
     }
-    if (confirmation === null && cannotChangeRules(write)) return this.perform(write);
-    const checked = this.queue.then(() => this.checked(write, confirmation));
+    if (write.kind === "update" && !sameScope(write.memory.scope, write.base.memory.scope)) {
+      const from = write.base.memory.scope;
+      const others2 = (await this.store.recordsOf(write.memory.id)).filter((record2) => !sameScope(record2.scope, from));
+      if (others2.length > 0) throw new AlreadyExistsError(write.memory.id, void 0, others2[0].scope, others2);
+    }
+    let others = [];
+    let takeover = null;
+    if (write.kind === "remove" && write.base.memory.scope.kind === "user") {
+      const base = write.base.memory;
+      others = (await this.store.recordsOf(base.id)).filter((record2) => "problem" in record2 || !sameScope(record2.scope, base.scope));
+      takeover = takeoverOf(base, others, this.session);
+    }
+    if (confirmation === null && cannotChangeRules(write, others)) return this.perform(write);
+    const checked = this.queue.then(() => this.checked(write, confirmation, takeover));
     this.queue = checked.then(
       () => void 0,
       () => void 0
     );
     return checked;
   }
-  async checked(write, confirmation) {
-    const before = (await this.store.load(visibleScopes(this.session))).memories.map((stored) => stored.memory);
-    const after = applied(before, write);
-    const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, this.today());
+  /** takeover: the record of a deleted user record's id in this session's project, which loads here after the delete (G-c). */
+  async checked(write, confirmation, takeover) {
+    const loaded = await this.store.load(visibleScopes(this.session));
+    if (write.kind !== "create") baseCheck(write.kind, write.base, loaded);
+    const before = loaded.memories.map((stored) => stored.memory);
+    const after = takeover === null ? applied(before, write) : [...applied(before, write), takeover];
+    const today = this.today();
+    const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, today);
+    hidersCheck(write.kind, loaded.problems, before, after, effect.days, this.session, today);
     const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null);
     const carry = textToCarry(write, effect);
     const rules = (/* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), ...effect.writtenRule === null ? [] : [effect.writtenRule]])).size;
@@ -45993,9 +46085,12 @@ var RuleGuard = class {
     await this.store.remove(write.base);
   }
 };
-function cannotChangeRules(write) {
+function cannotChangeRules(write, others = []) {
   const records = write.kind === "create" ? [write.memory] : write.kind === "update" ? [write.base.memory, write.memory] : [write.base.memory];
-  return records.every((m) => !isRule(m) && m.supersedes.length === 0 && m.overrides.length === 0);
+  return others.every((record2) => "stored" in record2 && plain(record2.stored.memory)) && records.every(plain);
+}
+function plain(memory) {
+  return !isRule(memory) && memory.supersedes.length === 0 && memory.overrides.length === 0;
 }
 function loadingFields(memory) {
   if (!isRule(memory)) return [];
@@ -46024,31 +46119,34 @@ function textToCarry(write, effect) {
   return loadingFields(will).filter((field) => !loaded.includes(field));
 }
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
+var SWAP_MARK = " (another record of this memory)";
 function affectsOf(effect, before, after, created) {
-  const byId = new Map([...before, ...after].map((m) => [m.id, m]));
+  const beforeById = new Map(before.map((m) => [m.id, m]));
   const afterById = new Map(after.map((m) => [m.id, m]));
   const size = (id) => `, ${loadedText(afterById.get(id), afterById).length} characters`;
   const marked = (id) => {
     const versions = [before, after].flatMap((memories) => memories.filter((m) => m.id === id));
     return versions.length > 0 && versions.every((m) => m.enforced);
   };
-  const who = (id) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(byId.get(id)?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}`;
-  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.after.some(Boolean) ? size(change.id) : ""}`;
+  const who = (id, shown2) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(shown2?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}`;
+  const titled = (change) => who(change.id, change.after.some(Boolean) ? afterById.get(change.id) : beforeById.get(change.id) ?? afterById.get(change.id));
+  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.swap === true ? SWAP_MARK : ""}${change.after.some(Boolean) ? size(change.id) : ""}`;
   const lines = [];
   for (const id of new Set(effect.changes.map((change) => change.id))) {
     const at = (place) => effect.changes.find((change) => change.id === id && change.place === place);
     const [here, there, overriding] = [at("here"), at("elsewhere"), at("overriding")];
     const parts = [];
-    if (here !== void 0) parts.push([PLACE_WORDS.here, shift(here)]);
-    if (there !== void 0) parts.push([PLACE_WORDS.elsewhere, shift(there)]);
+    if (here !== void 0) parts.push([titled(here), PLACE_WORDS.here, shift(here)]);
+    if (there !== void 0) parts.push([titled(there), PLACE_WORDS.elsewhere, shift(there)]);
     const folded = overriding !== void 0 && there !== void 0 && marked(id) && shift(there) === shift(overriding);
-    if (overriding !== void 0 && !folded) parts.push([PLACE_WORDS.overriding, shift(overriding)]);
-    if (here !== void 0 && there !== void 0 && parts[0][1] === parts[1][1]) parts.splice(0, 2, ["here and in other places", parts[0][1]]);
-    for (const [place, text] of parts) lines.push(`${who(id)} ${place}: ${text}`);
+    if (overriding !== void 0 && !folded) parts.push([titled(overriding), PLACE_WORDS.overriding, shift(overriding)]);
+    if (here !== void 0 && there !== void 0 && parts[0][2] === parts[1][2]) parts.splice(0, 2, [parts[0][0], "here and in other places", parts[0][2]]);
+    for (const [title, place, text] of parts) lines.push(`${title} ${place}: ${text}`);
   }
   const written = effect.writtenRule;
   if (written !== null && !effect.changes.some((change) => change.id === written)) {
-    lines.push(written === created ? `${who(written)}: saved; it does not load` : `${who(written)}: changed; its loading does not change${size(written)}`);
+    const shown2 = afterById.get(written) ?? beforeById.get(written);
+    lines.push(written === created ? `${who(written, shown2)}: saved; it does not load` : `${who(written, shown2)}: changed; its loading does not change${size(written)}`);
   }
   return lines.sort();
 }
@@ -46065,6 +46163,42 @@ function loadingText(days, loads) {
     runs.push(`loads${from.kind === "after" ? ` after ${from.date}` : ""}${next?.kind === "after" ? ` until ${next.date}` : ""}`);
   }
   return runs.join(", then ");
+}
+function baseCheck(kind, base, loaded) {
+  const id = base.memory.id;
+  const held = loaded.memories.find((stored) => stored.memory.id === id && sameScope(stored.memory.scope, base.memory.scope));
+  if (held === void 0) {
+    const problem = loaded.problems.find((found) => found.id === id);
+    if (problem !== void 0) throw new UnknownRecordError(kind, id, problem);
+    throw new ConflictError(id, true);
+  }
+  if (held.revision !== base.revision) throw new ConflictError(id, false);
+}
+function takeoverOf(base, others, session) {
+  const id = base.id;
+  let here = null;
+  for (const record2 of others) {
+    if ("problem" in record2) {
+      if (sameScope(record2.scope, base.scope)) throw new UnknownRecordError("remove", id, record2.problem);
+      const where = sameScope(record2.scope, session.project) ? "in this project" : `in ${scopeWords(record2.scope)}`;
+      throw new UnknownRecordError("remove", id, record2.problem, where);
+    }
+    if (sameScope(record2.scope, session.project)) here = record2.stored.memory;
+    else if (!plain(record2.stored.memory)) throw new KeepOneError(id, record2.scope);
+  }
+  return here;
+}
+function hidersCheck(kind, problems, before, after, days, session, today) {
+  for (const problem of problems) {
+    if (!isOwnRecord(problem)) continue;
+    const id = problem.id;
+    for (const day of days) {
+      const date5 = sampleDate(day, today);
+      if (hidersOf(before, id, session, date5).join("\n") !== hidersOf(after, id, session, date5).join("\n")) {
+        throw new UnknownRecordError(kind, id, problem);
+      }
+    }
+  }
 }
 function applied(before, write) {
   if (write.kind === "create") return [...before, write.memory];
@@ -46288,6 +46422,8 @@ function createServer(deps) {
     } catch (error62) {
       const rule = ruleAnswer(error62);
       if (rule !== void 0) return rule;
+      const both2 = moveRefusal(error62, memory, base, deps.session);
+      if (both2 !== void 0) return both2;
       const refused = refusal("update", error62, memory);
       if (refused === void 0) throw error62;
       return fail(refused);
@@ -46726,9 +46862,9 @@ function unreadablePart(memories, problems, words, labels) {
   if (counted.length === 0) return void 0;
   const matches = (text) => {
     if (text === void 0) return false;
-    const plain = text.toLowerCase();
+    const plain2 = text.toLowerCase();
     const asLabel = normalizeLabel(text);
-    return words.every((word) => plain.includes(word)) && labels.every((label) => asLabel.includes(label));
+    return words.every((word) => plain2.includes(word)) && labels.every((label) => asLabel.includes(label));
   };
   const matching = counted.filter((problem) => matches(problem.text)).map(shownProblem);
   const [n, total] = [matching.length, counted.length];
@@ -46789,9 +46925,96 @@ function refusal(action, error62, memory) {
     return action === "update" ? `memory ${id} was changed by another session while this change was being written; nothing was written. Read it again with get_memory and apply your change to the current text` : `memory ${id} was changed by another session and was not deleted; read it again with get_memory and ask the user`;
   }
   if (error62 instanceof AlreadyExistsError && action === "update") {
-    return `cannot move memory ${id} to ${memory.scope.kind}: a record with this id already exists at ${error62.file}; nothing was changed. Ask the user which of the two to keep`;
+    const refused = `cannot move memory ${id} to ${memory.scope.kind}: it has another record`;
+    const kept = "nothing was changed. A memory keeps one record: ask the user which to keep";
+    if (error62.scope === void 0) return `${refused}; ${kept}`;
+    const other = error62.scope;
+    const keepThis = other.kind === "project" && memory.scope.kind === "user" ? `to keep this one, delete the other in a session of ${scopeWords(other)}, then move again.` : "to keep this one, the other has to be removed by hand: while this one exists, no session finds the other by its id.";
+    return `${refused} in ${scopeWords(other)}; ${kept}. To keep the other, delete this one with delete_memory; ${keepThis}`;
   }
   return void 0;
+}
+function moveRefusal(error62, memory, base, session) {
+  if (!(error62 instanceof AlreadyExistsError) || error62.records === void 0 || error62.records.length === 0) return void 0;
+  const others = error62.records;
+  const self = { scope: base.memory.scope, stored: base };
+  const all = [self, ...others];
+  const name = (record2) => record2 === self ? "this one" : `the one in ${scopeWords(record2.scope)}`;
+  const one = others.length === 1;
+  const places = others.map((record2) => scopeWords(record2.scope)).join(", ");
+  const unseen = others.filter((record2) => "stored" in record2 && !seenBy(session, record2.scope)).map((record2) => scopeWords(record2.scope));
+  const dated = all.flatMap((record2) => {
+    const time3 = "stored" in record2 ? Date.parse(record2.stored.memory.updated) : Number.NaN;
+    return Number.isNaN(time3) ? [] : [{ record: record2, time: time3 }];
+  });
+  const left = all.filter((record2) => !dated.some((entry) => entry.record === record2));
+  const why = (record2) => !("problem" in record2) ? "its updated date is not a date" : record2.problem.newerFormat === void 0 ? "it cannot be read" : "it was written by a newer NeoCortex";
+  const away = unseen.length === 0 ? "" : one ? `that leaves the memory in ${unseen[0]}, out of this session's sight: to have it here, move it to user scope in a session of ${unseen[0]}` : `a record kept in ${unseen.join(", ")} stays out of this session's sight: to have it here, move it to user scope in a session of its project`;
+  const verdict = base.memory.scope.kind === "user" ? deleteVerdict(base.memory, others, session) : void 0;
+  const keepWhich = one ? "To keep the other" : "To keep one of the others";
+  const keepOther = verdict === void 0 ? `${keepWhich}, delete this one with delete_memory${one ? "" : ", and each other record you do not keep"}${away === "" ? "" : `; ${away}`}.` : `${keepWhich}, deleting this one with delete_memory is refused now: ${verdict}${away === "" ? "" : ` ${capital(away)}.`}`;
+  const keepThis = one ? `To keep this one, ${keepThisOne(others[0], memory.scope.kind)}` : `To keep this one, ${others.map((record2) => keepThisClause(record2, memory.scope.kind)).join("; ")}, then move again.`;
+  const text = [
+    `cannot move memory ${shortId(memory.id)} to ${memory.scope.kind}: it has ${one ? "another record" : "other records"} in ${places}; nothing was changed.`,
+    `A memory keeps one record: show the user ${one ? "both" : "the"} records in "records" and ask which to keep.`,
+    newerWords(dated, all.length, name),
+    ...left.map((record2) => `${capital(name(record2))} takes no part: ${why(record2)}.`),
+    keepOther,
+    keepThis
+  ].join(" ");
+  const records = all.map((record2) => movedRecordOf(record2, record2 === self ? "this one" : "other", session));
+  return { content: [{ type: "text", text: JSON.stringify({ error: text, records }) }], isError: true };
+}
+function deleteVerdict(base, others, session) {
+  try {
+    takeoverOf(base, others, session);
+    return void 0;
+  } catch (error62) {
+    if (error62 instanceof UnknownRecordError || error62 instanceof KeepOneError) return error62.message;
+    throw error62;
+  }
+}
+function keepThisOne(other, to) {
+  if ("problem" in other) {
+    if (other.problem.newerFormat !== void 0) return "update NeoCortex on this machine first: the other was written by a newer NeoCortex.";
+    if (other.problem.text === void 0) return "try again: the other could not be read just now.";
+    return "the other has to be repaired or removed by hand: it cannot be read.";
+  }
+  return to === "user" && other.scope.kind === "project" ? `delete the other in a session of ${scopeWords(other.scope)}, then move again.` : "the other has to be removed by hand: while this one exists, no session finds the other by its id.";
+}
+function keepThisClause(other, to) {
+  const where = scopeWords(other.scope);
+  if ("problem" in other) {
+    if (other.problem.newerFormat !== void 0) return `update NeoCortex on this machine for the one in ${where}`;
+    if (other.problem.text === void 0) return `read the one in ${where} again, which could not be read just now`;
+    return `repair or remove the one in ${where} by hand`;
+  }
+  return to === "user" && other.scope.kind === "project" ? `delete the one in ${where} in a session of ${where}` : `remove the one in ${where} by hand`;
+}
+function newerWords(dated, total, name) {
+  if (dated.length < 2) return "Which is newer cannot be told.";
+  const top = Math.max(...dated.map((entry) => entry.time));
+  const newest = dated.filter((entry) => entry.time === top).map((entry) => name(entry.record));
+  if (newest.length === dated.length) return total === 2 ? "Both have the same updated date." : `${capital(newest.join(", "))} have the same updated date.`;
+  if (newest.length > 1) return `By updated date, ${newest.join(", ")} are the newest, at the same date.`;
+  return `By updated date, ${newest[0]} is ${dated.length === 2 ? "newer" : "the newest"}.`;
+}
+function movedRecordOf(record2, which, session) {
+  const scope = scopeWords(record2.scope);
+  if ("problem" in record2) {
+    const format = record2.problem.newerFormat;
+    const { reason } = shownProblem(record2.problem);
+    return { which, scope, unreadable: format === void 0 ? reason : shownText(`written by a newer NeoCortex (format ${format})`) };
+  }
+  const { memory, revision } = record2.stored;
+  const content = seenBy(session, record2.scope) ? { title: shownText(memory.title), summary: shownText(memory.summary) } : {};
+  return { which, scope, revision, updated: shownText(memory.updated), bodyLength: memory.body.length, ...content };
+}
+function seenBy(session, scope) {
+  return visibleScopes(session).some((visible) => sameScope(visible, scope));
+}
+function capital(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 async function labelRefusal(error62, places, place) {
   if (error62 instanceof AlreadyExistsError || error62 instanceof ConflictError && !error62.gone) {
@@ -46859,6 +47082,8 @@ async function guarded(run) {
   }
 }
 function message(error62) {
+  const code = systemErrorCode(error62);
+  if (code !== void 0) return `NeoCortex could not read or write its store (${code}); try again, and tell the user if it keeps failing`;
   return error62 instanceof Error ? error62.message : String(error62);
 }
 
@@ -46901,6 +47126,7 @@ var FileStore = class {
   maxLockMs;
   lockBase;
   readListed;
+  lookUp;
   locks;
   constructor(root2, options = {}) {
     this.root = root2;
@@ -46911,6 +47137,7 @@ var FileStore = class {
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
     this.readListed = options.readListed ?? ((path) => readFile2(path, "utf8"));
+    this.lookUp = options.lookUp ?? ((path) => stat2(path));
   }
   get location() {
     return this.root;
@@ -46939,7 +47166,7 @@ var FileStore = class {
     return entries.filter((entry) => entry.isDirectory() && PROJECT_KEY_RE.test(entry.name)).map((entry) => entry.name).sort();
   }
   /**
-   * Refuses a memory that would not load again (design B14), and an id that already has a file at its location.
+   * Refuses a memory that would not load again (design B14), and an id that already has a file in any scope (C4, C8).
    * Writes the current format of this store's registry, as update does (V3).
    */
   async create(memory) {
@@ -46947,7 +47174,8 @@ var FileStore = class {
     await this.assertRoot();
     const target = this.pathFor(memory);
     return this.withLock(memory.id, async () => {
-      if (await this.readIfPresent(target) !== void 0) throw new AlreadyExistsError(memory.id, this.relative(target));
+      const [held] = await this.holdersOf(memory.id);
+      if (held !== void 0) throw new AlreadyExistsError(memory.id, this.relative(held.path), held.scope);
       const text = serializeMemoryFile(memory, { format: currentOf(this.registry), unknown: {} });
       await this.writeAtomically(target, text, memory.id);
       return revisionOf(text);
@@ -46962,10 +47190,12 @@ var FileStore = class {
     return this.withLock(next.id, async () => {
       const carry = await this.checkBase(source, base);
       if (target !== source) {
-        const there = await this.readIfPresent(target);
+        const held = (await this.holdersOf(next.id)).filter((holder) => !sameScope(holder.scope, base.memory.scope));
+        const there = held.find((holder) => sameScope(holder.scope, next.scope)) ?? held[0];
         if (there !== void 0) {
-          this.carryOf(there, next.id);
-          throw new AlreadyExistsError(next.id, this.relative(target));
+          const text2 = there.path === target ? await this.readIfPresent(target) : void 0;
+          if (text2 !== void 0) this.carryOf(text2, next.id);
+          throw new AlreadyExistsError(next.id, this.relative(there.path), there.scope);
         }
       }
       const text = serializeMemoryFile(next, carry);
@@ -46977,12 +47207,46 @@ var FileStore = class {
   async remove(base) {
     await this.assertRoot();
     const source = this.pathFor(base.memory);
-    const target = join3(this.root, "deleted", ...this.relativeParts(base.memory));
+    const folder = join3(this.root, "deleted", ...foldersOf(base.memory.scope));
     await this.withLock(base.memory.id, async () => {
       await this.checkBase(source, base);
-      await mkdir(dirname2(target), { recursive: true });
+      const target = await this.freeDeletedPath(folder, base.memory.id);
+      await mkdir(folder, { recursive: true });
       await this.retryWhileBusy(base.memory.id, () => rename(source, target));
     });
+  }
+  /**
+   * The first name in a scope's deleted folder that holds nothing: <id>.md, then <id>.2.md, <id>.3.md and so on, so a
+   * delete never replaces the copy an earlier delete of this id kept (#384). Under the id's lock, through the presence
+   * lookup holdersOf uses; a lookup that fails other than not-found is StoreBusyError, and nothing is moved.
+   */
+  async freeDeletedPath(folder, id) {
+    for (let n = 1; ; n += 1) {
+      const path = join3(folder, n === 1 ? `${id}.md` : `${id}.${n}.md`);
+      try {
+        await this.lookUp(path);
+      } catch (error62) {
+        if (isNotFound(error62)) return path;
+        throw new StoreBusyError(id);
+      }
+    }
+  }
+  /**
+   * The live records of this id in the user scope and every project folder, in canonical order, each read as load
+   * reads it (C8): never a whole scope, and never the deleted area. A read that fails other than not-found is a
+   * present, unreadable record; a projects folder that cannot be listed is StoreBusyError.
+   */
+  async recordsOf(id) {
+    if (!UUID_RE.test(id)) throw new StoreError(`invalid memory id ${id}`);
+    const scopes = await this.scopesFor(id);
+    const reads = await Promise.all(
+      scopes.map(async (scope) => {
+        const parts = [...foldersOf(scope), `${id}.md`];
+        const read = await this.readRecord(join3(this.root, ...parts), parts.join("/"), scope, id);
+        return read === void 0 ? [] : [{ scope, ...read }];
+      })
+    );
+    return reads.flat();
   }
   async readPlace(place) {
     const stem = placeStem(place);
@@ -47074,7 +47338,7 @@ var FileStore = class {
       return { state: "stored", stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
     } catch (error62) {
       const newerFormat = error62 instanceof PlaceFormatError ? error62.newerFormat : void 0;
-      return { state: "unreadable", problem: { file: file2, reason: messageOf2(error62), ...newerFormat === void 0 ? {} : { newerFormat } } };
+      return { state: "unreadable", problem: { file: file2, reason: systemErrorCode(error62) ?? messageOf2(error62), ...newerFormat === void 0 ? {} : { newerFormat } } };
     }
   }
   /**
@@ -47131,31 +47395,72 @@ var FileStore = class {
         result.problems.push({ file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" });
         continue;
       }
-      let text;
-      try {
-        text = await this.readListed(join3(folder, name));
-        const read = readMemoryFile(text, { ...location, id }, this.registry);
-        if (result.memories.some((stored) => stored.memory.id === id)) {
-          result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
-        } else {
-          const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
-          result.memories.push(Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored);
-        }
-      } catch (error62) {
-        if (isNotFound(error62) && await isGone(join3(folder, name))) continue;
-        const delivery = text === void 0 ? void 0 : deliveryNamedIn(text);
-        const reason = error62 instanceof Error ? error62.message : String(error62);
-        const newerFormat = error62 instanceof MemoryFormatError ? error62.newerFormat : void 0;
-        result.problems.push({
+      const read = await this.readRecord(join3(folder, name), file2, location.scope, id);
+      if (read === void 0) continue;
+      if ("problem" in read) result.problems.push(read.problem);
+      else if (result.memories.some((stored) => stored.memory.id === id)) {
+        result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
+      } else result.memories.push(read.stored);
+    }
+  }
+  /**
+   * One memory file, read and decoded, or its load problem; undefined for a file that went missing and has no name
+   * there on a second look, deleted or moved meanwhile (#352).
+   */
+  async readRecord(path, file2, scope, id) {
+    let text;
+    try {
+      text = await this.readListed(path);
+      const read = readMemoryFile(text, { scope, id }, this.registry);
+      const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
+      return { stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
+    } catch (error62) {
+      if (isNotFound(error62) && await isGone(path)) return void 0;
+      const delivery = text === void 0 ? void 0 : deliveryNamedIn(text);
+      const reason = systemErrorCode(error62) ?? messageOf2(error62);
+      const newerFormat = error62 instanceof MemoryFormatError ? error62.newerFormat : void 0;
+      return {
+        problem: {
           file: file2,
           id,
           reason,
           ...delivery === void 0 ? {} : { delivery },
           ...newerFormat === void 0 ? {} : { newerFormat },
           ...text === void 0 ? {} : { text }
-        });
-      }
+        }
+      };
     }
+  }
+  /** Every scope that can hold a record: the user, then each project folder by key. A listing that fails is busy. */
+  async scopesFor(id) {
+    let keys;
+    try {
+      keys = await this.projectKeys();
+    } catch (error62) {
+      if (error62 instanceof StoreError) throw error62;
+      throw new StoreBusyError(id);
+    }
+    return [USER, ...keys.map((key) => projectScope(parseProjectKey(key)))];
+  }
+  /**
+   * The scopes whose live area has a file of this id, in canonical order, with its path (C8): a presence lookup, no
+   * read. A lookup that fails other than not-found refuses as busy (decision 2 of 2026-10-28): taken as absent it
+   * would let a second record be written; taken as present, the import would record a unit it never wrote.
+   */
+  async holdersOf(id) {
+    const found = await Promise.all(
+      (await this.scopesFor(id)).map(async (scope) => {
+        const path = join3(this.root, ...foldersOf(scope), `${id}.md`);
+        try {
+          await this.lookUp(path);
+          return [{ scope, path }];
+        } catch (error62) {
+          if (isNotFound(error62)) return [];
+          throw new StoreBusyError(id);
+        }
+      })
+    );
+    return found.flat();
   }
   /**
    * Under the lock: the stored file at base's path must still be the state base was read from. Gone is a conflict

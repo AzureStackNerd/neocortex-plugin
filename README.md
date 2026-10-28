@@ -121,7 +121,8 @@ when a subagent starts, or that is enforced. Claude changes a rule only with `sa
 
 Claude is told to delete a memory only when you ask; to have Claude Code ask you as well, keep `delete_memory` out of
 the allow rule (see [Permissions](#permissions)). A deleted memory moves to the folder `deleted` in your memory folder,
-under the same path, from where you can put it back by hand.
+under the same path, from where you can put it back by hand. When that folder already holds a deleted copy of the same
+memory, the later one is `<id>.2.md`, then `<id>.3.md`; rename it to `<id>.md` when you put it back.
 
 ## GitHub over SSH or HTTPS
 

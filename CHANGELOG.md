@@ -2,6 +2,27 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.3 - 2026-10-28
+
+- Fixed: a memory can no longer get a second copy in another scope. An import or a move that would put it in a scope
+  while another scope holds it is refused, naming the scope that holds it. Before, a re-import or a move into user
+  scope could leave two copies and silently stop a confirmed rule from loading in another project.
+- Fixed: a memory NeoCortex cannot read (a failed read, a newer format, a broken file) counts as unknown, not as
+  absent. An update or delete of it, and a change that would hide or unhide it through `supersedes` or an override, is
+  refused, so a rule never starts or stops loading through a memory NeoCortex could not read. The answer says what to
+  do: try again, update NeoCortex, or repair the memory.
+- Fixed: deleting a user memory that has a second copy in a project, left by an earlier version, no longer lets that
+  copy start loading as a rule without asking. A copy in this project goes through the rule check, so a delete that
+  changes a rule is sent to `delete_rule`; a copy in another project lets the delete through only when it is no rule
+  and has no link, otherwise the delete is refused and names that project.
+- Changed: a move to another scope that is refused because another scope holds the memory shows every copy, which
+  one is newer, and the ways out. A copy in a project this session cannot see shows its scope, revision, date and
+  body length, but no title or summary.
+- Fixed: a delete no longer replaces a copy of the same memory that was deleted earlier; the later copy is kept beside
+  it in the `deleted` folder as `<id>.2.md`, then `<id>.3.md`.
+- Fixed: an error from the operating system is shown by its code, such as `EPERM`, in a load problem and in every tool
+  answer, never with the path of your memory folder.
+
 ## 0.4.2 - 2026-10-26
 
 - Fixed: an update, a move to another scope or a delete never writes over a memory or a place record whose format is
