@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.4 - 2026-10-28
+
+- Added: the prompt `/plugin:neocortex:neocortex:status` shows that the server of this session is connected, which
+  memory folder it reads, its version and format, the memories it loaded per scope and those that are not active, the
+  imported memories waiting to be sorted, and each record it could not load, with the reason. A memory folder that
+  cannot be read gives the reason on its first line. When the prompt is missing from the `/` menu, the server is not
+  connected: check `/mcp` or `claude mcp list`.
+
 ## 0.4.3 - 2026-10-28
 
 - Fixed: a memory can no longer get a second copy in another scope. An import or a move that would put it in a scope

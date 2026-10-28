@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.3",
+  version: "0.4.4",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45754,10 +45754,10 @@ function sessionContext(input2, options = NO_PLACE) {
 
 ${fullText2}`;
 }
-async function loadDelivery(store2, session, now) {
+async function loadDelivery(store2, session, now, current = CURRENT_FORMAT) {
   const { memories: stored, problems } = await store2.load(visibleScopes(session));
   const memories = stored.map((s) => s.memory);
-  const newer = stored.filter((s) => compareFormats(s.format, CURRENT_FORMAT) > 0);
+  const newer = stored.filter((s) => compareFormats(s.format, current) > 0);
   const resolution = resolve4(memories, session, toLocalDate(now));
   return { projectKey: session.project.key, location: store2.location, resolution, problems, newer, recentRules: recentRules(resolution.active, now) };
 }
@@ -45810,15 +45810,10 @@ function noticeLines({ resolution, problems, newer, recentRules: recent }, optio
   if (visit2 !== "") lines.push(`- ${visit2}`);
   const unsorted = options.unsorted ? unsortedNotice(resolution.active, options.place) : "";
   if (unsorted !== "") lines.push(`- ${unsorted}`);
-  const { expired, ignored } = resolution;
-  if (expired.length > 0) {
-    const titles = expired.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
-    lines.push(`- ${expired.length} expired: ${listed2(titles)}; extend with update_memory or delete.`);
-  }
-  if (ignored.length > 0) {
-    const links = ignored.map((link) => shownCut(link, 120));
-    lines.push(`- ${ignored.length} links ignored: ${listed2(links)}; fix them with update_memory.`);
-  }
+  const expired = expiredNotice(resolution.expired);
+  if (expired !== "") lines.push(`- ${expired}`);
+  const ignored = ignoredNotice(resolution.ignored);
+  if (ignored !== "") lines.push(`- ${ignored}`);
   const ignoredRecords = [...problems, ...options.place?.problems ?? []];
   if (ignoredRecords.length > 0) {
     const records = ignoredRecords.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
@@ -45827,6 +45822,74 @@ function noticeLines({ resolution, problems, newer, recentRules: recent }, optio
   const changed = recentRulesNotice(recent);
   if (changed !== "") lines.push(`- ${changed}`);
   return lines;
+}
+function expiredNotice(expired) {
+  if (expired.length === 0) return "";
+  const titles = expired.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
+  return `${expired.length} expired: ${listed2(titles)}; extend with update_memory or delete.`;
+}
+function ignoredNotice(ignored) {
+  if (ignored.length === 0) return "";
+  const links = ignored.map((link) => shownCut(link, 120));
+  return `${ignored.length} links ignored: ${listed2(links)}; fix them with update_memory.`;
+}
+var STATUS_TEXT = {
+  connected: "The NeoCortex server of this session is connected.",
+  unread: (reason) => `The NeoCortex server of this session is connected, but the store cannot be read: ${reason}`,
+  store: (location) => `Store: ${location}`,
+  session: (session) => `This session: project ${shownText(session.project.key)}, ${session.place.kind === "project" ? "a repository" : `the folder ${shownFolderKey(session.place.key)}`}`,
+  version: (version2) => `NeoCortex ${version2}, reads and writes format ${CURRENT_FORMAT}`,
+  labels: (state) => `Context labels of this place: ${state}`,
+  memories: (total, location) => `${total} ${total === 1 ? "memory" : "memories"} of the user and this project in ${location}; other projects are not read here`,
+  active: (user, project) => `Active: ${user + project} (user ${user}, project ${project})`,
+  inactive: (expired, superseded, overridden) => `Not active: ${expired} expired, ${superseded} superseded, ${overridden} overridden`,
+  unsorted: (count2) => `Imported memories waiting to be sorted: ${count2}`,
+  problems: (count2) => count2 === 0 ? "Load problems: none" : `Load problems: ${count2}`,
+  moment: (delivery) => `, missing at moment ${delivery}`
+};
+var PROBLEM_GROUPS = [
+  { title: "Written by a newer NeoCortex", holds: (p) => p.newerFormat !== void 0 },
+  { title: "Second records of a memory", holds: (p) => p.newerFormat === void 0 && p.copy === true },
+  { title: "Records that belong to no memory", holds: (p) => p.newerFormat === void 0 && p.id === void 0 },
+  { title: "Could not be read", holds: (p) => p.newerFormat === void 0 && p.copy !== true && p.id !== void 0 }
+];
+function statusEntry(problem) {
+  const { record: record2, reason } = shownProblem(problem);
+  return `- ${truncate(record2, 120)} (${truncateReason(reason, 80)})${problem.delivery === void 0 ? "" : STATUS_TEXT.moment(problem.delivery)}`;
+}
+function placeLabels(read) {
+  if (read.state === "none") return PLACE_TEXT.noRecord;
+  if (read.state === "stored") return labelList(read.stored.record.labels);
+  const { reason } = shownProblem(read.problem);
+  return `not read (${reason})`;
+}
+function problemGroup(title, problems) {
+  return problems.length === 0 ? [] : [`${title}: ${problems.length}`, ...problems.map(statusEntry)];
+}
+function statusReport(input2, place, about) {
+  const { resolution, problems, newer } = input2;
+  const { active, expired, current, byId } = resolution;
+  const activeIn = (kind) => active.filter((m) => m.scope.kind === kind).length;
+  const labels = placeLabels(place.read);
+  const notices = [updateWarning(problems), newerNotice(newer), expiredNotice(expired), ignoredNotice(resolution.ignored)].filter((n) => n !== "");
+  return [
+    STATUS_TEXT.connected,
+    STATUS_TEXT.session(about.session),
+    STATUS_TEXT.version(about.version),
+    STATUS_TEXT.labels(labels),
+    STATUS_TEXT.memories(byId.size, input2.location),
+    STATUS_TEXT.active(activeIn("user"), activeIn("project")),
+    STATUS_TEXT.inactive(expired.length, byId.size - expired.length - current.length, current.length - active.length),
+    STATUS_TEXT.unsorted(active.filter((m) => carriesLabel(m, UNSORTED_LABEL)).length),
+    STATUS_TEXT.problems(problems.length + place.problems.length),
+    ...PROBLEM_GROUPS.flatMap(({ title, holds }) => problemGroup(title, problems.filter(holds))),
+    ...problemGroup("Place records not read", place.problems),
+    ...notices.length === 0 ? [] : ["Notices:", ...notices.map((n) => `- ${n}`)]
+  ].join("\n");
+}
+function statusUnread(about, error62) {
+  const reason = systemErrorCode(error62) ?? (error62 instanceof Error ? error62.message : String(error62));
+  return [STATUS_TEXT.unread(shownText(reason)), STATUS_TEXT.store(about.location), STATUS_TEXT.session(about.session), STATUS_TEXT.version(about.version)].join("\n");
 }
 function updateWarning(problems) {
   const unreadable = problems.filter((problem) => problem.newerFormat !== void 0).length;
@@ -46688,6 +46751,24 @@ function createServer(deps) {
         text = refreshContext(await loadDelivery(reader, deps.session, now()), await loadPlace(deps.places, deps.session));
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
+      }
+      return { messages: [{ role: "user", content: { type: "text", text: text.toWellFormed() } }] };
+    }
+  );
+  server.registerPrompt(
+    "status",
+    {
+      title: "NeoCortex status",
+      description: "Show which store NeoCortex reads, what it loaded for this session and what it could not load, and why."
+    },
+    async () => {
+      const about = { version: package_default.version, session: deps.session, location: reader.location };
+      let text;
+      try {
+        const input2 = await loadDelivery(reader, deps.session, now());
+        text = statusReport(input2, await deps.places.readPlace(placeRefOf(deps.session.place)), about);
+      } catch (error62) {
+        text = statusUnread(about, error62);
       }
       return { messages: [{ role: "user", content: { type: "text", text: text.toWellFormed() } }] };
     }
