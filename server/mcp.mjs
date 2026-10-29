@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.7",
+  version: "0.4.8",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45564,8 +45564,9 @@ function compareText(a, b) {
 
 // src/similar.ts
 function similarity(a, b) {
-  const left = wordsOf(a);
-  const right = wordsOf(b);
+  return wordSimilarity(wordsOf(a), wordsOf(b));
+}
+function wordSimilarity(left, right) {
   let shared = 0;
   for (const word of left) if (right.has(word)) shared += 1;
   const either = left.size + right.size - shared;
@@ -45775,14 +45776,17 @@ function refreshContext(input2, place) {
   return [...index, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
 }
 function buildFull(kinds, active, byId, budget = HOOK_CAP, options = {}) {
+  return fullFit(kinds, active, byId, budget, options).text;
+}
+function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
   const broken = brokenWarning(kinds, options.problems ?? []);
   const room = broken === "" ? budget : Math.max(0, budget - broken.length - 2);
-  const text = fullText(kinds, active, byId, room, options.priority ?? kinds);
-  return [broken, text].filter((t) => t !== "").join("\n\n");
+  const { text, notFit } = fullText(kinds, active, byId, room, options.priority ?? kinds);
+  return { text: [broken, text].filter((t) => t !== "").join("\n\n"), notFit };
 }
 function fullText(kinds, active, byId, budget, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
-  if (chosen.length === 0) return "";
+  if (chosen.length === 0) return { text: "", notFit: 0 };
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
   const blocks = chosen.map((m) => ({ memory: m, text: loadedText(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
@@ -45806,12 +45810,12 @@ function fullText(kinds, active, byId, budget, priority) {
     return { kept: heading === null ? kept2 : [heading, ...kept2], skipped: skipped2 };
   };
   const first = fill(budget);
-  if (first.skipped.length === 0) return first.kept.join("\n\n");
+  if (first.skipped.length === 0) return { text: first.kept.join("\n\n"), notFit: 0 };
   const { kept, skipped } = fill(Math.max(0, budget - WARNING_RESERVE));
   const one = skipped.length === 1;
   const names = skipped.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
   const warning = `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(names)}. Say so before answering; get_memory shows the text.`;
-  return [warning, ...kept].join("\n\n");
+  return { text: [warning, ...kept].join("\n\n"), notFit: skipped.length };
 }
 function sessionContext(input2, options = NO_PLACE) {
   const { active, byId } = input2.resolution;
@@ -45915,10 +45919,10 @@ var STATUS_TEXT = {
   moment: (delivery) => `, missing at moment ${delivery}`
 };
 var PROBLEM_GROUPS = [
-  { title: "Written by a newer NeoCortex", holds: (p) => p.newerFormat !== void 0 },
-  { title: "Second records of a memory", holds: (p) => p.newerFormat === void 0 && p.copy === true },
-  { title: "Records that belong to no memory", holds: (p) => p.newerFormat === void 0 && p.id === void 0 },
-  { title: "Could not be read", holds: (p) => p.newerFormat === void 0 && p.copy !== true && p.id !== void 0 }
+  { key: "newerFormat", title: "Written by a newer NeoCortex", holds: (p) => p.newerFormat !== void 0 },
+  { key: "secondRecords", title: "Second records of a memory", holds: (p) => p.newerFormat === void 0 && p.copy === true },
+  { key: "noMemory", title: "Records that belong to no memory", holds: (p) => p.newerFormat === void 0 && p.id === void 0 },
+  { key: "unreadable", title: "Could not be read", holds: (p) => p.newerFormat === void 0 && p.copy !== true && p.id !== void 0 }
 ];
 function statusEntry(problem) {
   const { record: record2, reason } = shownProblem(problem);
@@ -46024,7 +46028,7 @@ function contextFor(command, event, input2, extra) {
     case "index":
       return buildIndex(input2, HOOK_CAP, extra.part, indexOptions(command, event, extra.place));
     case "full":
-      return buildFull(["startup"], active, byId, HOOK_CAP, { problems });
+      return startupFull(input2).text;
     case "startup":
       return sessionContext(input2, indexOptions(command, event, extra.place));
     case "subagent":
@@ -46034,6 +46038,9 @@ function contextFor(command, event, input2, extra) {
     case "edit":
       return buildFull(["edit"], active, byId, HOOK_CAP, { problems });
   }
+}
+function startupFull(input2) {
+  return fullFit(["startup"], input2.resolution.active, input2.resolution.byId, HOOK_CAP, { problems: input2.problems });
 }
 function indexOptions(command, event, place) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
@@ -46051,6 +46058,151 @@ function systemMessageFor(command, event, input2, part, place) {
   const firstPart = command === "index" && part === 1 || command === "startup";
   if (event !== "SessionStart" || !firstPart) return "";
   return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), recentRulesWarning(input2.recentRules)].filter((text) => text !== "").join(" ");
+}
+
+// src/dream/finder.ts
+var REPEAT_MIN_PLACES = 3;
+var HANDOFF_LABEL = "handoff";
+var LONG_PROMPT = "";
+var SHORT_QUESTION = "?";
+var NOT_SHOWN_RE = /^(\d+) index memories are not in the start context;/m;
+function placeMeasures(input2, place) {
+  const text = (command, event, prompt = "", part = 1) => contextFor(command, event, input2, { prompt, part, place });
+  const index = INDEX_PART_BUDGETS.map((_, i) => text("index", "SessionStart", "", i + 1));
+  const full = startupFull(input2);
+  const count2 = (re, within) => Number(re.exec(within)?.[1] ?? 0);
+  return {
+    indexNotShown: count2(NOT_SHOWN_RE, index.join("\n")),
+    startCharacters: [...index, full.text].reduce((sum, part) => sum + part.length, 0),
+    startupNotFit: full.notFit,
+    promptCharacters: text("prompt", "UserPromptSubmit", LONG_PROMPT).length,
+    questionCharacters: text("prompt", "UserPromptSubmit", SHORT_QUESTION).length,
+    editCharacters: text("edit", "PreToolUse").length
+  };
+}
+function nearPairs(active) {
+  return pairsIn(active, wordCache(), () => true);
+}
+function deadWeight(resolution, problems) {
+  return countsOf(deadOf(resolution, idsOf([...resolution.byId.keys()], problems)));
+}
+function notLoaded(problems) {
+  return Object.fromEntries(PROBLEM_GROUPS.map(({ key, holds }) => [key, problems.filter(holds).length]));
+}
+function storeFindings(load, scopes, labels, today) {
+  const memories = load.memories.map((stored) => stored.memory);
+  const present = idsOf(
+    memories.map((m) => m.id),
+    load.problems
+  );
+  const words = wordCache();
+  const pairs = /* @__PURE__ */ new Map();
+  const dead = { expired: /* @__PURE__ */ new Set(), dangling: /* @__PURE__ */ new Set(), olderHandoffs: /* @__PURE__ */ new Set() };
+  const add = (resolution, keep) => {
+    for (const pair of pairsIn(resolution.active, words, keep)) pairs.set(`${pair.a.id} ${pair.b.id}`, pair);
+    const found = deadOf(resolution, present);
+    for (const key of ["expired", "dangling", "olderHandoffs"]) for (const id of found[key]) dead[key].add(id);
+  };
+  const user = memories.filter((m) => m.scope.kind === "user");
+  add(resolve4(user, placeSession("user"), today), () => true);
+  const projects = scopes.filter((scope) => scope.kind === "project");
+  const candidates = [];
+  for (const scope of projects) {
+    const resolution = resolve4(memories, placeSession(scope.key), today);
+    add(resolution, (a, b) => a.scope.kind === "project" || b.scope.kind === "project");
+    candidates.push(...resolution.active.filter((m) => m.scope.kind === "project"));
+  }
+  return {
+    projects: projects.length,
+    memories: memories.length,
+    pairs: [...pairs.values()].sort(byScore),
+    clusters: clustersOf(candidates, labels, words),
+    deadWeight: countsOf(dead),
+    notLoaded: notLoaded(load.problems)
+  };
+}
+function wordCache() {
+  const cache = /* @__PURE__ */ new WeakMap();
+  return (memory) => {
+    let words = cache.get(memory);
+    if (words === void 0) {
+      words = wordsOf(memory);
+      cache.set(memory, words);
+    }
+    return words;
+  };
+}
+function scoreOf(words, a, b) {
+  return Math.round(wordSimilarity(words(a), words(b)) * 100) / 100;
+}
+function pairsIn(active, words, keep) {
+  const pairs = [];
+  for (let i = 0; i < active.length; i += 1) {
+    for (let j = i + 1; j < active.length; j += 1) {
+      const [a, b] = active[i].id < active[j].id ? [active[i], active[j]] : [active[j], active[i]];
+      if (!keep(a, b)) continue;
+      const score = scoreOf(words, a, b);
+      if (score >= NEAR_DUPLICATE_MIN) pairs.push({ a, b, score });
+    }
+  }
+  return pairs.sort(byScore);
+}
+function byScore(x, y) {
+  return y.score - x.score || compareText2(x.a.id, y.a.id) || compareText2(x.b.id, y.b.id);
+}
+function clustersOf(memories, labels, words) {
+  const keyOf = (memory) => memory.scope.kind === "project" ? memory.scope.key : null;
+  const projectMemories = memories.filter((m) => keyOf(m) !== null);
+  const root2 = projectMemories.map((_, i) => i);
+  const find2 = (i) => {
+    while (root2[i] !== i) i = root2[i] = root2[root2[i]];
+    return i;
+  };
+  for (let i = 0; i < projectMemories.length; i += 1) {
+    for (let j = i + 1; j < projectMemories.length; j += 1) {
+      if (keyOf(projectMemories[i]) === keyOf(projectMemories[j])) continue;
+      if (scoreOf(words, projectMemories[i], projectMemories[j]) >= NEAR_DUPLICATE_MIN) root2[find2(j)] = find2(i);
+    }
+  }
+  const groups = /* @__PURE__ */ new Map();
+  projectMemories.forEach((memory, i) => groups.set(find2(i), [...groups.get(find2(i)) ?? [], memory]));
+  const clusters = [];
+  for (const group of groups.values()) {
+    const projects = [...new Set(group.map((m) => keyOf(m) ?? ""))].sort();
+    if (projects.length < REPEAT_MIN_PLACES) continue;
+    const confirmed = projects.map((key) => new Set((labels.get(key) ?? []).filter((label) => label.confirmed).map((label) => label.name)));
+    const sharedLabels = [...confirmed[0]].filter((name) => confirmed.every((set2) => set2.has(name))).sort();
+    const members2 = group.sort((x, y) => compareText2(keyOf(x) ?? "", keyOf(y) ?? "") || compareText2(x.id, y.id));
+    clusters.push({ members: members2, projects, sharedLabels });
+  }
+  return clusters.sort((x, y) => compareText2(x.members[0].id, y.members[0].id));
+}
+function deadOf(resolution, present) {
+  const dangling = /* @__PURE__ */ new Set();
+  for (const memory of resolution.byId.values()) {
+    for (const target of [...memory.supersedes, ...memory.overrides]) if (!present.has(target)) dangling.add(`${memory.id} ${target}`);
+  }
+  const newest = /* @__PURE__ */ new Set();
+  const olderHandoffs = /* @__PURE__ */ new Set();
+  const handoffs = resolution.active.filter((m) => carriesLabel(m, HANDOFF_LABEL)).sort((x, y) => compareText2(y.updated, x.updated) || compareText2(x.id, y.id));
+  for (const memory of handoffs) {
+    const scope = scopeId(memory.scope);
+    if (newest.has(scope)) olderHandoffs.add(memory.id);
+    else newest.add(scope);
+  }
+  return { expired: new Set(resolution.expired.map((m) => m.id)), dangling, olderHandoffs };
+}
+function countsOf(dead) {
+  return { expired: dead.expired.size, danglingLinks: dead.dangling.size, olderHandoffs: dead.olderHandoffs.size };
+}
+function idsOf(memoryIds, problems) {
+  return /* @__PURE__ */ new Set([...memoryIds, ...problems.flatMap((problem) => problem.id === void 0 ? [] : [problem.id])]);
+}
+function placeSession(projectKey) {
+  return sessionFor(projectKey, { kind: "project", organisation: null });
+}
+function compareText2(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // src/instructions.ts
@@ -46148,7 +46300,7 @@ var KeepOneError = class extends Error {
   }
 };
 function readerOf(store2) {
-  return { location: store2.location, load: (scopes) => store2.load(scopes) };
+  return { location: store2.location, load: (scopes) => store2.load(scopes), scopes: () => store2.scopes() };
 }
 var RuleGuard = class {
   store;
@@ -46407,6 +46559,8 @@ var NEAR_TEXT = {
   /** Project matches of a new user memory: no link from a user memory hides a project memory, so only a delete keeps one. */
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
+var DREAM_PAIRS_MAX = 20;
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
   newer: (format) => `the context labels of this place were written by a newer NeoCortex (format ${format}) that this machine cannot read; nothing was changed. Update NeoCortex on this machine`,
@@ -46666,6 +46820,45 @@ function createServer(deps) {
       const contextLabels = [...carried].map(([label, count2]) => ({ label, places: count2 })).sort((a, b) => b.places - a.places || (a.label < b.label ? -1 : 1));
       const placeProblems2 = problems.map(shownProblem);
       return ok({ labels, contextLabels, ...placeProblems2.length > 0 ? { placeProblems: placeProblems2 } : {} });
+    })
+  );
+  server.registerTool(
+    "dream_report",
+    { title: "Report how optimized NeoCortex is for this place", description: DREAM_DESCRIPTION },
+    () => guarded(async () => {
+      const at = now();
+      const input2 = await loadDelivery(reader, deps.session, at);
+      const measures = placeMeasures(input2, await loadPlace(deps.places, deps.session));
+      const pairs = nearPairs(input2.resolution.active);
+      let store2;
+      let repeats;
+      try {
+        const scopes = await reader.scopes();
+        const found = storeFindings(await reader.load(scopes), scopes, /* @__PURE__ */ new Map(), toLocalDate(at));
+        repeats = found.clusters.flatMap(
+          (cluster) => cluster.members.filter((m) => seenBy(deps.session, m.scope)).map((m) => ({ ...relatedEntryOf(m), otherPlaces: cluster.projects.length - 1 }))
+        );
+        const { projects, memories, clusters, deadWeight: dead, notLoaded: problems } = found;
+        store2 = { projects, memories, nearDuplicatePairs: found.pairs.length, repeatClusters: clusters.length, deadWeight: dead, notLoaded: problems };
+      } catch (error62) {
+        store2 = { error: message(error62) };
+      }
+      return ok({
+        place: {
+          project: shownText(deps.session.project.key),
+          start: { characters: measures.startCharacters, indexNotShown: measures.indexNotShown, startupNotFit: measures.startupNotFit },
+          prompt: { characters: measures.promptCharacters, questionCharacters: measures.questionCharacters },
+          edit: { characters: measures.editCharacters },
+          nearDuplicates: {
+            pairs: pairs.length,
+            shown: pairs.slice(0, DREAM_PAIRS_MAX).map(({ a, b, score }) => ({ a: relatedEntryOf(a), b: relatedEntryOf(b), score }))
+          },
+          ...repeats === void 0 ? {} : { repeats },
+          deadWeight: deadWeight(input2.resolution, input2.problems),
+          notLoaded: notLoaded(input2.problems)
+        },
+        store: store2
+      });
     })
   );
   server.registerTool(
@@ -47358,6 +47551,24 @@ var FileStore = class {
       throw error62;
     }
     return entries.filter((entry) => entry.isDirectory() && PROJECT_KEY_RE.test(entry.name)).map((entry) => entry.name).sort();
+  }
+  /** The user, then each project folder by key, whose live area holds a record (MemoryStore.scopes); every scope is readable here. */
+  async scopes() {
+    const all = [USER, ...(await this.projectKeys()).map((key) => projectScope(parseProjectKey(key)))];
+    const holding = [];
+    for (const scope of all) if (await this.holdsRecord(foldersOf(scope))) holding.push(scope);
+    return holding;
+  }
+  /** Whether a live folder holds a record: a name load reads (.md), also one it cannot read (C9); a missing folder holds none. */
+  async holdsRecord(parts) {
+    let names;
+    try {
+      names = await readdir2(join3(this.root, ...parts));
+    } catch (error62) {
+      if (isNotFound(error62)) return false;
+      throw error62;
+    }
+    return names.some((name) => name.toLowerCase().endsWith(".md"));
   }
   /**
    * Refuses a memory that would not load again (design B14), and an id that already has a file in any scope (C4, C8).

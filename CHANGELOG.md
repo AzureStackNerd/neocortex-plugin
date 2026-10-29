@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.8 - 2026-10-29
+
+- Added: the tool `dream_report` shows how lean NeoCortex is in the place you work in: how many characters it loads
+  at a session start, at every prompt and at every edit, the index lines and startup memories that do not fit,
+  near-duplicate pairs among the memories this session sees, this place's memories that repeat in other projects
+  (with only the number of other places), expired memories, links to no record, older handoffs and records that did
+  not load. It adds counts for the whole store (memories, near-duplicate pairs, repeats, dead weight, records that did
+  not load) that name nothing of another project. It only reports and changes nothing.
+
 ## 0.4.7 - 2026-10-29
 
 - Added: when you save a memory that reads much the same as one you already have, the answer to `save_memory` lists
