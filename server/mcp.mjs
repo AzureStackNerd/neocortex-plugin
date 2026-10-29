@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.6",
+  version: "0.4.7",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45560,6 +45560,73 @@ function replacesInTurn(source, target, byId) {
 }
 function compareText(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// src/similar.ts
+function similarity(a, b) {
+  const left = wordsOf(a);
+  const right = wordsOf(b);
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  const either = left.size + right.size - shared;
+  return either === 0 ? 0 : shared / either;
+}
+var NEAR_DUPLICATE_MIN = 0.5;
+var WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "do",
+  "for",
+  "from",
+  "has",
+  "have",
+  "if",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "no",
+  "not",
+  "of",
+  "on",
+  "or",
+  "so",
+  "than",
+  "that",
+  "the",
+  "then",
+  "there",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "we",
+  "were",
+  "when",
+  "which",
+  "with",
+  "you",
+  "your"
+]);
+function wordsOf(memory) {
+  const words = /* @__PURE__ */ new Set();
+  const text = `${memory.title}
+${memory.summary}
+${memory.body}`;
+  for (const [word] of text.toLowerCase().matchAll(WORD_RE)) {
+    if (!STOP_WORDS.has(word) && !KIND_LABELS.has(word)) words.add(word);
+  }
+  return words;
 }
 
 // src/moments.ts
@@ -46321,7 +46388,7 @@ var UPDATE_INPUT = {
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
-var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. If the new memory replaces one of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
+var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. It also returns as nearDuplicates the active memories whose title, summary and body use much the same words as the new one; it compares plain word sets, so it misses a rewording in other words and counts test and tests as two words. The memory is saved either way. If the new memory replaces some of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Each link list you pass replaces the one the memory has, so pass in one list every id it should keep. Never move a memory to another scope to link it. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
 var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason or expires. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
 var DELETE_DESCRIPTION = "Delete a memory. NeoCortex keeps the deleted memory, so it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
@@ -46329,6 +46396,17 @@ var UPDATE_RULE_DESCRIPTION = "Change a memory when the change touches a rule or
 var DELETE_RULE_DESCRIPTION = "Delete a memory when the delete makes a rule start or stop loading, after delete_memory refused it. The user confirms every call in a prompt. Pass the id, its revision and affects exactly as the refusal listed; only on the user's request.";
 var RELATED_LIMIT = 10;
 var RELATED_TITLE_MAX = 80;
+var NEAR_LIMIT = 5;
+var NEAR_TEXT = {
+  next: (ways) => `A near duplicate has much the same words as the new memory and shows only its title: read it with get_memory, show the user both and offer to keep one; if they say different things, keep both. ${ways.join(" ")}`,
+  /** Matches in the new memory's own scope: one supersedes list for all of them. */
+  replace: (id, kept, targets) => `To keep the new one in place of ${targets.join(", ")}, call update_memory with id ${id} and supersedes ${JSON.stringify([...kept, ...targets])}, in a single call with every one the user picks, leaving out those the user keeps` + (kept.length === 0 ? "." : `; ${kept.join(", ")} ${kept.length === 1 ? "stays" : "stay"} in the list, which the new one already replaces.`),
+  /** User matches of a new project memory: they load here already, so the new one goes, or overrides them. */
+  user: (id, targets, kept, allowed, refused) => `${targets.join(", ")} ${targets.length === 1 ? "is a user memory that loads" : "are user memories that load"} in this project already: with the user's agreement, delete the new one with delete_memory, id ${id} and the revision in saved` + (allowed.length === 0 ? "" : `; or, if the new one is meant to differ here, call update_memory with id ${id}, overrides ${JSON.stringify([...kept, ...allowed])} and an overrideReason that ` + // overrideReason is one field and the call replaces it, so the reason for the kept overrides must stay in it.
+  (kept.length === 0 ? "says why" : `keeps the current reason, which get_memory shows, and adds why it differs from ${allowed.join(", ")}`)) + (kept.length === 0 || allowed.length === 0 ? "." : `; ${kept.join(", ")} ${kept.length === 1 ? "stays" : "stay"} in the list, which the new one already overrides.`) + (refused.length === 0 ? "" : ` Not possible: ${refused.join("; ")}.`),
+  /** Project matches of a new user memory: no link from a user memory hides a project memory, so only a delete keeps one. */
+  project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
+};
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
   newer: (format) => `the context labels of this place were written by a newer NeoCortex (format ${format}) that this machine cannot read; nothing was changed. Update NeoCortex on this machine`,
@@ -46433,12 +46511,20 @@ function createServer(deps) {
       throw error62;
     }
     const related = relatedTo(memory, resolution);
+    const near = nearDuplicatesOf(memory, resolution);
     const id = shortId(memory.id);
+    const next = [
+      ...related.length > 0 ? [
+        `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.`
+      ] : [],
+      ...near.length > 0 ? [nearNext(id, memory, near.map((n) => n.memory))] : []
+    ];
     return ok({
       // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none.
       saved: { ...entryOf(memory), revision },
       related: related.map(relatedEntryOf),
-      next: related.length > 0 ? `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.` : void 0,
+      nearDuplicates: near.map(({ memory: match, score }) => ({ ...relatedEntryOf(match), score })),
+      next: next.length > 0 ? next.join(" ") : void 0,
       affects: confirmation?.affects
     });
   };
@@ -47136,6 +47222,24 @@ function relatedTo(memory, resolution) {
   return ranked.sort(
     (a, b) => a.rarest - b.rarest || b.shared - a.shared || (a.memory.updated === b.memory.updated ? 0 : a.memory.updated > b.memory.updated ? -1 : 1) || (a.memory.id < b.memory.id ? -1 : 1)
   ).slice(0, RELATED_LIMIT).map((r) => r.memory);
+}
+function nearDuplicatesOf(memory, resolution) {
+  const linked = /* @__PURE__ */ new Set([...memory.supersedes, ...memory.overrides]);
+  return resolution.active.filter((m) => !linked.has(m.id)).map((m) => ({ memory: m, score: Math.round(similarity(memory, m) * 100) / 100 })).filter((near) => near.score >= NEAR_DUPLICATE_MIN).sort((a, b) => b.score - a.score || (a.memory.id < b.memory.id ? -1 : 1)).slice(0, NEAR_LIMIT);
+}
+function nearNext(id, memory, matches) {
+  const same = matches.filter((match) => linkProblem("supersedes", memory, match) === null);
+  const other = matches.filter((match) => !same.includes(match));
+  const ids = (list) => list.map((match) => shortId(match.id));
+  const ways = [];
+  if (same.length > 0) ways.push(NEAR_TEXT.replace(id, memory.supersedes.map(shortId), ids(same)));
+  if (other.length > 0 && memory.scope.kind === "project") {
+    const allowed = other.filter((match) => linkProblem("overrides", memory, match) === null);
+    const refused = other.flatMap((match) => linkProblem("overrides", memory, match) ?? []);
+    ways.push(NEAR_TEXT.user(id, ids(other), memory.overrides.map(shortId), ids(allowed), refused));
+  }
+  if (other.length > 0 && memory.scope.kind === "user") ways.push(NEAR_TEXT.project(ids(other), scopeWords(other[0].scope)));
+  return NEAR_TEXT.next(ways);
 }
 function relatedEntryOf(memory) {
   return { id: shortId(memory.id), scope: memory.scope.kind, title: shownCut(memory.title, RELATED_TITLE_MAX) };

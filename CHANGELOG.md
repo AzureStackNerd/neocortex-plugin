@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.7 - 2026-10-29
+
+- Added: when you save a memory that reads much the same as one you already have, the answer to `save_memory` lists
+  it as a near duplicate, with how close the two are, and asks Claude to show you both and offer to keep one; the
+  save itself changes nothing else. The check compares plain word sets, so it finds copies and light rewordings, not
+  the same idea written in other words.
+
 ## 0.4.6 - 2026-10-28
 
 - Fixed: on Windows, a memory that another session was updating at that moment could be missing from a load, for
