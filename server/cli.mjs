@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.8",
+  version: "0.4.9",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18518,12 +18518,13 @@ async function run(moment, part2) {
     await client?.close().catch(() => void 0);
   }
 }
+var PARTED = ["index", "full"];
 var command = process.argv[2];
-var part = command === "index" && process.argv[3] !== void 0 ? Number(process.argv[3]) : 1;
+var part = command !== void 0 && PARTED.includes(command) && process.argv[3] !== void 0 ? Number(process.argv[3]) : 1;
 if (command !== void 0 && MOMENTS.includes(command) && Number.isInteger(part) && part >= 1) {
   process.stdout.write(await run(command, part));
 } else {
-  const commands = MOMENTS.map((moment) => moment === "index" ? "index [part]" : moment).join("|");
+  const commands = MOMENTS.map((moment) => PARTED.includes(moment) ? `${moment} [part]` : moment).join("|");
   process.stderr.write(`Usage: node src/cli.ts ${commands}   (reads hook input on stdin)
 `);
   process.exitCode = 2;

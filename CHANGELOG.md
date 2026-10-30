@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.9 - 2026-10-30
+
+- Added: startup memories now arrive in two parts of 10,000 characters each instead of one, so a long startup rule no
+  longer pushes your other startup memories out of the session start. When part 2 holds memories, part 1 names the
+  first five of them and counts the rest, so they are never missing without a word. This also lets you deliver a long
+  rule once per session instead of with every prompt, with a short reminder at every prompt: the whole startup
+  memory, its title and why included, must fit one part.
+
 ## 0.4.8 - 2026-10-29
 
 - Added: the tool `dream_report` shows how lean NeoCortex is in the place you work in: how many characters it loads

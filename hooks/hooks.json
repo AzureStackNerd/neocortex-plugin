@@ -23,6 +23,11 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "full"]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/server/cli.mjs", "full", "2"]
           }
         ]
       }
@@ -78,6 +83,16 @@
             "tool": "hook_context",
             "input": {
               "moment": "full",
+              "event": "${hook_event_name}"
+            }
+          },
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "full",
+              "part": 2,
               "event": "${hook_event_name}"
             }
           }

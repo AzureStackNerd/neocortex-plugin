@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.8",
+  version: "0.4.9",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45633,6 +45633,7 @@ ${memory.body}`;
 // src/moments.ts
 var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
+var FULL_PART_BUDGETS = [1e4, 1e4];
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
 var MISSING = {
   index: "the memory index is",
@@ -45663,6 +45664,7 @@ var MAX_LISTED = 5;
 var INDEX_HEADING = "## Index (get_memory <id> for the full text, search_memories to find more)";
 var FULL_HEADING = "# NeoCortex \xB7 in full";
 var MORE_LINE_RESERVE = 90;
+var LATER_LINE_RESERVE = 450;
 var SEPARATORS = 6;
 var POSITION_RE2 = / at line \d+, column \d+$/;
 var RECENT_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -45779,43 +45781,70 @@ function buildFull(kinds, active, byId, budget = HOOK_CAP, options = {}) {
   return fullFit(kinds, active, byId, budget, options).text;
 }
 function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
-  const broken = brokenWarning(kinds, options.problems ?? []);
-  const room = broken === "" ? budget : Math.max(0, budget - broken.length - 2);
-  const { text, notFit } = fullText(kinds, active, byId, room, options.priority ?? kinds);
-  return { text: [broken, text].filter((t) => t !== "").join("\n\n"), notFit };
+  const { parts, notFit } = fullParts(kinds, active, byId, [budget], options);
+  return { text: parts[0], notFit };
 }
-function fullText(kinds, active, byId, budget, priority) {
+function fullParts(kinds, active, byId, budgets, options = {}) {
+  const broken = brokenWarning(kinds, options.problems ?? []);
+  const rooms = budgets.map((budget, i) => i > 0 || broken === "" ? budget : Math.max(0, budget - broken.length - 2));
+  const { parts, notFit } = fullText(kinds, active, byId, rooms, options.priority ?? kinds);
+  return { parts: parts.map((text, i) => i === 0 ? [broken, text].filter((t) => t !== "").join("\n\n") : text), notFit };
+}
+function fullText(kinds, active, byId, rooms, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
-  if (chosen.length === 0) return { text: "", notFit: 0 };
+  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0 };
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
   const blocks = chosen.map((m) => ({ memory: m, text: loadedText(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
   const order = blocks.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || a - b);
-  const fill = (room) => {
-    const chosenIndexes = /* @__PURE__ */ new Set();
-    let count2 = heading === null ? 0 : 1;
-    let used = heading === null ? 0 : heading.length;
+  const last = rooms.length - 1;
+  const fill = (warn2, more2) => {
+    const room = rooms.map((r, p) => Math.max(0, r - (warn2 && p === 0 ? WARNING_RESERVE : 0) - (more2 && p < last ? LATER_LINE_RESERVE : 0)));
+    const placed = rooms.map(() => []);
+    const count2 = rooms.map((_, p) => p === 0 && heading !== null ? 1 : 0);
+    const used = rooms.map((_, p) => p === 0 && heading !== null ? heading.length : 0);
     const skipped2 = [];
     for (const i of order) {
-      const cost = (count2 > 0 ? 2 : 0) + blocks[i].text.length;
-      if (used + cost <= room) {
-        chosenIndexes.add(i);
-        count2 += 1;
-        used += cost;
-      } else {
+      const cost = (p2) => (count2[p2] > 0 ? 2 : 0) + blocks[i].text.length;
+      const p = room.findIndex((r, k) => used[k] + cost(k) <= r);
+      if (p === -1) {
         skipped2.push(blocks[i].memory);
+        continue;
       }
+      used[p] += cost(p);
+      count2[p] += 1;
+      placed[p].push(i);
     }
-    const kept2 = blocks.filter((_, i) => chosenIndexes.has(i)).map((block) => block.text);
-    return { kept: heading === null ? kept2 : [heading, ...kept2], skipped: skipped2 };
+    const kept2 = placed.map((indexes) => [...indexes].sort((a, b) => a - b).map((i) => blocks[i].memory));
+    return { kept: kept2, skipped: skipped2, spilled: placed.some((indexes, p) => p > 0 && indexes.length > 0) };
   };
-  const first = fill(budget);
-  if (first.skipped.length === 0) return { text: first.kept.join("\n\n"), notFit: 0 };
-  const { kept, skipped } = fill(Math.max(0, budget - WARNING_RESERVE));
+  let warn = false;
+  let more = false;
+  let result = fill(warn, more);
+  while (result.skipped.length > 0 && !warn || result.spilled && !more) {
+    warn ||= result.skipped.length > 0;
+    more ||= result.spilled;
+    result = fill(warn, more);
+  }
+  const { kept, skipped } = result;
   const one = skipped.length === 1;
-  const names = skipped.map((m) => `"${shownCut(m.title, 40)}" (${shortId(m.id)})`);
-  const warning = `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(names)}. Say so before answering; get_memory shows the text.`;
-  return { text: [warning, ...kept].join("\n\n"), notFit: skipped.length };
+  const warning = skipped.length === 0 ? [] : [
+    `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(skipped.map(namedInWarning))}. Say so before answering; get_memory shows the text.`
+  ];
+  const textOf = new Map(blocks.map((block) => [block.memory, block.text]));
+  const parts = kept.map((memories, p) => {
+    const later = kept.slice(p + 1).flat();
+    const lastLine = later.length > 0 ? [laterLine(later, p + 2, kept.length)] : [];
+    return [...p === 0 ? [...warning, ...heading === null ? [] : [heading]] : [], ...memories.map((m) => textOf.get(m) ?? ""), ...lastLine].join("\n\n");
+  });
+  return { parts, notFit: skipped.length };
+}
+function namedInWarning(memory) {
+  return `"${shownCut(memory.title, 40)}" (${shortId(memory.id)})`;
+}
+function laterLine(later, first, parts) {
+  const where = first === parts ? `startup part ${first}` : `startup parts ${first} to ${parts}`;
+  return `${later.length} startup ${later.length === 1 ? "memory is" : "memories are"} in ${where}, not this part: ${listed2(later.map(namedInWarning))}. If ${later.length === 1 ? "its text is" : "their text is"} not in context, say so before answering; get_memory shows the text.`;
 }
 function sessionContext(input2, options = NO_PLACE) {
   const { active, byId } = input2.resolution;
@@ -46028,7 +46057,7 @@ function contextFor(command, event, input2, extra) {
     case "index":
       return buildIndex(input2, HOOK_CAP, extra.part, indexOptions(command, event, extra.place));
     case "full":
-      return startupFull(input2).text;
+      return startupFull(input2).parts[extra.part - 1] ?? "";
     case "startup":
       return sessionContext(input2, indexOptions(command, event, extra.place));
     case "subagent":
@@ -46040,7 +46069,7 @@ function contextFor(command, event, input2, extra) {
   }
 }
 function startupFull(input2) {
-  return fullFit(["startup"], input2.resolution.active, input2.resolution.byId, HOOK_CAP, { problems: input2.problems });
+  return fullParts(["startup"], input2.resolution.active, input2.resolution.byId, FULL_PART_BUDGETS, { problems: input2.problems });
 }
 function indexOptions(command, event, place) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
@@ -46073,7 +46102,7 @@ function placeMeasures(input2, place) {
   const count2 = (re, within) => Number(re.exec(within)?.[1] ?? 0);
   return {
     indexNotShown: count2(NOT_SHOWN_RE, index.join("\n")),
-    startCharacters: [...index, full.text].reduce((sum, part) => sum + part.length, 0),
+    startCharacters: [...index, ...full.parts].reduce((sum, part) => sum + part.length, 0),
     startupNotFit: full.notFit,
     promptCharacters: text("prompt", "UserPromptSubmit", LONG_PROMPT).length,
     questionCharacters: text("prompt", "UserPromptSubmit", SHORT_QUESTION).length,
