@@ -33600,14 +33600,14 @@ function checkArrayGuards(arraySchema, guards) {
   });
   return guard.pipe(arraySchema);
 }
-function getTupleRest(restSchema, ctx) {
-  if (restSchema === false) {
+function getTupleRest(restSchema2, ctx) {
+  if (restSchema2 === false) {
     return void 0;
   }
-  if (restSchema === void 0 || restSchema === true) {
+  if (restSchema2 === void 0 || restSchema2 === true) {
     return z.any();
   }
-  return convertSchema(restSchema, ctx);
+  return convertSchema(restSchema2, ctx);
 }
 var fullTime = /^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 function convertBaseSchema(schema, ctx) {
@@ -37186,7 +37186,7 @@ function messageOf(error62) {
 }
 
 // src/server.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.9",
+  version: "0.4.10",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46234,6 +46234,118 @@ function compareText2(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// src/dream/visibility.ts
+function judge(proposal, load, seen) {
+  const shown2 = proposal.rests.filter((rest) => rest.shown);
+  if (!shown2.every((rest) => seen.visible.some((scope) => sameScope(scope, rest.scope)))) return { state: "not-here" };
+  const memories = [];
+  for (const rest of shown2) {
+    const found = seen.loaded.memories.find((stored) => stored.memory.id === rest.id && sameScope(stored.memory.scope, rest.scope));
+    if (found !== void 0 && found.revision !== rest.revision) return { state: "closed", id: proposal.id, closure: "changed" };
+    if (found !== void 0) {
+      memories.push(found);
+      continue;
+    }
+    const problem = seen.loaded.problems.find((one) => problemNames(one, rest.id));
+    if (problem !== void 0) return { state: "closed", id: proposal.id, closure: problem.newerFormat !== void 0 ? "newerFormat" : "unreadable" };
+    return { state: "closed", id: proposal.id, closure: "gone" };
+  }
+  const later = load.proposals.find((other) => other.kind === proposal.kind && sameShown(other, proposal) && isLater(other, proposal));
+  if (later !== void 0) return { state: "closed", id: proposal.id, closure: "replaced" };
+  return { state: "waiting", id: proposal.id, kind: proposal.kind, shown: memories, others: proposal.rests.length - shown2.length };
+}
+function judgeAll(load, seen) {
+  const unplaced = (problem) => problem.record === "proposal" || !load.proposals.some((proposal) => proposal.id === problem.proposal);
+  const counted = load.problems.filter(unplaced);
+  const newer = counted.filter((problem) => problem.newerFormat !== void 0).length;
+  return { judged: load.proposals.map((proposal) => judge(proposal, load, seen)), notRead: { unreadable: counted.length - newer, newerFormat: newer } };
+}
+function sameShown(a, b) {
+  const left = a.rests.filter((rest) => rest.shown);
+  const right = b.rests.filter((rest) => rest.shown);
+  return left.length === right.length && left.every((rest) => right.some((other) => sameMemory(rest, other)));
+}
+function sameMemory(a, b) {
+  return a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision;
+}
+function isLater(a, b) {
+  return a.created > b.created || a.created === b.created && a.id > b.id;
+}
+
+// src/proposals.ts
+import { randomUUID } from "node:crypto";
+var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat"];
+var DECISIONS = ["reject", "keep-both"];
+var PROPOSAL_FORMAT = "1.0";
+var InvalidProposalError = class extends StoreError {
+};
+var scopeSchema = external_exports.discriminatedUnion("kind", [
+  external_exports.strictObject({ kind: external_exports.literal("user") }),
+  external_exports.strictObject({ kind: external_exports.literal("project"), key: external_exports.string().regex(PROJECT_KEY_RE).transform((key) => key) })
+]);
+var restSchema = external_exports.strictObject({ scope: scopeSchema, id: external_exports.string().regex(UUID_RE), revision: external_exports.string().min(1), shown: external_exports.boolean() });
+var restsSchema = external_exports.array(restSchema).refine((rests) => rests.some((rest) => rest.shown), "a proposal shows at least one memory").refine((rests) => rests.every((rest, i) => rests.findIndex((other) => other.id === rest.id && sameScope(other.scope, rest.scope)) === i), "two rests of one memory");
+var proposalSchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), id: external_exports.string().min(1), kind: external_exports.enum(PROPOSAL_KINDS), rests: restsSchema, created: external_exports.string().min(1) });
+var decisionSchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), decision: external_exports.enum(DECISIONS), rests: restsSchema, decided: external_exports.string().min(1) });
+var sameRest = (a, b) => a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision && a.shown === b.shown;
+var sameRests = (a, b) => a.length === b.length && a.every((rest) => b.some((other) => sameRest(rest, other)));
+function decode4(schema, raw, record2) {
+  const fields = isRecord3(raw) ? raw : {};
+  const named = fields[record2 === "proposal" ? "id" : "proposal"];
+  const owner = typeof named === "string" ? { proposal: named } : {};
+  const version2 = fields.formatVersion;
+  if (isFormatVersion(version2) && compareFormats(version2, PROPOSAL_FORMAT) > 0) {
+    return { problem: { record: record2, ...owner, reason: `written by a newer NeoCortex (format ${version2}); update NeoCortex on this machine`, newerFormat: version2 } };
+  }
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? { value: parsed.data } : { problem: { record: record2, ...owner, reason: issuesOf(parsed.error) } };
+}
+function issuesOf(error62) {
+  return error62.issues.map((issue2) => `${issue2.path.map(String).join(".") || "record"}: ${issue2.message}`).join("; ");
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var MemoryProposalStore = class {
+  records;
+  newId;
+  constructor(records = { proposals: [], decisions: [] }, newId = randomUUID) {
+    this.records = records;
+    this.newId = newId;
+  }
+  async list() {
+    return this.read();
+  }
+  async create(draft) {
+    const record2 = { formatVersion: PROPOSAL_FORMAT, id: this.newId(), kind: draft.kind, rests: draft.rests, created: draft.created };
+    const checked = proposalSchema.safeParse(record2);
+    if (!checked.success) throw new InvalidProposalError(`the proposal was not stored: ${issuesOf(checked.error)}`);
+    const { proposals } = this.read();
+    const equal = proposals.find((proposal) => proposal.kind === draft.kind && sameRests(proposal.rests, draft.rests));
+    if (equal !== void 0) return { id: equal.id, created: false };
+    if (this.records.proposals.some((raw) => isRecord3(raw) && raw.id === record2.id)) throw new InvalidProposalError(`the proposal was not stored: id ${record2.id} is taken`);
+    this.records.proposals.push(structuredClone(record2));
+    return { id: record2.id, created: true };
+  }
+  /** Every record decoded, synchronously, so a check and its write have no await between them. */
+  read() {
+    const load = { proposals: [], decisions: [], problems: [] };
+    const read = this.records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
+    for (const one of read) {
+      if ("problem" in one) load.problems.push(one.problem);
+      else if (read.filter((other) => ("value" in other ? other.value.id : other.problem.proposal) === one.value.id).length > 1) {
+        load.problems.push({ record: "proposal", proposal: one.value.id, reason: "two records with one proposal id" });
+      } else load.proposals.push(one.value);
+    }
+    for (const raw of this.records.decisions) {
+      const one = decode4(decisionSchema, raw, "decision");
+      if ("problem" in one) load.problems.push(one.problem);
+      else load.decisions.push(one.value);
+    }
+    return load;
+  }
+};
+
 // src/instructions.ts
 var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save to it on your own initiative, without being asked, and keep it correct.
 
@@ -46590,6 +46702,11 @@ var NEAR_TEXT = {
 };
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show could not be read, and of proposal records that could not be read. It changes nothing.";
+var PROPOSAL_TEXT = {
+  failed: (code) => `the proposals could not be read or written${code === void 0 ? "" : ` (${code})`}; try again, and tell the user if it keeps failing`,
+  next: (closed, notRead) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers." + (closed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
+};
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
   newer: (format) => `the context labels of this place were written by a newer NeoCortex (format ${format}) that this machine cannot read; nothing was changed. Update NeoCortex on this machine`,
@@ -46649,7 +46766,8 @@ var PREVIEW_PATH_MAX = 260;
 var UNIT_ID_LENGTH = 8;
 function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
-  const newId = deps.newId ?? randomUUID;
+  const newId = deps.newId ?? randomUUID2;
+  const proposals = deps.proposals ?? new MemoryProposalStore();
   const server = new McpServer({ name: "neocortex", version: package_default.version }, { instructions: INSTRUCTIONS });
   const reader = readerOf(deps.store);
   const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()));
@@ -46657,6 +46775,17 @@ function createServer(deps) {
     const { memories: stored, problems } = await reader.load(visibleScopes(deps.session));
     const memories = stored.map((s) => s.memory);
     return { stored, memories, problems, resolution: resolve4(memories, deps.session, toLocalDate(now())) };
+  };
+  const seen = async () => {
+    const scopes = visibleScopes(deps.session);
+    return { visible: scopes, loaded: await reader.load(scopes) };
+  };
+  const listed3 = async () => {
+    try {
+      return await proposals.list();
+    } catch (error62) {
+      throw new StoreError(PROPOSAL_TEXT.failed(systemErrorCode(error62)));
+    }
   };
   const saveCall = async (args2, confirmation) => {
     const { memories, problems, resolution } = await load();
@@ -46887,6 +47016,29 @@ function createServer(deps) {
           notLoaded: notLoaded(input2.problems)
         },
         store: store2
+      });
+    })
+  );
+  server.registerTool(
+    "dream_proposals",
+    { title: "List the Dreamer's proposals that wait here", description: PROPOSALS_DESCRIPTION },
+    () => guarded(async () => {
+      const { judged, notRead } = judgeAll(await listed3(), await seen());
+      const closedFor = (closure) => judged.filter((one) => one.state === "closed" && one.closure === closure).length;
+      const closed = { unreadable: closedFor("unreadable"), newerFormat: closedFor("newerFormat") };
+      const anyClosed = closed.unreadable + closed.newerFormat > 0;
+      const anyNotRead = notRead.unreadable + notRead.newerFormat > 0;
+      const waiting = judged.flatMap((one) => one.state === "waiting" ? [one] : []);
+      return ok({
+        waiting: waiting.map((one) => ({
+          id: one.id,
+          kind: one.kind,
+          shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
+          ...one.others > 0 ? { others: one.others } : {}
+        })),
+        ...anyClosed ? { closed } : {},
+        ...anyNotRead ? { notRead } : {},
+        next: PROPOSAL_TEXT.next(anyClosed, anyNotRead)
       });
     })
   );

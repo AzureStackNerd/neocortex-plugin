@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.10 - 2026-10-30
+
+- Added: the tool `dream_proposals` lists the Dreamer's proposals that wait in the session you work in for your
+  answer, and changes nothing. A proposal is listed only where every memory it shows belongs: your user memories or
+  this project's. Of memories elsewhere it gives only how many there are, never their titles, ids or projects. Nothing
+  creates proposals yet, so it lists none until a later version adds the Dreamer's first proposals.
+
 ## 0.4.9 - 2026-10-30
 
 - Added: startup memories now arrive in two parts of 10,000 characters each instead of one, so a long startup rule no
