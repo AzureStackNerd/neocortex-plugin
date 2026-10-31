@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.12 - 2026-10-31
+
+- Changed: when the index of a place does not fit the session start, the lowest-ranked memories now show their title
+  and id without their summary (`— …`) instead of being left out; only if it still does not fit are the last ones left
+  out and counted. Enforced and high-importance memories always keep their summary, and an index that fits is
+  unchanged. Claude reads a shortened memory with `get_memory` before acting on it. `dream_report` counts the
+  shortened lines (`indexShortened`).
+
 ## 0.4.11 - 2026-10-31
 
 - Added: the tool `dream_decide` records your answer to a proposal that `dream_proposals` lists: `reject` or
