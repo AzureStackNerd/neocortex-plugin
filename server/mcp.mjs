@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.10",
+  version: "0.4.11",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45722,6 +45722,14 @@ function unsortedNotice(active, place) {
   const here = place?.kind === "folder" ? "this folder" : "this repository";
   return `${count2} imported Claude Code ${one ? "memory is" : "memories are"} not sorted yet (label ${UNSORTED_LABEL}, on-demand). Offer the user to sort ${one ? "it" : "them"}: search that label, propose which belong to ${here}, which apply everywhere and which belong elsewhere; only on their yes call update_memory for each (${here}: scope project; everywhere: scope user; both with delivery index and without that label). On the user's word a memory can also keep on-demand and lose only the label.`;
 }
+function proposalsNotice(proposals) {
+  if ("failed" in proposals) return "The proposals that wait here could not be read; call dream_proposals to try again.";
+  if (proposals.waiting === 0) return "";
+  if (proposals.waiting === 1) return "1 proposal of the Dreamer waits here for the user's answer; call dream_proposals to show it.";
+  const count2 = proposals.waiting > 999 ? "More than 999" : String(proposals.waiting);
+  return `${count2} proposals of the Dreamer wait here for the user's answer; call dream_proposals to show them.`;
+}
+var LONGEST_PROPOSALS = { waiting: 1e3 };
 function placeUpdateWarning(state) {
   if (state.read.state !== "unreadable") return "";
   const format = state.read.problem.newerFormat;
@@ -45736,13 +45744,14 @@ function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
   const line = placeLine(options.place);
   const header = `# NeoCortex \xB7 project ${projectKey}${line === null ? "" : `
 ${line}`}`;
-  const notices = noticeLines(input2, options);
-  const noticeSection = notices.length > 0 ? ["## Notices", ...notices].join("\n") : "";
+  const sectionOf = (notices) => notices.length > 0 ? ["## Notices", ...notices].join("\n") : "";
+  const noticeSection = sectionOf(noticeLines(input2, options));
+  const roomNotices = options.proposals === void 0 ? noticeSection : sectionOf(noticeLines(input2, { ...options, proposals: LONGEST_PROPOSALS }));
   if (resolution.byId.size === 0 && problems.length === 0) {
     return [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")];
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
-  const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? noticeSection.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
+  const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? roomNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
   const parts = [[]];
   let room = roomOf(1);
   let unshown = 0;
@@ -45772,9 +45781,9 @@ ${line}`}`;
 function buildIndex(input2, budget = HOOK_CAP, part = 1, options = NO_PLACE) {
   return indexParts(input2, budget, options)[part - 1] ?? "";
 }
-function refreshContext(input2, place) {
+function refreshContext(input2, place, proposals) {
   const { active, byId } = input2.resolution;
-  const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true });
+  const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true, proposals });
   return [...index, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
 }
 function buildFull(kinds, active, byId, budget = HOOK_CAP, options = {}) {
@@ -45855,11 +45864,13 @@ function sessionContext(input2, options = NO_PLACE) {
 ${fullText2}`;
 }
 async function loadDelivery(store2, session, now, current = CURRENT_FORMAT) {
-  const { memories: stored, problems } = await store2.load(visibleScopes(session));
+  return deliveryOf(await store2.load(visibleScopes(session)), store2.location, session, now, current);
+}
+function deliveryOf({ memories: stored, problems }, location, session, now, current = CURRENT_FORMAT) {
   const memories = stored.map((s) => s.memory);
   const newer = stored.filter((s) => compareFormats(s.format, current) > 0);
   const resolution = resolve4(memories, session, toLocalDate(now));
-  return { projectKey: session.project.key, location: store2.location, resolution, problems, newer, recentRules: recentRules(resolution.active, now) };
+  return { projectKey: session.project.key, location, resolution, problems, newer, recentRules: recentRules(resolution.active, now) };
 }
 function loadedText(memory, byId) {
   switch (memory.delivery) {
@@ -45910,6 +45921,8 @@ function noticeLines({ resolution, problems, newer, recentRules: recent }, optio
   if (visit2 !== "") lines.push(`- ${visit2}`);
   const unsorted = options.unsorted ? unsortedNotice(resolution.active, options.place) : "";
   if (unsorted !== "") lines.push(`- ${unsorted}`);
+  const proposals = options.proposals === void 0 ? "" : proposalsNotice(options.proposals);
+  if (proposals !== "") lines.push(`- ${proposals}`);
   const expired = expiredNotice(resolution.expired);
   if (expired !== "") lines.push(`- ${expired}`);
   const ignored = ignoredNotice(resolution.ignored);
@@ -46055,11 +46068,11 @@ function contextFor(command, event, input2, extra) {
   const { problems } = input2;
   switch (command) {
     case "index":
-      return buildIndex(input2, HOOK_CAP, extra.part, indexOptions(command, event, extra.place));
+      return buildIndex(input2, HOOK_CAP, extra.part, indexOptions(command, event, extra.place, extra.proposals));
     case "full":
       return startupFull(input2).parts[extra.part - 1] ?? "";
     case "startup":
-      return sessionContext(input2, indexOptions(command, event, extra.place));
+      return sessionContext(input2, indexOptions(command, event, extra.place, extra.proposals));
     case "subagent":
       return buildFull(["subagent"], active, byId, HOOK_CAP, { problems });
     case "prompt":
@@ -46071,10 +46084,10 @@ function contextFor(command, event, input2, extra) {
 function startupFull(input2) {
   return fullParts(["startup"], input2.resolution.active, input2.resolution.byId, FULL_PART_BUDGETS, { problems: input2.problems });
 }
-function indexOptions(command, event, place) {
+function indexOptions(command, event, place, proposals) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
   const main = event === "SessionStart";
-  return { place, firstVisit: main, unsorted: main };
+  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0 };
 }
 function hookOutput(event, text, systemMessage = "") {
   if (text === "" && systemMessage === "") return "";
@@ -46096,7 +46109,7 @@ var LONG_PROMPT = "";
 var SHORT_QUESTION = "?";
 var NOT_SHOWN_RE = /^(\d+) index memories are not in the start context;/m;
 function placeMeasures(input2, place) {
-  const text = (command, event, prompt = "", part = 1) => contextFor(command, event, input2, { prompt, part, place });
+  const text = (command, event, prompt = "", part = 1) => contextFor(command, event, input2, { prompt, part, place, proposals: { waiting: 0 } });
   const index = INDEX_PART_BUDGETS.map((_, i) => text("index", "SessionStart", "", i + 1));
   const full = startupFull(input2);
   const count2 = (re, within) => Number(re.exec(within)?.[1] ?? 0);
@@ -46252,6 +46265,9 @@ function judge(proposal, load, seen) {
   }
   const later = load.proposals.find((other) => other.kind === proposal.kind && sameShown(other, proposal) && isLater(other, proposal));
   if (later !== void 0) return { state: "closed", id: proposal.id, closure: "replaced" };
+  const answer = load.problems.find((problem) => problem.record === "decision" && problem.proposal === proposal.id);
+  if (answer !== void 0) return { state: "closed", id: proposal.id, closure: answer.newerFormat !== void 0 ? "answerNewer" : "answerUnreadable" };
+  if (load.decisions.some((decision) => decision.proposal === proposal.id)) return { state: "decided", id: proposal.id };
   return { state: "waiting", id: proposal.id, kind: proposal.kind, shown: memories, others: proposal.rests.length - shown2.length };
 }
 function judgeAll(load, seen) {
@@ -46259,6 +46275,9 @@ function judgeAll(load, seen) {
   const counted = load.problems.filter(unplaced);
   const newer = counted.filter((problem) => problem.newerFormat !== void 0).length;
   return { judged: load.proposals.map((proposal) => judge(proposal, load, seen)), notRead: { unreadable: counted.length - newer, newerFormat: newer } };
+}
+function waitingCount(judgement) {
+  return judgement.judged.filter((one) => one.state === "waiting").length;
 }
 function sameShown(a, b) {
   const left = a.rests.filter((rest) => rest.shown);
@@ -46278,6 +46297,10 @@ var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat"];
 var DECISIONS = ["reject", "keep-both"];
 var PROPOSAL_FORMAT = "1.0";
 var InvalidProposalError = class extends StoreError {
+};
+var NoProposalError = class extends StoreError {
+};
+var AlreadyDecidedError = class extends StoreError {
 };
 var scopeSchema = external_exports.discriminatedUnion("kind", [
   external_exports.strictObject({ kind: external_exports.literal("user") }),
@@ -46326,6 +46349,18 @@ var MemoryProposalStore = class {
     if (this.records.proposals.some((raw) => isRecord3(raw) && raw.id === record2.id)) throw new InvalidProposalError(`the proposal was not stored: id ${record2.id} is taken`);
     this.records.proposals.push(structuredClone(record2));
     return { id: record2.id, created: true };
+  }
+  async decide(id, decision, decided) {
+    const { proposals, decisions, problems } = this.read();
+    const proposal = proposals.find((one) => one.id === id);
+    if (proposal === void 0) throw new NoProposalError(`no readable proposal has the id ${id}; nothing was recorded`);
+    if (decisions.some((one) => one.proposal === id) || problems.some((one) => one.record === "decision" && one.proposal === id)) {
+      throw new AlreadyDecidedError(`the proposal ${id} has an answer already; nothing was recorded`);
+    }
+    const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: id, decision, rests: proposal.rests, decided };
+    const checked = decisionSchema.safeParse(record2);
+    if (!checked.success) throw new InvalidProposalError(`the answer was not recorded: ${issuesOf(checked.error)}`);
+    this.records.decisions.push(record2);
   }
   /** Every record decoded, synchronously, so a check and its write have no await between them. */
   read() {
@@ -46702,10 +46737,22 @@ var NEAR_TEXT = {
 };
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
-var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show could not be read, and of proposal records that could not be read. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, or the record of an earlier answer to them, could not be read, and of proposal records that could not be read. It changes nothing.";
+var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, or keep-both. Neither changes a memory. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
   failed: (code) => `the proposals could not be read or written${code === void 0 ? "" : ` (${code})`}; try again, and tell the user if it keeps failing`,
-  next: (closed, notRead) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers." + (closed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
+  none: "no proposal with that id waits here; call dream_proposals for the ones that do",
+  decided: "this proposal was already answered; nothing was recorded",
+  closed: {
+    changed: "a memory this proposal shows changed, moved or was deleted since it was proposed; it is closed and nothing was recorded",
+    gone: "a memory this proposal shows changed, moved or was deleted since it was proposed; it is closed and nothing was recorded",
+    replaced: "a newer proposal replaces this one; nothing was recorded; call dream_proposals for the ones that wait",
+    unreadable: "a memory this proposal shows could not be read; it is closed and nothing was recorded; the index names the record to repair",
+    newerFormat: "a memory this proposal shows was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded",
+    answerUnreadable: "the record of an earlier answer to this proposal could not be read, so it stays closed; nothing was recorded; tell the user",
+    answerNewer: "the record of an earlier answer to this proposal was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded"
+  },
+  next: (memoryClosed, answerClosed, notRead) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers; record the user's answer with dream_decide and the proposal's id." + (memoryClosed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (answerClosed ? " Tell the user that some proposals here are closed because the record of an earlier answer to them could not be read or was written by a newer NeoCortex; for a newer one, update NeoCortex on this machine." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
 };
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
@@ -46786,6 +46833,25 @@ function createServer(deps) {
     } catch (error62) {
       throw new StoreError(PROPOSAL_TEXT.failed(systemErrorCode(error62)));
     }
+  };
+  const recorded = async (id, decision) => {
+    try {
+      await proposals.decide(id, decision, now().toISOString());
+    } catch (error62) {
+      const known = error62 instanceof NoProposalError || error62 instanceof AlreadyDecidedError;
+      throw known ? error62 : new StoreError(PROPOSAL_TEXT.failed(systemErrorCode(error62)));
+    }
+  };
+  const waitingNotice = async (view) => {
+    try {
+      return { waiting: waitingCount(judgeAll(await listed3(), view)) };
+    } catch {
+      return { failed: true };
+    }
+  };
+  const delivered = async () => {
+    const view = await seen();
+    return { view, delivery: deliveryOf(view.loaded, reader.location, deps.session, now()) };
   };
   const saveCall = async (args2, confirmation) => {
     const { memories, problems, resolution } = await load();
@@ -47024,8 +47090,8 @@ function createServer(deps) {
     { title: "List the Dreamer's proposals that wait here", description: PROPOSALS_DESCRIPTION },
     () => guarded(async () => {
       const { judged, notRead } = judgeAll(await listed3(), await seen());
-      const closedFor = (closure) => judged.filter((one) => one.state === "closed" && one.closure === closure).length;
-      const closed = { unreadable: closedFor("unreadable"), newerFormat: closedFor("newerFormat") };
+      const closedFor = (...closures) => judged.filter((one) => one.state === "closed" && closures.includes(one.closure)).length;
+      const closed = { unreadable: closedFor("unreadable", "answerUnreadable"), newerFormat: closedFor("newerFormat", "answerNewer") };
       const anyClosed = closed.unreadable + closed.newerFormat > 0;
       const anyNotRead = notRead.unreadable + notRead.newerFormat > 0;
       const waiting = judged.flatMap((one) => one.state === "waiting" ? [one] : []);
@@ -47038,8 +47104,34 @@ function createServer(deps) {
         })),
         ...anyClosed ? { closed } : {},
         ...anyNotRead ? { notRead } : {},
-        next: PROPOSAL_TEXT.next(anyClosed, anyNotRead)
+        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead)
       });
+    })
+  );
+  server.registerTool(
+    "dream_decide",
+    {
+      title: "Record the user's answer to a Dreamer's proposal",
+      description: DECIDE_DESCRIPTION,
+      inputSchema: {
+        id: external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting"),
+        decision: external_exports.enum(DECISIONS).describe("reject, or keep-both; neither changes a memory")
+      }
+    },
+    ({ id, decision }) => guarded(async () => {
+      const { judged } = judgeAll(await listed3(), await seen());
+      const found = judged.flatMap((one) => one.state === "not-here" ? [] : [one]).find((one) => one.id === id);
+      if (found === void 0) return fail(PROPOSAL_TEXT.none);
+      if (found.state === "decided") return fail(PROPOSAL_TEXT.decided);
+      if (found.state === "closed") return fail(PROPOSAL_TEXT.closed[found.closure]);
+      try {
+        await recorded(found.id, decision);
+      } catch (error62) {
+        if (error62 instanceof AlreadyDecidedError) return fail(PROPOSAL_TEXT.decided);
+        if (error62 instanceof NoProposalError) return fail(PROPOSAL_TEXT.none);
+        throw error62;
+      }
+      return ok({ decided: { id: found.id, decision } });
     })
   );
   server.registerTool(
@@ -47096,9 +47188,10 @@ function createServer(deps) {
     },
     async ({ moment, event, part, prompt }) => {
       try {
-        const delivery = await loadDelivery(reader, deps.session, now());
+        const { view, delivery } = await delivered();
         const place = PLACE_MOMENTS.includes(moment) ? await loadPlace(deps.places, deps.session) : null;
-        const text = contextFor(moment, event, delivery, { prompt, part, place });
+        const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
+        const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place)) }] };
       } catch (error62) {
         return { content: [{ type: "text", text: hookFailure(moment, event, message(error62)) }] };
@@ -47215,7 +47308,8 @@ function createServer(deps) {
     async () => {
       let text;
       try {
-        text = refreshContext(await loadDelivery(reader, deps.session, now()), await loadPlace(deps.places, deps.session));
+        const { view, delivery } = await delivered();
+        text = refreshContext(delivery, await loadPlace(deps.places, deps.session), await waitingNotice(view));
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
       }

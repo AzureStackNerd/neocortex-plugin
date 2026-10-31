@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.11 - 2026-10-31
+
+- Added: the tool `dream_decide` records your answer to a proposal that `dream_proposals` lists: `reject` or
+  `keep-both`, and neither changes a memory. An answered proposal is not asked again; once a memory it shows changes,
+  a proposal on the changed memory asks again. At a session start and in the `refresh` prompt, the index says how many
+  proposals wait here for your answer, without naming them. Nothing creates proposals yet, so you see no such line
+  until a later version adds the Dreamer's first proposals.
+- Changed: at a session start, part 1 of the index keeps room for that line, so it may hold one index line fewer than
+  before; that line moves to part 2.
+
 ## 0.4.10 - 2026-10-30
 
 - Added: the tool `dream_proposals` lists the Dreamer's proposals that wait in the session you work in for your
