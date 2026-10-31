@@ -120,7 +120,8 @@ without `origin`, `project` means that folder only, not its subfolders.
 At every session start Claude gets an index: one line for each active memory delivered by index, with its scope,
 title, summary and id, as many as fit. When they do not all fit, the lowest-ranked lines lose their summary first
 (shown as …), never those of enforced or high-importance memories; only what still does not fit is counted, and Claude
-finds it with `search_memories`. Memories
+finds it with `search_memories`. A subagent gets part 1 alone and keeps every line whole, so it counts what does not
+fit instead of shortening. Memories
 delivered at startup come in full. Claude reads a memory in full when the detail matters. `/plugin:neocortex:neocortex:refresh` reloads your memories in a running session, for
 example after another machine changed them.
 

@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.12",
+  version: "0.4.13",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45755,10 +45755,11 @@ ${line}`}`;
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
   const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? roomNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
+  const partCount = Math.min(options.parts ?? INDEX_PART_BUDGETS.length, INDEX_PART_BUDGETS.length);
   const memories = resolution.active.filter((m) => m.delivery === "index");
   const full = memories.map((m) => indexLine(m));
   const short = memories.map((m) => indexLine(m, true));
-  const shortenable = memories.flatMap((m, i) => !m.enforced && m.importance !== "high" && short[i].length < full[i].length ? [i] : []).reverse();
+  const shortenable = partCount === 1 ? [] : memories.flatMap((m, i) => !m.enforced && m.importance !== "high" && short[i].length < full[i].length ? [i] : []).reverse();
   const fill = (count2) => {
     const cut = new Set(shortenable.slice(0, count2));
     const parts2 = [[]];
@@ -45767,7 +45768,7 @@ ${line}`}`;
     let shortened2 = 0;
     for (const [i, whole2] of full.entries()) {
       const line2 = cut.has(i) ? short[i] : whole2;
-      while (unshown2 === 0 && line2.length + 1 > room && parts2.length < INDEX_PART_BUDGETS.length) {
+      while (unshown2 === 0 && line2.length + 1 > room && parts2.length < partCount) {
         parts2.push([]);
         room = roomOf(parts2.length);
       }
@@ -45886,7 +45887,7 @@ function laterLine(later, first, parts) {
 function sessionContext(input2, options = NO_PLACE) {
   const { active, byId } = input2.resolution;
   const fullText2 = buildFull(["startup"], active, byId, LEGACY_FULL_SHARE);
-  const index = buildIndex(input2, HOOK_CAP - (fullText2 === "" ? 0 : fullText2.length + 2), 1, options);
+  const index = buildIndex(input2, HOOK_CAP - (fullText2 === "" ? 0 : fullText2.length + 2), 1, { ...options, parts: 1 });
   return fullText2 === "" ? index : `${index}
 
 ${fullText2}`;
@@ -46118,7 +46119,11 @@ function indexMoment(event, input2, place, proposals) {
 function indexOptions(command, event, place, proposals) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
   const main = event === "SessionStart";
-  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0 };
+  const parts = eventsDelivering(command, event);
+  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts };
+}
+function eventsDelivering(command, event) {
+  return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
 }
 function hookOutput(event, text, systemMessage = "") {
   if (text === "" && systemMessage === "") return "";

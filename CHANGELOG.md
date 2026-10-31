@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.13 - 2026-10-31
+
+- Fixed: a subagent's index and the legacy `startup` command receive part 1 alone, but they were packed as if parts 2
+  and 3 would follow. On a store over the budget they showed summaries dropped (`— …`) to make room in parts nobody
+  reads, and their last line pointed at an index part 2 that never arrives. They now show whole lines and count what
+  does not fit: on a 600-memory store of 16-character titles and 200-character summaries, 40 whole lines and a count of
+  560 replace 237 lines of which every one had lost its summary and 354 pointed at part 2, with the remaining 9
+  counted only at the end of a part 3 they never receive. The session start is unchanged.
+
 ## 0.4.12 - 2026-10-31
 
 - Changed: when the index of a place does not fit the session start, the lowest-ranked memories now show their title
