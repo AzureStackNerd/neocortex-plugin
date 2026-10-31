@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.14",
+  version: "0.4.15",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45730,6 +45730,14 @@ function proposalsNotice(proposals) {
   return `${count2} proposals of the Dreamer wait here for the user's answer; call dream_proposals to show them.`;
 }
 var LONGEST_PROPOSALS = { waiting: 1e3 };
+function crowdedNotice({ shortened, unshown }) {
+  if (shortened === 0 && unshown === 0) return "";
+  const count2 = (n) => n > 999 ? "More than 999" : String(n);
+  const line = shortened === 1 ? "index line lost its summary" : "index lines lost their summaries";
+  const left = unshown === 1 ? "1 is" : `${count2(unshown)} are`;
+  return `${count2(shortened)} ${line} to fit this start, and ${left} not in it; call dream_report, offer the user the memories it prices as movable, and only on their yes call update_memory with delivery on-demand, one call per memory; the same call with delivery index puts a memory back on the start.`;
+}
+var LONGEST_CROWD = { shortened: 1e3, unshown: 1e3 };
 function placeUpdateWarning(state) {
   if (state.read.state !== "unreadable") return "";
   const format = state.read.problem.newerFormat;
@@ -45752,63 +45760,74 @@ function indexFill(input2, budget = HOOK_CAP, options = NO_PLACE) {
 ${line}`}`;
   const sectionOf = (notices) => notices.length > 0 ? ["## Notices", ...notices].join("\n") : "";
   const noticeSection = sectionOf(noticeLines(input2, options));
-  const roomNotices = options.proposals === void 0 ? noticeSection : sectionOf(noticeLines(input2, { ...options, proposals: LONGEST_PROPOSALS }));
+  const longestSection = (crowd) => sectionOf(noticeLines(input2, options.proposals === void 0 ? options : { ...options, proposals: LONGEST_PROPOSALS }, crowd));
+  const roomNotices = longestSection(void 0);
   if (resolution.byId.size === 0 && problems.length === 0) {
     return { parts: [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
-  const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? roomNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
   const partCount = Math.min(options.parts ?? INDEX_PART_BUDGETS.length, INDEX_PART_BUDGETS.length);
   const memories = resolution.active.filter((m) => m.delivery === "index");
   const full = memories.map((m) => indexLine(m));
   const short = memories.map((m) => indexLine(m, true));
   const shortenableIndexes = partCount === 1 ? [] : memories.flatMap((m, i) => shortenable(m, full[i], short[i]) ? [i] : []).reverse();
-  const fill = (count2) => {
-    const cut = new Set(shortenableIndexes.slice(0, count2));
-    const parts2 = [[]];
-    let room = roomOf(1);
-    let unshown2 = 0;
-    let shortened2 = 0;
-    for (const [i, whole2] of full.entries()) {
-      const line2 = cut.has(i) ? short[i] : whole2;
-      while (unshown2 === 0 && line2.length + 1 > room && parts2.length < partCount) {
-        parts2.push([]);
-        room = roomOf(parts2.length);
+  const fillWith = (whereNotices) => {
+    const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? whereNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
+    const fill = (count2) => {
+      const cut = new Set(shortenableIndexes.slice(0, count2));
+      const parts = [[]];
+      let room = roomOf(1);
+      let unshown = 0;
+      let shortened = 0;
+      for (const [i, whole2] of full.entries()) {
+        const line2 = cut.has(i) ? short[i] : whole2;
+        while (unshown === 0 && line2.length + 1 > room && parts.length < partCount) {
+          parts.push([]);
+          room = roomOf(parts.length);
+        }
+        if (unshown > 0 || line2.length + 1 > room) {
+          unshown += 1;
+          continue;
+        }
+        parts[parts.length - 1].push(line2);
+        room -= line2.length + 1;
+        if (cut.has(i)) shortened += 1;
       }
-      if (unshown2 > 0 || line2.length + 1 > room) {
-        unshown2 += 1;
-        continue;
+      while (parts.length > 1 && parts[parts.length - 1].length === 0) parts.pop();
+      return { parts, unshown, shortened };
+    };
+    let result = fill(0);
+    if (result.unshown > 0) {
+      let low = 0;
+      let high = shortenableIndexes.length;
+      if (fill(high).unshown === 0) {
+        while (high - low > 1) {
+          const middle = Math.floor((low + high) / 2);
+          if (fill(middle).unshown === 0) high = middle;
+          else low = middle;
+        }
       }
-      parts2[parts2.length - 1].push(line2);
-      room -= line2.length + 1;
-      if (cut.has(i)) shortened2 += 1;
+      result = fill(high);
     }
-    while (parts2.length > 1 && parts2[parts2.length - 1].length === 0) parts2.pop();
-    return { parts: parts2, unshown: unshown2, shortened: shortened2 };
+    return result;
   };
-  let result = fill(0);
-  if (result.unshown > 0) {
-    let low = 0;
-    let high = shortenableIndexes.length;
-    if (fill(high).unshown === 0) {
-      while (high - low > 1) {
-        const middle = Math.floor((low + high) / 2);
-        if (fill(middle).unshown === 0) high = middle;
-        else low = middle;
-      }
-    }
-    result = fill(high);
+  const render = ({ parts, unshown, shortened }, notices) => {
+    const texts = parts.map((lines, i) => {
+      const sections = [headerOf(i + 1)];
+      const later = parts.slice(i + 1).reduce((count2, part) => count2 + part.length, 0);
+      const last = later > 0 ? [`${later} more in index part ${i + 2}; use search_memories if that part is missing.`] : i === parts.length - 1 && unshown > 0 ? [`${unshown} index memories are not in the start context; use search_memories.`] : [];
+      if (lines.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...last].join("\n"));
+      if (i === 0 && notices !== "") sections.push(notices);
+      return sections.join("\n\n");
+    });
+    return { parts: texts, shortened, unshown };
+  };
+  const first = fillWith(roomNotices);
+  if (options.crowded !== true || partCount === 1 || first.shortened === 0 && first.unshown === 0) {
+    return render(first, noticeSection);
   }
-  const { parts, unshown, shortened } = result;
-  const texts = parts.map((lines, i) => {
-    const sections = [headerOf(i + 1)];
-    const later = parts.slice(i + 1).reduce((count2, part) => count2 + part.length, 0);
-    const last = later > 0 ? [`${later} more in index part ${i + 2}; use search_memories if that part is missing.`] : i === parts.length - 1 && unshown > 0 ? [`${unshown} index memories are not in the start context; use search_memories.`] : [];
-    if (lines.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...last].join("\n"));
-    if (i === 0 && noticeSection !== "") sections.push(noticeSection);
-    return sections.join("\n\n");
-  });
-  return { parts: texts, shortened, unshown };
+  const second = fillWith(longestSection(LONGEST_CROWD));
+  return render(second, sectionOf(noticeLines(input2, options, { shortened: second.shortened, unshown: second.unshown })));
 }
 function buildIndex(input2, budget = HOOK_CAP, part = 1, options = NO_PLACE) {
   return indexParts(input2, budget, options)[part - 1] ?? "";
@@ -45943,7 +45962,7 @@ function brokenWarning(kinds, problems) {
   const records = ours.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
-function noticeLines({ resolution, problems, newer, recentRules: recent }, options) {
+function noticeLines({ resolution, problems, newer, recentRules: recent }, options, crowd) {
   const lines = [];
   const warning = updateWarning(problems);
   if (warning !== "") lines.push(`- ${warning}`);
@@ -45955,6 +45974,8 @@ function noticeLines({ resolution, problems, newer, recentRules: recent }, optio
   if (unsorted !== "") lines.push(`- ${unsorted}`);
   const proposals = options.proposals === void 0 ? "" : proposalsNotice(options.proposals);
   if (proposals !== "") lines.push(`- ${proposals}`);
+  const crowdLine = crowd === void 0 ? "" : crowdedNotice(crowd);
+  if (crowdLine !== "") lines.push(`- ${crowdLine}`);
   const expired = expiredNotice(resolution.expired);
   if (expired !== "") lines.push(`- ${expired}`);
   const ignored = ignoredNotice(resolution.ignored);
@@ -46123,7 +46144,7 @@ function indexOptions(command, event, place, proposals) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
   const main = event === "SessionStart";
   const parts = eventsDelivering(command, event);
-  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts };
+  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts, crowded: main };
 }
 function eventsDelivering(command, event) {
   return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
@@ -46509,7 +46530,9 @@ How to save:
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-At session start the index shows each memory as "[scope] title \u2014 summary \xB7 id". Call get_memory with the id before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.`;
+At session start the index shows each memory as "[scope] title \u2014 summary \xB7 id". Call get_memory with the id before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
+
+When a start says this place's index is crowded, shrinking it is the user's choice: call dream_report for the memories it prices as movable, offer that at most once in a session, and call update_memory with delivery on-demand only on the user's yes, one memory per call; say that delivery index puts it back.`;
 
 // src/rule-guard.ts
 var RULE_TOOL = { create: "save_rule", update: "update_rule", remove: "delete_rule" };

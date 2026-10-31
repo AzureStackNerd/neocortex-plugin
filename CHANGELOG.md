@@ -2,6 +2,19 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.15 - 2026-10-31
+
+- Added: a session start whose index has to shorten lines or leave them out now says so once, in part 1, with both
+  counts and the way out. Claude reads the moves `dream_report` prices, offers them to you, and calls `update_memory`
+  with `delivery on-demand` only when you agree, one memory per call; the same call with `delivery index` puts a memory
+  back on the start. The line is absent from a start that fits, from a subagent's index and from the legacy `startup`
+  command, and `/refresh` packs its parts without it. Part 1 keeps room for the line in its longest form, so where
+  index part 2 begins does not depend on the counts, and a place under its budget delivers exactly what it delivered
+  before. On a store that needs it, part 1 shows one or two more shortened lines than before: the line pays for itself
+  out of that part's room.
+- Changed: the server instructions tell Claude to offer the shrinking at most once per session, to call
+  `update_memory` only on your yes, and to name the way back.
+
 ## 0.4.14 - 2026-10-31
 
 - Added: `dream_report` now prices the start index memory by memory (`indexBudget`). It lists the index memories that
