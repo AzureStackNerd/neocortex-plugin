@@ -2,6 +2,19 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.14 - 2026-10-31
+
+- Added: `dream_report` now prices the start index memory by memory (`indexBudget`). It lists the index memories that
+  could move off the session start — the ones that are neither enforced nor of high importance, largest line first, at
+  most 20 with the rest counted — and says how many of those moves bring the start under its budget (`toFit`) and how
+  many characters they free (`freed`). It changes nothing: the move is `update_memory` with `delivery on-demand`, one
+  call per memory, which you confirm, and the same call with `delivery index` puts a memory back on the start.
+  `toFit` is `null` when even moving every candidate cannot fit the place, because enforced and high lines alone
+  overflow it.
+- Changed: `dream_report` counts the index lines the start leaves out (`indexNotShown`) from the start's own fill
+  instead of reading the number back out of the delivered text, so a memory whose summary quotes that line can no
+  longer change the count.
+
 ## 0.4.13 - 2026-10-31
 
 - Fixed: a subagent's index and the legacy `startup` command receive part 1 alone, but they were packed as if parts 2

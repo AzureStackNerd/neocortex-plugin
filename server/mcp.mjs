@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.13",
+  version: "0.4.14",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45739,6 +45739,9 @@ function indexLine(memory, shortened = false) {
   const mark = memory.enforced ? ", enforced" : memory.importance === "high" ? ", high" : "";
   return `- [${memory.scope.kind}${mark}] ${shownCut(memory.title, 80)} \u2014 ${shortened ? "\u2026" : shownText(memory.summary)} \xB7 ${shortId(memory.id)}`;
 }
+function shortenable(memory, whole2 = indexLine(memory), short = indexLine(memory, true)) {
+  return !memory.enforced && memory.importance !== "high" && short.length < whole2.length;
+}
 function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
   return indexFill(input2, budget, options).parts;
 }
@@ -45751,7 +45754,7 @@ ${line}`}`;
   const noticeSection = sectionOf(noticeLines(input2, options));
   const roomNotices = options.proposals === void 0 ? noticeSection : sectionOf(noticeLines(input2, { ...options, proposals: LONGEST_PROPOSALS }));
   if (resolution.byId.size === 0 && problems.length === 0) {
-    return { parts: [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")], shortened: 0 };
+    return { parts: [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
   const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? roomNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
@@ -45759,9 +45762,9 @@ ${line}`}`;
   const memories = resolution.active.filter((m) => m.delivery === "index");
   const full = memories.map((m) => indexLine(m));
   const short = memories.map((m) => indexLine(m, true));
-  const shortenable = partCount === 1 ? [] : memories.flatMap((m, i) => !m.enforced && m.importance !== "high" && short[i].length < full[i].length ? [i] : []).reverse();
+  const shortenableIndexes = partCount === 1 ? [] : memories.flatMap((m, i) => shortenable(m, full[i], short[i]) ? [i] : []).reverse();
   const fill = (count2) => {
-    const cut = new Set(shortenable.slice(0, count2));
+    const cut = new Set(shortenableIndexes.slice(0, count2));
     const parts2 = [[]];
     let room = roomOf(1);
     let unshown2 = 0;
@@ -45786,7 +45789,7 @@ ${line}`}`;
   let result = fill(0);
   if (result.unshown > 0) {
     let low = 0;
-    let high = shortenable.length;
+    let high = shortenableIndexes.length;
     if (fill(high).unshown === 0) {
       while (high - low > 1) {
         const middle = Math.floor((low + high) / 2);
@@ -45805,7 +45808,7 @@ ${line}`}`;
     if (i === 0 && noticeSection !== "") sections.push(noticeSection);
     return sections.join("\n\n");
   });
-  return { parts: texts, shortened };
+  return { parts: texts, shortened, unshown };
 }
 function buildIndex(input2, budget = HOOK_CAP, part = 1, options = NO_PLACE) {
   return indexParts(input2, budget, options)[part - 1] ?? "";
@@ -46143,14 +46146,12 @@ var REPEAT_MIN_PLACES = 3;
 var HANDOFF_LABEL = "handoff";
 var LONG_PROMPT = "";
 var SHORT_QUESTION = "?";
-var NOT_SHOWN_RE = /^(\d+) index memories are not in the start context;/m;
 function placeMeasures(input2, place) {
   const text = (command, event, prompt = "") => contextFor(command, event, input2, { prompt, part: 1, place });
   const index = indexMoment("SessionStart", input2, place, { waiting: 0 });
   const full = startupFull(input2);
-  const count2 = (re, within) => Number(re.exec(within)?.[1] ?? 0);
   return {
-    indexNotShown: count2(NOT_SHOWN_RE, index.parts.join("\n")),
+    indexNotShown: index.unshown,
     indexShortened: index.shortened,
     startCharacters: [...index.parts, ...full.parts].reduce((sum, part) => sum + part.length, 0),
     startupNotFit: full.notFit,
@@ -46281,6 +46282,74 @@ function placeSession(projectKey) {
   return sessionFor(projectKey, { kind: "project", organisation: null });
 }
 function compareText2(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// src/dream/rebalance.ts
+var INDEX_BUDGET_MAX = 20;
+var NO_PROPOSALS = { waiting: 0 };
+var BUDGET_TEXT = {
+  noIndex: "No memory here loads as an index line, so the start has no index line to move.",
+  noneMayMove: "Every index line here is enforced, has importance high, or saves no room without its summary, so no line may lose its summary to make room and nothing moves off the start without a change of its own.",
+  noneMayMoveOver: "The start is over its budget, and nothing here may lose its summary to make room: every index line is enforced, has importance high, or saves no room without it, so moving a memory cannot fit this place. Shorten a long line with update_memory, or delete a memory you no longer need.",
+  fits: "The start already shows every index memory with its summary; no memory needs to move off it.",
+  tooShort: (moves) => `Moving all ${moves} index ${moves === 1 ? "memory" : "memories"} that may lose their summary still leaves the start short, because the enforced and high lines keep theirs: shorten the summary of a long line, or move a memory one at a time with update_memory and delivery on-demand, which delivery index undoes.`,
+  move: (moves, freed, listed3, others, userScope) => `Moving the ${moves} largest index ${moves === 1 ? "line" : "lines"} off the start frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. The same call with delivery index puts it back on the start.` + // The list holds the largest 20 whatever the count, so a move that needs more says how many of its own lines it does
+  // not name: moves beyond the list, not every candidate beyond it (plan D10).
+  (moves <= listed3 ? "" : ` The list above shows the largest ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it" : `${userScope} of them are user memories, so they`} leave the start of every project.`)
+};
+function indexBudget(input2, place) {
+  const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
+  const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
+  const candidates = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id)).map(({ memory }) => memory);
+  const listed3 = candidates.slice(0, INDEX_BUDGET_MAX);
+  const others = candidates.length - listed3.length;
+  const budgetOf = (toFit, freed2, next) => ({ candidates: listed3, others, toFit, freed: freed2, next });
+  if (memories.length === 0) return budgetOf(0, 0, BUDGET_TEXT.noIndex);
+  const fitsToday = today.unshown === 0 && today.shortened === 0;
+  if (candidates.length === 0) return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver);
+  if (fitsToday) return budgetOf(0, 0, BUDGET_TEXT.fits);
+  const fewest = fewestThatFits(input2, place, candidates);
+  if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length));
+  const moved = candidates.slice(0, fewest);
+  const freed = freedBy(today.parts, moved);
+  return budgetOf(fewest, freed, BUDGET_TEXT.move(fewest, freed, listed3.length, others, userScopeOf(moved)));
+}
+function fewestThatFits(input2, place, candidates) {
+  const fits = (moves) => {
+    const fill = fillAfter(input2, place, candidates.slice(0, moves));
+    return fill.unshown === 0 && fill.shortened === 0;
+  };
+  if (!fits(candidates.length)) return null;
+  let low = 0;
+  let high = candidates.length;
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(middle)) high = middle;
+    else low = middle;
+  }
+  return high;
+}
+function startFill(input2, place, active) {
+  return indexMoment("SessionStart", { ...input2, resolution: { ...input2.resolution, active } }, place, NO_PROPOSALS);
+}
+function fillAfter(input2, place, moves) {
+  const moved = new Set(moves.map((memory) => memory.id));
+  return startFill(input2, place, input2.resolution.active.map((memory) => moved.has(memory.id) ? { ...memory, delivery: "on-demand" } : memory));
+}
+function freedBy(parts, moves) {
+  const shown2 = new Set(parts.flatMap((part) => part.split("\n")));
+  return moves.reduce((sum, memory) => {
+    const whole2 = indexLine(memory);
+    if (shown2.has(whole2)) return sum + whole2.length;
+    const short = indexLine(memory, true);
+    return shown2.has(short) ? sum + short.length : sum;
+  }, 0);
+}
+function userScopeOf(moves) {
+  return moves.filter((memory) => memory.scope.kind === "user").length;
+}
+function compareText3(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -46773,7 +46842,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, or the record of an earlier answer to them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, or keep-both. Neither changes a memory. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
@@ -47089,8 +47158,10 @@ function createServer(deps) {
     () => guarded(async () => {
       const at = now();
       const input2 = await loadDelivery(reader, deps.session, at);
-      const measures = placeMeasures(input2, await loadPlace(deps.places, deps.session));
+      const place = await loadPlace(deps.places, deps.session);
+      const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
+      const budget = indexBudget(input2, place);
       let store2;
       let repeats;
       try {
@@ -47118,6 +47189,13 @@ function createServer(deps) {
           nearDuplicates: {
             pairs: pairs.length,
             shown: pairs.slice(0, DREAM_PAIRS_MAX).map(({ a, b, score }) => ({ a: relatedEntryOf(a), b: relatedEntryOf(b), score }))
+          },
+          indexBudget: {
+            candidates: budget.candidates.map(relatedEntryOf),
+            others: budget.others,
+            toFit: budget.toFit,
+            freed: budget.freed,
+            next: budget.next
           },
           ...repeats === void 0 ? {} : { repeats },
           deadWeight: deadWeight(input2.resolution, input2.problems),
