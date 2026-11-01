@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.20 - 2026-11-01
+
+- Changed: a session's load reads 8 records at a time instead of one. On a memory folder a sync tool keeps current,
+  each file costs a round trip, so the old load spent most of its time waiting: on the owner's store (267 records) a
+  session's load went from 116 to 44 ms and the whole-store read from 193 to 81 ms. This speeds up every session start
+  and every prompt, not only `dream_report`. The memories, their revisions and the order of the problems reported are
+  exactly as before. The bound is `LOAD_CONCURRENCY` in the store contract, so another backend picks its own.
+- Not changed, deliberately: a memory folder on a mapped network drive or a spinning disk was not measured, and on such
+  a share parallel reads could be slower than one at a time.
+
 ## 0.4.19 - 2026-11-01
 
 - Changed: `dream_report` answers faster on a large store. The search for ways under the start budget now prices only

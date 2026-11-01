@@ -36066,6 +36066,7 @@ function systemErrorCode(error62) {
   const { code, syscall } = error62;
   return typeof code === "string" && typeof syscall === "string" ? code : void 0;
 }
+var LOAD_CONCURRENCY = 8;
 var StoreError = class extends Error {
 };
 var ConflictError = class extends StoreError {
@@ -45226,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.19",
+  version: "0.4.20",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48356,20 +48357,72 @@ var FileStore = class {
       const id = TEMP_RE.exec(name)?.[1];
       if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join3(folder, name))) pending.push(`${id}.md`);
     }
+    const listed3 = [];
     for (const name of [.../* @__PURE__ */ new Set([...names, ...pending])].sort()) {
       if (!name.toLowerCase().endsWith(".md")) continue;
       const file2 = [...parts, name].join("/");
       const id = name.slice(0, -".md".length);
       if (!UUID_RE.test(id)) {
-        result.problems.push({ file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" });
+        listed3.push({ name, file: file2, id, notAnId: { file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" } });
         continue;
       }
-      const read = await this.readRecord(join3(folder, name), file2, location.scope, id);
+      listed3.push({ name, file: file2, id });
+    }
+    const reads = await this.readMany(listed3.flatMap((one) => one.notAnId === void 0 ? [join3(folder, one.name)] : []));
+    let at = 0;
+    for (const one of listed3) {
+      if (one.notAnId !== void 0) {
+        result.problems.push(one.notAnId);
+        continue;
+      }
+      const { name, file: file2, id } = one;
+      const read = await this.settle(reads[at++], join3(folder, name), file2, location.scope, id);
       if (read === void 0) continue;
       if ("problem" in read) result.problems.push(read.problem);
       else if (result.memories.some((stored) => stored.memory.id === id)) {
         result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
       } else result.memories.push(read.stored);
+    }
+  }
+  /**
+   * The text of each path, read LOAD_CONCURRENCY at a time (#423); a read that fails is kept as its error for `settle`,
+   * which decides whether the failure is the record's or the moment's. Reads that finish first do not reorder anything:
+   * the caller walks its own list.
+   */
+  async readMany(paths) {
+    const out = new Array(paths.length);
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(LOAD_CONCURRENCY, paths.length) }, async () => {
+        while (next < paths.length) {
+          const n = next++;
+          const path = paths[n];
+          out[n] = await this.readSettled(path).then(
+            (text) => ({ text }),
+            (error62) => ({ error: error62 })
+          );
+        }
+      })
+    );
+    return out;
+  }
+  /** `readRecord` over text this load already read, or over the failure reading it gave (#423): one path, one meaning. */
+  async settle(read, path, file2, scope, id) {
+    if ("text" in read) return this.decode(read.text, file2, scope, id);
+    if (isNotFound(read.error) && await isGone(path)) return void 0;
+    return { problem: { file: file2, id, reason: systemErrorCode(read.error) ?? messageOf2(read.error) } };
+  }
+  /** One record's text, decoded; its problem names the text when the text is what failed (#279, V4). */
+  decode(text, file2, scope, id) {
+    try {
+      const read = readMemoryFile(text, { scope, id }, this.registry);
+      const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
+      return { stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
+    } catch (error62) {
+      const delivery = deliveryNamedIn(text);
+      const reason = systemErrorCode(error62) ?? messageOf2(error62);
+      const newerFormat = error62 instanceof MemoryFormatError ? error62.newerFormat : void 0;
+      return { problem: { file: file2, id, reason, ...delivery === void 0 ? {} : { delivery }, ...newerFormat === void 0 ? {} : { newerFormat }, text } };
     }
   }
   /**
@@ -48380,25 +48433,11 @@ var FileStore = class {
     let text;
     try {
       text = await this.readSettled(path);
-      const read = readMemoryFile(text, { scope, id }, this.registry);
-      const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
-      return { stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
     } catch (error62) {
       if (isNotFound(error62) && await isGone(path)) return void 0;
-      const delivery = text === void 0 ? void 0 : deliveryNamedIn(text);
-      const reason = systemErrorCode(error62) ?? messageOf2(error62);
-      const newerFormat = error62 instanceof MemoryFormatError ? error62.newerFormat : void 0;
-      return {
-        problem: {
-          file: file2,
-          id,
-          reason,
-          ...delivery === void 0 ? {} : { delivery },
-          ...newerFormat === void 0 ? {} : { newerFormat },
-          ...text === void 0 ? {} : { text }
-        }
-      };
+      return { problem: { file: file2, id, reason: systemErrorCode(error62) ?? messageOf2(error62) } };
     }
+    return this.decode(text, file2, scope, id);
   }
   /**
    * A listed record's text (#387). A not-found while its name is gone, and a busy code, are read again after a pause
