@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.19 - 2026-11-01
+
+- Changed: `dream_report` answers faster on a large store. The search for ways under the start budget now prices only
+  whether a way fits while it walks, and works out how much room its rewrites buy for the three ways it names. On the
+  owner's store that is 736 fills of the start down to 413, the search 129 ms down to 69, and the whole report about
+  90 ms faster. Every way the previous version named is still named, with the same memories; nothing in the answer
+  changes.
+
 ## 0.4.18 - 2026-11-01
 
 - Changed: the way `dream_report` recommends now moves this project's own memories before the memories every project

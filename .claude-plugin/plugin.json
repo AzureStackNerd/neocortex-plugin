@@ -23,8 +23,8 @@
       }
     }
   },
-  "version": "0.4.18",
+  "version": "0.4.19",
   "metadata": {
-    "sourceCommit": "ec2ce561ed165b4cc8fceff9cf6d33a516fd4a57"
+    "sourceCommit": "81d632e4130bc8384658296c3943ddd7293e00c2"
   }
 }

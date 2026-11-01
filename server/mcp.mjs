@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.18",
+  version: "0.4.19",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46377,8 +46377,9 @@ var INDEX_PLANS_MAX = 20;
 var PLAN_TEXT = {
   fits: "The start already shows every index memory with its summary, so nothing needs to change.",
   /**
-   * No rewrite and no demotion brings it under, and the walk was not cut short: it is bounded by INDEX_PLANS_MAX (21
-   * rewrite counts, two halvings each) and stops once a fitting count is found, so it always finishes (#420 re-review).
+   * No rewrite and no demotion brings it under, and the walk was not cut short: it prices every rewrite count up to
+   * INDEX_PLANS_MAX in both orderings, and each count costs one probe at the shortest cut, at most a halving on the moves,
+   * and a cut bought only for the ways the answer names, so it always finishes (#420 re-review, #421, #422).
    */
   nothing: "No combination of shorter summaries and memories moved off the start takes it under its budget: nothing here buys enough room, because every index line is enforced, has importance high, or saves too little without its summary. Delete a memory you no longer need.",
   // `others` is how many more plans fit. The sentence says nothing about their counts: on every store measured they
@@ -46421,7 +46422,7 @@ function indexPlans(input2, place) {
   const largest = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
   const ownFirst = [...largest.filter((one) => one.memory.scope.kind !== "user"), ...largest.filter((one) => one.memory.scope.kind === "user")];
   const rewritable = Math.min(largest.length, INDEX_PLANS_MAX);
-  const fitting = [];
+  const found = [];
   const planIn = (order, k, j, cap) => {
     if (k + j === 0) return null;
     const rewrite = order.slice(0, k).map((one) => one.memory);
@@ -46453,18 +46454,19 @@ function indexPlans(input2, place) {
       return high;
     };
     for (let k = 0; k <= rewritable; k += 1) {
-      if (at(k, 0, k === 0 ? 0 : 1) !== null) {
-        const plan2 = atLongestCap(k, 0);
-        if (plan2 !== null) fitting.push(plan2);
+      const atShortest = at(k, 0, k === 0 ? 0 : 1);
+      if (atShortest !== null) {
+        found.push({ plan: atShortest, longestCut: () => atLongestCap(k, 0) });
         continue;
       }
       const j = fewestMoves(k);
       if (j === null) continue;
-      const plan = atLongestCap(k, j);
-      if (plan !== null) fitting.push(plan);
+      const plan = at(k, j, k === 0 ? 0 : 1);
+      if (plan !== null) found.push({ plan, longestCut: () => atLongestCap(k, j) });
     }
   }
-  const ranked = fitting.sort((a, b) => a.elsewhere - b.elsewhere || a.changes - b.changes || a.shorten.length - b.shorten.length).slice(0, INDEX_PLANS_SHOWN);
+  const named = found.sort((a, b) => a.plan.elsewhere - b.plan.elsewhere || a.plan.changes - b.plan.changes || a.plan.shorten.length - b.plan.shorten.length).slice(0, INDEX_PLANS_SHOWN);
+  const ranked = named.map((one) => one.longestCut()).filter((plan) => plan !== null);
   return {
     today: todayParts,
     fitting: ranked,
