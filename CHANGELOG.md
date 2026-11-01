@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.16 - 2026-11-01
+
+- Changed: the server instructions no longer say `delivery: index` is right for almost everything. Claude is told to
+  choose `on-demand` for reference memories and for any memory whose summary alone is not actionable, that this
+  choice at a save needs no confirmation, and that moving an existing memory to `on-demand` is a rebalance, which is
+  your call. Handoffs stay at `index`, because the next session starts from them. `search_memories` and `get_memory`
+  still reach an on-demand memory, so it is out of sight at a start, never lost.
+- Changed: `save_memory`'s `delivery` field carries the same clause where Claude sets the value. `index` remains the
+  field's default; no format change, no new field.
+
 ## 0.4.15 - 2026-10-31
 
 - Added: a session start whose index has to shorten lines or leave them out now says so once, in part 1, with both

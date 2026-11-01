@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.15",
+  version: "0.4.16",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46521,11 +46521,11 @@ Do not save: what the repository already records (code, docs, git history, CLAUD
 
 How to save:
 1. Call search_memories first. When a memory already covers it, use update_memory instead of saving a duplicate; when the new memory replaces an old decision, set supersedes.
-2. One rule per memory. The summary is the rule itself in one sentence of at most 300 characters. It is what loads at every start, so acting on the summary alone must be right.
+2. One rule per memory. The summary is the rule itself in one sentence of at most 300 characters. It is what loads at every start of an index memory, so acting on the summary alone must be right.
 3. why is required: the reason, the incident or the user's own words. The body holds the detail and how to apply it.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label instead of inventing a near-duplicate.
 5. Use scope project when the memory only applies in this repository, scope user when it applies everywhere.
-6. delivery: index (the default) for almost everything. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for a rule injected at that moment. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
+6. delivery: index is the field's default, and it is for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance, which is the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory, so it is out of sight at a start, never lost. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for a rule injected at that moment. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
 7. When a memory turns out wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
@@ -46816,7 +46816,9 @@ var SAVE_INPUT = {
   body: textInputSchema,
   labels: external_exports.array(external_exports.string()).default([]),
   importance: external_exports.enum(IMPORTANCE).default("normal"),
-  delivery: external_exports.enum(DELIVERIES).default("index").describe("When the full text reaches Claude: index (only the summary at the start; the default), startup, prompt, question, subagent, edit or on-demand"),
+  delivery: external_exports.enum(DELIVERIES).default("index").describe(
+    "When the full text reaches Claude: index (only the summary at the start; the field's default, for a memory that must fire on its own), startup, prompt, question, subagent, edit or on-demand (on-demand for reference memories and for any memory whose summary alone is not actionable; search_memories and get_memory still reach it)"
+  ),
   enforced: external_exports.boolean().default(false).describe("Enforced memories can never be overridden by another scope"),
   supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces"),
   overrides: LINK_IDS.default([]).describe("User memories this project memory deviates from; needs overrideReason"),
