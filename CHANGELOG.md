@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.18 - 2026-11-01
+
+- Changed: the way `dream_report` recommends now moves this project's own memories before the memories every project
+  loads at its start. A user-scope memory moved down stops loading at the start of every other project, so the report
+  prefers a plan that changes a few more memories here over one that empties somewhere else. The answer still says how
+  many of the memories it moves are user memories. On a store where the shortest plan also hurts other projects, that
+  plan is still named, so the choice stays yours.
+- Changed: both levers are now searched in both orders — largest line first and this project first — and every count is
+  priced rather than stopping at the first that fits, which the new ranking needs.
+
 ## 0.4.17 - 2026-11-01
 
 - Added: `dream_report` now shows every way under the start budget, not demotion alone (`indexBudget.plans`). It

@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.17",
+  version: "0.4.18",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46418,56 +46418,53 @@ function indexPlans(input2, place) {
   const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
   if (today.unshown === 0 && today.shortened === 0) return { today: todayParts, fitting: [], next: PLAN_TEXT.fits };
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const movable = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
-  const rewritable = Math.min(movable.length, INDEX_PLANS_MAX);
+  const largest = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
+  const ownFirst = [...largest.filter((one) => one.memory.scope.kind !== "user"), ...largest.filter((one) => one.memory.scope.kind === "user")];
+  const rewritable = Math.min(largest.length, INDEX_PLANS_MAX);
   const fitting = [];
-  const planOf2 = (k, cap, moves) => {
-    if (k + moves.length === 0) return null;
-    const shorten = movable.slice(0, k).map(({ memory }) => ({ memory, line: cap }));
-    const fill = fillPlanned(input2, place, cap, shorten.map((one) => one.memory), moves);
+  const planIn = (order, k, j, cap) => {
+    if (k + j === 0) return null;
+    const rewrite = order.slice(0, k).map((one) => one.memory);
+    const moves = order.slice(k, k + j).map((one) => one.memory);
+    const fill = fillPlanned(input2, place, cap, rewrite, moves);
     if (fill.unshown > 0 || fill.shortened > 0) return null;
     return {
-      shorten,
+      shorten: order.slice(0, k).map(({ memory }) => ({ memory, line: cap })),
       demote: moves,
-      changes: k + moves.length,
-      userScope: userScopeOf([...shorten.map((one) => one.memory), ...moves]),
+      changes: k + j,
+      userScope: userScopeOf([...rewrite, ...moves]),
       // Only a demotion takes a memory off another place's start; a rewrite leaves it there, shortened (#420).
       elsewhere: userScopeOf(moves),
       characters: charactersOf(fill)
     };
   };
-  const prefix = (k, j, cap) => planOf2(k, cap, movable.slice(k, k + j).map(({ memory }) => memory));
-  const atLongestCap = (k, j) => k === 0 ? prefix(0, j, 0) : longestCap((kk, jj, cap) => prefix(kk, jj, cap), k, j, movable[0].line) ?? prefix(k, j, 1);
-  const fewestMoves = (k) => {
-    let low = 0;
-    let high = movable.length - k;
-    if (prefix(k, high, k === 0 ? 0 : 1) === null) return null;
-    while (high - low > 1) {
-      const middle = Math.floor((low + high) / 2);
-      if (prefix(k, middle, k === 0 ? 0 : 1) !== null) high = middle;
-      else low = middle;
-    }
-    return high;
-  };
-  let cheapest = Number.POSITIVE_INFINITY;
-  for (let k = 0; k <= rewritable && k < cheapest; k += 1) {
-    if (prefix(k, 0, k === 0 ? 0 : 1) !== null) {
-      const plan2 = atLongestCap(k, 0);
-      if (plan2 !== null) {
-        fitting.push(plan2);
-        cheapest = Math.min(cheapest, plan2.changes);
+  for (const order of [largest, ownFirst]) {
+    const at = (k, j, cap) => planIn(order, k, j, cap);
+    const atLongestCap = (k, j) => k === 0 ? at(0, j, 0) : longestCap((kk, jj, cap) => at(kk, jj, cap), k, j, order[0].line) ?? at(k, j, 1);
+    const fewestMoves = (k) => {
+      if (k >= order.length || at(k, order.length - k, k === 0 ? 0 : 1) === null) return null;
+      let low = 0;
+      let high = order.length - k;
+      while (high - low > 1) {
+        const middle = Math.floor((low + high) / 2);
+        if (at(k, middle, k === 0 ? 0 : 1) !== null) high = middle;
+        else low = middle;
       }
-      continue;
-    }
-    const j = fewestMoves(k);
-    if (j === null) continue;
-    const plan = atLongestCap(k, j);
-    if (plan !== null) {
-      fitting.push(plan);
-      cheapest = Math.min(cheapest, plan.changes);
+      return high;
+    };
+    for (let k = 0; k <= rewritable; k += 1) {
+      if (at(k, 0, k === 0 ? 0 : 1) !== null) {
+        const plan2 = atLongestCap(k, 0);
+        if (plan2 !== null) fitting.push(plan2);
+        continue;
+      }
+      const j = fewestMoves(k);
+      if (j === null) continue;
+      const plan = atLongestCap(k, j);
+      if (plan !== null) fitting.push(plan);
     }
   }
-  const ranked = fitting.sort((a, b) => a.changes - b.changes || a.elsewhere - b.elsewhere || a.shorten.length - b.shorten.length).slice(0, INDEX_PLANS_SHOWN);
+  const ranked = fitting.sort((a, b) => a.elsewhere - b.elsewhere || a.changes - b.changes || a.shorten.length - b.shorten.length).slice(0, INDEX_PLANS_SHOWN);
   return {
     today: todayParts,
     fitting: ranked,
