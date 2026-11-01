@@ -45226,7 +45226,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.16",
+  version: "0.4.17",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46373,6 +46373,129 @@ function userScopeOf(moves) {
 function compareText3(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+var INDEX_PLANS_MAX = 20;
+var PLAN_TEXT = {
+  fits: "The start already shows every index memory with its summary, so nothing needs to change.",
+  /**
+   * No rewrite and no demotion brings it under, and the walk was not cut short: it is bounded by INDEX_PLANS_MAX (21
+   * rewrite counts, two halvings each) and stops once a fitting count is found, so it always finishes (#420 re-review).
+   */
+  nothing: "No combination of shorter summaries and memories moved off the start takes it under its budget: nothing here buys enough room, because every index line is enforced, has importance high, or saves too little without its summary. Delete a memory you no longer need.",
+  // `others` is how many more plans fit. The sentence says nothing about their counts: on every store measured they
+  // share the recommendation's count, but nothing in the code guarantees it, and a false "changing N or more" is worse
+  // than saying less (#420 re-review).
+  cheapest: (plan, others) => `The recommended plan changes ${plan.changes} ${plan.changes === 1 ? "memory" : "memories"} and leaves the start at ${plan.characters} of its ${INDEX_PART_BUDGETS.reduce((sum, part) => sum + part, 0)} characters: ` + describePlan(plan) + "." + (others === 0 ? "" : ` ${others === 1 ? "One other plan" : `${others} other plans`} also fit.`),
+  /**
+   * What the recommended plan costs outside this place, in the same sentence that recommends it (#420): the memories it
+   * moves down stop loading elsewhere, and the ones it only shortens keep a shortened line there.
+   */
+  elsewhere: (plan) => {
+    const moved = plan.elsewhere;
+    const shortened = plan.userScope - plan.elsewhere;
+    const movedText = moved === 0 ? "" : ` ${moved === 1 ? "One of them is a user memory, so it stops" : `${moved} of them are user memories, so they stop`} loading at the start of every other place.`;
+    const shortenedText = shortened === 0 ? "" : ` ${shortened === 1 ? "One other is a user memory whose line" : `${shortened} others are user memories whose lines`} every other place still shows, shortened.`;
+    return movedText + shortenedText === "" ? " None of them is a user memory, so no other place is affected." : `${movedText}${shortenedText}`;
+  }
+};
+function describePlan(plan) {
+  const parts = [];
+  if (plan.shorten.length > 0) {
+    parts.push(
+      `rewrite ${plan.shorten.length === 1 ? "one summary" : `${plan.shorten.length} summaries`} to at most the length named, each with get_memory for its revision and then update_memory with the shorter summary (the old text is not kept, so copy it first if you may want it back)`
+    );
+  }
+  if (plan.demote.length > 0) {
+    parts.push(
+      `move ${plan.demote.length === 1 ? "one memory" : `${plan.demote.length} memories`} off the start with update_memory and delivery on-demand, one call per memory`
+    );
+  }
+  return parts.join("; ");
+}
+var INDEX_PLANS_SHOWN = 3;
+function indexPlans(input2, place) {
+  const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
+  const charactersOf = (fill) => fill.parts.reduce((sum, part) => sum + part.length, 0);
+  const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
+  if (today.unshown === 0 && today.shortened === 0) return { today: todayParts, fitting: [], next: PLAN_TEXT.fits };
+  const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
+  const movable = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
+  const rewritable = Math.min(movable.length, INDEX_PLANS_MAX);
+  const fitting = [];
+  const planOf2 = (k, cap, moves) => {
+    if (k + moves.length === 0) return null;
+    const shorten = movable.slice(0, k).map(({ memory }) => ({ memory, line: cap }));
+    const fill = fillPlanned(input2, place, cap, shorten.map((one) => one.memory), moves);
+    if (fill.unshown > 0 || fill.shortened > 0) return null;
+    return {
+      shorten,
+      demote: moves,
+      changes: k + moves.length,
+      userScope: userScopeOf([...shorten.map((one) => one.memory), ...moves]),
+      // Only a demotion takes a memory off another place's start; a rewrite leaves it there, shortened (#420).
+      elsewhere: userScopeOf(moves),
+      characters: charactersOf(fill)
+    };
+  };
+  const prefix = (k, j, cap) => planOf2(k, cap, movable.slice(k, k + j).map(({ memory }) => memory));
+  const atLongestCap = (k, j) => k === 0 ? prefix(0, j, 0) : longestCap((kk, jj, cap) => prefix(kk, jj, cap), k, j, movable[0].line) ?? prefix(k, j, 1);
+  const fewestMoves = (k) => {
+    let low = 0;
+    let high = movable.length - k;
+    if (prefix(k, high, k === 0 ? 0 : 1) === null) return null;
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2);
+      if (prefix(k, middle, k === 0 ? 0 : 1) !== null) high = middle;
+      else low = middle;
+    }
+    return high;
+  };
+  let cheapest = Number.POSITIVE_INFINITY;
+  for (let k = 0; k <= rewritable && k < cheapest; k += 1) {
+    if (prefix(k, 0, k === 0 ? 0 : 1) !== null) {
+      const plan2 = atLongestCap(k, 0);
+      if (plan2 !== null) {
+        fitting.push(plan2);
+        cheapest = Math.min(cheapest, plan2.changes);
+      }
+      continue;
+    }
+    const j = fewestMoves(k);
+    if (j === null) continue;
+    const plan = atLongestCap(k, j);
+    if (plan !== null) {
+      fitting.push(plan);
+      cheapest = Math.min(cheapest, plan.changes);
+    }
+  }
+  const ranked = fitting.sort((a, b) => a.changes - b.changes || a.elsewhere - b.elsewhere || a.shorten.length - b.shorten.length).slice(0, INDEX_PLANS_SHOWN);
+  return {
+    today: todayParts,
+    fitting: ranked,
+    next: ranked.length === 0 ? PLAN_TEXT.nothing : PLAN_TEXT.cheapest(ranked[0], ranked.length - 1) + PLAN_TEXT.elsewhere(ranked[0])
+  };
+}
+function longestCap(planAt, k, j, longest) {
+  let fitsAt = 0;
+  let missesAt = longest;
+  while (missesAt - fitsAt > 1) {
+    const middle = Math.floor((fitsAt + missesAt) / 2);
+    if (planAt(k, j, middle) !== null) fitsAt = middle;
+    else missesAt = middle;
+  }
+  return planAt(k, j, fitsAt);
+}
+function fillPlanned(input2, place, cap, rewrites, moves) {
+  const moved = new Set(moves.map((memory) => memory.id));
+  const cut = new Set(rewrites.map((memory) => memory.id));
+  const active = input2.resolution.active.map((memory) => {
+    if (moved.has(memory.id)) return { ...memory, delivery: "on-demand" };
+    if (!cut.has(memory.id)) return memory;
+    const shown2 = shownText(memory.summary);
+    const room = cap - (indexLine(memory).length - shown2.length);
+    return { ...memory, summary: shown2.slice(0, Math.max(1, room)).trimEnd() };
+  });
+  return startFill(input2, place, active);
+}
 
 // src/dream/visibility.ts
 function judge(proposal, load, seen) {
@@ -46867,7 +46990,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, or the record of an earlier answer to them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, or keep-both. Neither changes a memory. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
@@ -47187,6 +47310,7 @@ function createServer(deps) {
       const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
       const budget = indexBudget(input2, place);
+      const plans = indexPlans(input2, place);
       let store2;
       let repeats;
       try {
@@ -47220,7 +47344,12 @@ function createServer(deps) {
             others: budget.others,
             toFit: budget.toFit,
             freed: budget.freed,
-            next: budget.next
+            next: budget.next,
+            plans: {
+              today: plans.today,
+              fitting: plans.fitting.map(planOf),
+              next: plans.next
+            }
           },
           ...repeats === void 0 ? {} : { repeats },
           deadWeight: deadWeight(input2.resolution, input2.problems),
@@ -47856,6 +47985,16 @@ function nearNext(id, memory, matches) {
 }
 function relatedEntryOf(memory) {
   return { id: shortId(memory.id), scope: memory.scope.kind, title: shownCut(memory.title, RELATED_TITLE_MAX) };
+}
+function planOf(plan) {
+  return {
+    shorten: plan.shorten.map(({ memory, line }) => ({ ...relatedEntryOf(memory), line })),
+    demote: plan.demote.map(relatedEntryOf),
+    changes: plan.changes,
+    userScope: plan.userScope,
+    elsewhere: plan.elsewhere,
+    characters: plan.characters
+  };
 }
 function entryOf(memory) {
   return {

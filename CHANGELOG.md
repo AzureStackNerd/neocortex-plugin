@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.17 - 2026-11-01
+
+- Added: `dream_report` now shows every way under the start budget, not demotion alone (`indexBudget.plans`). It
+  prices moving memories off the start, rewriting their summaries shorter, and the two together, each way priced by
+  re-running the start's own fill rather than estimated. It recommends one, fewest memories changed first, and says in
+  the same sentence what that recommendation costs outside this place: how many of the memories it moves down stop
+  loading at the start of every other project, and how many it only shortens keep a shortened line there. Nothing is
+  written; every change a way names is your own `update_memory` call, one memory at a time.
+
 ## 0.4.16 - 2026-11-01
 
 - Changed: the server instructions no longer say `delivery: index` is right for almost everything. Claude is told to
