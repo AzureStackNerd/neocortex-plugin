@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.23 - 2026-11-02
+
+- Fixed: `dream_report`'s `indexBudget` and its `plans` no longer recommend different sets of memories to move. The
+  older text used to pick the longest index lines whatever scope they belonged to, so it named user memories whose move
+  stops them loading at the start of every project, while the plan beside it reached the same budget without moving any.
+  It now takes this project's own memories first, like the plan, and when a plan fits without moving a user memory the
+  text names none and points at that plan instead. `toFit` names the fewest moves in that order, so on a store whose
+  long lines are the user ones it can count a few more moves than the old ranking did.
+
 ## 0.4.22 - 2026-11-02
 
 - Added: the Dreamer works out its own clean-up proposals now, without a model: near-identical duplicates, expired

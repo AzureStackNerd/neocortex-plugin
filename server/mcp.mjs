@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.22",
+  version: "0.4.23",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46325,14 +46325,28 @@ var BUDGET_TEXT = {
   noneMayMoveOver: "The start is over its budget, and nothing here may lose its summary to make room: every index line is enforced, has importance high, or saves no room without it, so moving a memory cannot fit this place. Shorten a long line with update_memory, or delete a memory you no longer need.",
   fits: "The start already shows every index memory with its summary; no memory needs to move off it.",
   tooShort: (moves) => `Moving all ${moves} index ${moves === 1 ? "memory" : "memories"} that may lose their summary still leaves the start short, because the enforced and high lines keep theirs: shorten the summary of a long line, or move a memory one at a time with update_memory and delivery on-demand, which delivery index undoes.`,
-  move: (moves, freed, listed3, others, userScope) => `Moving the ${moves} largest index ${moves === 1 ? "line" : "lines"} off the start frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. The same call with delivery index puts it back on the start.` + // The list holds the largest 20 whatever the count, so a move that needs more says how many of its own lines it does
+  move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
   // not name: moves beyond the list, not every candidate beyond it (plan D10).
-  (moves <= listed3 ? "" : ` The list above shows the largest ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it" : `${userScope} of them are user memories, so they`} leave the start of every project.`)
+  (moves <= listed3 ? "" : ` The list above shows the first ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it" : `${userScope} of them are user memories, so they`} leave the start of every project.`),
+  /**
+   * The demotion-only text when a plan reaches the budget without demoting a user memory (#424's second criterion): it
+   * names the cost and sends the user to that plan instead of telling them to empty the start of every other place. The
+   * promise is exact: that plan may still move *this place's* own memories (a rewrite of long user summaries can make
+   * room without them, and then own demotions buy the rest), which costs no other place anything -- so the sentence says
+   * "no user memory", never "nothing".
+   */
+  defer: (moves, freed, userMoves) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- this place's own before the ones every project loads -- frees ${freed} characters, but ${userMoves === 1 ? "one of them is a user memory" : `${userMoves} of them are user memories`}, whose ${userMoves === 1 ? "line" : "lines"} every other place also loads at its start. The plan named below reaches the budget without moving a user memory: follow that one. A move is update_memory with delivery on-demand, one call per memory and only on the user's word, and the same call with delivery index puts it back on the start.`
 };
-function indexBudget(input2, place) {
+function movableLines(memories) {
+  return memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
+}
+function ownFirstOrder(order) {
+  return [...order.filter((one) => one.memory.scope.kind !== "user"), ...order.filter((one) => one.memory.scope.kind === "user")];
+}
+function indexBudget(input2, place, plans) {
   const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const candidates = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id)).map(({ memory }) => memory);
+  const candidates = ownFirstOrder(movableLines(memories)).map(({ memory }) => memory);
   const listed3 = candidates.slice(0, INDEX_BUDGET_MAX);
   const others = candidates.length - listed3.length;
   const budgetOf = (toFit, freed2, next) => ({ candidates: listed3, others, toFit, freed: freed2, next });
@@ -46344,7 +46358,11 @@ function indexBudget(input2, place) {
   if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length));
   const moved = candidates.slice(0, fewest);
   const freed = freedBy(today.parts, moved);
-  return budgetOf(fewest, freed, BUDGET_TEXT.move(fewest, freed, listed3.length, others, userScopeOf(moved)));
+  const userMoves = userScopeOf(moved);
+  if (userMoves > 0 && (plans ?? indexPlans(input2, place)).fitting.some((plan) => plan.elsewhere === 0)) {
+    return budgetOf(fewest, freed, BUDGET_TEXT.defer(fewest, freed, userMoves));
+  }
+  return budgetOf(fewest, freed, BUDGET_TEXT.move(fewest, freed, listed3.length, others, userMoves));
 }
 function fewestThatFits(input2, place, candidates) {
   const fits = (moves) => {
@@ -46429,8 +46447,8 @@ function indexPlans(input2, place) {
   const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
   if (today.unshown === 0 && today.shortened === 0) return { today: todayParts, fitting: [], next: PLAN_TEXT.fits };
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const largest = memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
-  const ownFirst = [...largest.filter((one) => one.memory.scope.kind !== "user"), ...largest.filter((one) => one.memory.scope.kind === "user")];
+  const largest = movableLines(memories);
+  const ownFirst = ownFirstOrder(largest);
   const rewritable = Math.min(largest.length, INDEX_PLANS_MAX);
   const found = [];
   const planIn = (order, k, j, cap) => {
@@ -47173,7 +47191,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
@@ -47601,8 +47619,8 @@ function createServer(deps) {
       const place = await loadPlace(deps.places, deps.session);
       const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
-      const budget = indexBudget(input2, place);
       const plans = indexPlans(input2, place);
+      const budget = indexBudget(input2, place, plans);
       let store2;
       let repeats;
       try {
