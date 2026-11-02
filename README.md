@@ -127,9 +127,68 @@ fit instead of shortening. Memories
 delivered at startup come in full. Claude reads a memory in full when the detail matters. `/plugin:neocortex:neocortex:refresh` reloads your memories in a running session, for
 example after another machine changed them.
 
+### When a memory loads
+
+Every memory has a `delivery`, and it decides when NeoCortex puts that memory in front of Claude. It is one of these
+seven; `save_memory` and `update_memory` take it, and the field's default is `index`.
+
+| `delivery` | When Claude gets it | What Claude gets |
+| --- | --- | --- |
+| `index` | At every session start | One line: scope, title, summary, id. The default: a memory that must fire on its own |
+| `startup` | At every session start | The whole memory, in full |
+| `prompt` | At every prompt you send | The whole body |
+| `question` | At a short question you send | The whole body, first; the `prompt` memories follow if both fit |
+| `subagent` | When a subagent starts | The whole body, and only in the subagent |
+| `edit` | Before every edit of a file | The whole body |
+| `on-demand` | Only when Claude asks for it by id or search | Nothing until then; never lost, since `get_memory` and `search_memories` reach it |
+
+`startup`, `prompt`, `question`, `subagent` and `edit` are the ones that load on their own at a moment, so a memory
+set to one of them is a **rule**: Claude changes a rule only through `save_rule`, `update_rule` or `delete_rule`, and
+Claude Code asks you before every one of those calls. A rule that loads at every prompt is paid on every prompt, so
+keep that for what must fire that often; `startup` costs once a session, and `index` is free until Claude fetches it.
+
 A rule is a memory that loads on its own, at session start, with every prompt or short question, before every edit or
 when a subagent starts, or that is enforced. Claude changes a rule only with `save_rule`, `update_rule` or
 `delete_rule`, and Claude Code asks you before every call of them; see [Permissions](#permissions).
+
+### What a memory holds
+
+`save_memory` and `update_memory` take these fields. `scope`, `title`, `summary`, `why` and `body` are required;
+the rest are optional.
+
+| Field | What it does |
+| --- | --- |
+| `scope` | `user` loads in every project; `project` only in this repository |
+| `title` | The memory's name, one line, with no invisible or control character |
+| `summary` | The rule itself in one sentence, at most 300 characters. It is what loads at every start, so acting on it alone must be right |
+| `why` | Why the memory exists, or why the choice was made |
+| `body` | The detail |
+| `labels` | Topic labels, such as `bicep` or `powershell`. `list_labels` shows the ones in use; `search_memories` filters by them |
+| `importance` | `low`, `normal` or `high`. It ranks a memory that does not fit at a start, below `enforced` and nothing else |
+| `delivery` | When it loads; see [When a memory loads](#when-a-memory-loads) |
+| `enforced` | Another scope can never override this memory. Use it for the rules that must not be lost to a project's own wording |
+| `expires` | `YYYY-MM-DD`: after that date the memory no longer loads, and it becomes a candidate for `dream_report` to retire |
+| `supersedes` | Ids of memories this one replaces. A live memory they name stops loading, here and everywhere it would |
+| `overrides` | Ids of `user` memories this `project` memory deviates from. Only a project memory may override a user one, and only in its own project, and one that is `enforced` cannot be overridden |
+| `overrideReason` | Required with `overrides`: why this project departs from the user-wide memory |
+
+`supersedes` and `overrides` both take ids, not titles, and both are links you can also read back with `get_memory`
+on either side. To undo one, `update_memory` the memory that carries the link and remove the id from the field.
+
+### Finding a memory again
+
+`search_memories` takes a `query` and, optionally, `labels`. Every word of the query must appear in a memory's title,
+summary, why, body or labels, and every label you give must be on the memory, so two words narrow and do not widen. It
+returns each match's scope, title, summary and id, not its body: `get_memory` with the id gets the whole memory. A
+memory delivered `on-demand` is reachable this way, so choosing that delivery hides it from a start without losing it.
+It also reports the memories that exist but could not be read, with how many and which of their stored text matches, so
+a memory that did not load never looks like no match. Its `includeInactive` returns the expired, replaced and
+overridden ones too, which the default search leaves out; use it to find what an `expires` date or a `supersedes` link
+took out of context, before deciding whether to change it.
+
+`list_labels` shows the topic labels in use, with how many memories carry each, and the context labels of the places
+this store knows with how many places carry each. Reusing a label from that list is better than inventing a near
+duplicate, because a label is what makes two memories findable together.
 
 Claude is told to delete a memory only when you ask; to have Claude Code ask you as well, keep `delete_memory` out of
 the allow rule (see [Permissions](#permissions)). A deleted memory moves to the folder `deleted` in your memory folder,

@@ -1509,7 +1509,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify3(item, ctx, onComment, onChompKeep) {
+    function stringify4(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -1538,7 +1538,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify3;
+    exports.stringify = stringify4;
   }
 });
 
@@ -1548,7 +1548,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify3 = require_stringify();
+    var stringify4 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1570,7 +1570,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify3.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify4.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1622,7 +1622,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify3.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify4.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1763,7 +1763,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
-    var stringify3 = require_stringify();
+    var stringify4 = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map2, { key, value }) {
@@ -1799,7 +1799,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify3.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify4.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node2 of ctx.anchors.keys())
           strCtx.anchors.add(node2.anchor);
@@ -1866,12 +1866,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify3 = require_stringify();
+    var stringify4 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify4 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify4(collection, ctx, options);
+      const stringify5 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify5(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1896,7 +1896,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify3.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify4.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1963,7 +1963,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify3.stringify(item, itemCtx, () => comment = null);
+        let str = stringify4.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i < items.length - 1) {
           str += ",";
@@ -3324,7 +3324,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify3 = require_stringify();
+    var stringify4 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3339,7 +3339,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify3.createStringifyContext(doc, options);
+      const ctx = stringify4.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3361,7 +3361,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify3.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify4.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3369,7 +3369,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify3.stringify(doc.contents, ctx));
+        lines.push(stringify4.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -5505,7 +5505,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify3 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify4 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5558,7 +5558,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify3;
+    exports.stringify = stringify4;
   }
 });
 
@@ -7288,7 +7288,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify3(value, replacer, options) {
+    function stringify4(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7313,7 +7313,7 @@ var require_public_api = __commonJS({
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
-    exports.stringify = stringify3;
+    exports.stringify = stringify4;
   }
 });
 
@@ -7497,10 +7497,10 @@ var require_code = __commonJS({
     function interpolate(x) {
       return typeof x == "number" || typeof x == "boolean" || x === null ? x : safeStringify(Array.isArray(x) ? x.join(",") : x);
     }
-    function stringify3(x) {
+    function stringify4(x) {
       return new _Code(safeStringify(x));
     }
-    exports.stringify = stringify3;
+    exports.stringify = stringify4;
     function safeStringify(x) {
       return JSON.stringify(x).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
     }
@@ -36530,7 +36530,7 @@ function decode3(file2) {
     return { source: file2.name, reason: "not-utf8" };
   }
 }
-function topicUnit(folder, file2, link, gated) {
+function topicUnit(folder, file2, link2, gated) {
   const decoded = decode3(file2);
   if ("reason" in decoded) return decoded;
   const source = file2.name;
@@ -36564,13 +36564,13 @@ function topicUnit(folder, file2, link, gated) {
   const content = body || description;
   if (content === "") return { source, reason: "no-text" };
   const flags = [];
-  const title = titleLine(link?.title || stringOf(front.name) || file2.name.slice(0, -".md".length).trim() || file2.name);
-  const summary = summaryOf(link?.hook || description || firstSentence(body) || title, flags);
+  const title = titleLine(link2?.title || stringOf(front.name) || file2.name.slice(0, -".md".length).trim() || file2.name);
+  const summary = summaryOf(link2?.hook || description || firstSentence(body) || title, flags);
   const stated = oneLine(WHY_RE.exec(body)?.[1] ?? "");
   if (stated === "") flags.push(description === "" ? "no-why" : "why-from-description");
   if (type === "") flags.push("no-type");
   else if (label === void 0) flags.push("unknown-type");
-  if (link === void 0) flags.push("not-in-index");
+  if (link2 === void 0) flags.push("not-in-index");
   if (lenient) flags.push("frontmatter-lenient");
   return {
     kind: "topic",
@@ -36639,15 +36639,15 @@ function readIndex(file2, topics, folder) {
   const take = (item) => {
     const source = `${INDEX} line ${item.line}`;
     const first = item.lines[0].replace(ITEM_RE, "").trim();
-    const link = linkOf(first);
-    if (link !== null && topics.has(link.target)) {
-      const seen = links.has(link.target);
+    const link2 = linkOf(first);
+    if (link2 !== null && topics.has(link2.target)) {
+      const seen = links.has(link2.target);
       notListItems += seen ? item.lines.length : item.lines.length - 1;
-      named.add(link.target);
+      named.add(link2.target);
       if (seen) return;
       const shape = secretShape(first);
       if (shape !== null) results.push({ source, reason: `secret (${shape})` });
-      else links.set(link.target, { title: link.title, hook: link.hook });
+      else links.set(link2.target, { title: link2.title, hook: link2.hook });
       return;
     }
     const lead = [first, ...item.lines.slice(1).map((line) => line.trim())].find((line) => line !== "");
@@ -36658,7 +36658,7 @@ function readIndex(file2, topics, folder) {
     const flags = [];
     const summary = summaryOf(lead, flags);
     flags.push("no-why", "no-type");
-    if (link !== null) flags.push("links-missing-file");
+    if (link2 !== null) flags.push("links-missing-file");
     const heading2 = item.heading === null ? [] : [`Under the heading: ${item.heading}`];
     results.push({
       kind: "bullet",
@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.24",
+  version: "0.4.25",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46027,7 +46027,7 @@ function expiredNotice(expired) {
 }
 function ignoredNotice(ignored) {
   if (ignored.length === 0) return "";
-  const links = ignored.map((link) => shownCut(link, 120));
+  const links = ignored.map((link2) => shownCut(link2, 120));
   return `${ignored.length} links ignored: ${listed2(links)}; fix them with update_memory.`;
 }
 var STATUS_TEXT = {
@@ -46714,10 +46714,13 @@ function writtenIds(proposal) {
 }
 
 // src/proposals.ts
+var import_yaml3 = __toESM(require_dist(), 1);
 import { randomUUID } from "node:crypto";
 var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat", "old-handoff"];
 var DECISIONS = ["reject", "keep-both", "accept"];
 var PROPOSAL_FORMAT = "1.2";
+var PROPOSAL_AREA = "proposals";
+var PROPOSAL_FILE_RE = /^(.+)\.(proposal|decision|apply)(?:\.\d+)?\.yaml$/;
 var InvalidProposalError = class extends StoreError {
 };
 var NoProposalError = class extends StoreError {
@@ -46759,7 +46762,7 @@ var decisionSchema = external_exports.strictObject({
   decided: external_exports.string().min(1)
 });
 var sameRest = (a, b) => a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision && a.shown === b.shown;
-var sameRests = (a, b) => a.length === b.length && a.every((rest) => b.some((other) => sameRest(rest, other)));
+var sameProposalRests = (a, b) => a.length === b.length && a.every((rest) => b.some((other) => sameRest(rest, other)));
 function decode4(schema, raw, record2) {
   const fields = isRecord3(raw) ? raw : {};
   const named = fields[record2 === "proposal" ? "id" : "proposal"];
@@ -46777,6 +46780,52 @@ function issuesOf(error62) {
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+function proposalRecordOf(draft, id) {
+  const record2 = {
+    formatVersion: PROPOSAL_FORMAT,
+    id,
+    kind: draft.kind,
+    rests: draft.rests,
+    created: draft.created,
+    ...draft.intent === void 0 ? {} : { intent: draft.intent }
+  };
+  const checked = proposalSchema.safeParse(record2);
+  if (!checked.success) throw new InvalidProposalError(`the proposal was not stored: ${issuesOf(checked.error)}`);
+  return record2;
+}
+function decisionRecordOf(proposal, decision, decided) {
+  const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: proposal.id, decision, rests: proposal.rests, decided };
+  const checked = decisionSchema.safeParse(record2);
+  if (!checked.success) throw new InvalidProposalError(`the answer was not recorded: ${issuesOf(checked.error)}`);
+  return record2;
+}
+function applyRecordOf(id, applied2) {
+  const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: id, applied: applied2 };
+  const checked = applySchema.safeParse(record2);
+  if (!checked.success) throw new InvalidProposalError(`the apply was not recorded: ${issuesOf(checked.error)}`);
+  return record2;
+}
+function proposalLoadOf(records) {
+  const load = { proposals: [], decisions: [], applies: [], problems: [] };
+  const read = records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
+  for (const one of read) {
+    if ("problem" in one) load.problems.push(one.problem);
+    else if (read.filter((other) => ("value" in other ? other.value.id : other.problem.proposal) === one.value.id).length > 1) {
+      load.problems.push({ record: "proposal", proposal: one.value.id, reason: "two records with one proposal id" });
+    } else load.proposals.push(one.value);
+  }
+  for (const raw of records.decisions) {
+    const one = decode4(decisionSchema, raw, "decision");
+    if ("problem" in one) load.problems.push(one.problem);
+    else load.decisions.push(one.value);
+  }
+  for (const raw of records.applies ?? []) {
+    const one = decode4(applySchema, raw, "apply");
+    if ("problem" in one) load.problems.push(one.problem);
+    else load.applies.push(one.value);
+  }
+  return load;
+}
 var MemoryProposalStore = class {
   records;
   newId;
@@ -46788,18 +46837,9 @@ var MemoryProposalStore = class {
     return this.read();
   }
   async create(draft) {
-    const record2 = {
-      formatVersion: PROPOSAL_FORMAT,
-      id: this.newId(),
-      kind: draft.kind,
-      rests: draft.rests,
-      created: draft.created,
-      ...draft.intent === void 0 ? {} : { intent: draft.intent }
-    };
-    const checked = proposalSchema.safeParse(record2);
-    if (!checked.success) throw new InvalidProposalError(`the proposal was not stored: ${issuesOf(checked.error)}`);
+    const record2 = proposalRecordOf(draft, this.newId());
     const { proposals } = this.read();
-    const equal = proposals.find((proposal) => proposal.kind === draft.kind && sameRests(proposal.rests, draft.rests));
+    const equal = proposals.find((proposal) => proposal.kind === draft.kind && sameProposalRests(proposal.rests, draft.rests));
     if (equal !== void 0) return { id: equal.id, created: false };
     if (this.records.proposals.some((raw) => isRecord3(raw) && raw.id === record2.id)) throw new InvalidProposalError(`the proposal was not stored: id ${record2.id} is taken`);
     this.records.proposals.push(structuredClone(record2));
@@ -46812,10 +46852,7 @@ var MemoryProposalStore = class {
     if (decisions.some((one) => one.proposal === id) || problems.some((one) => one.record === "decision" && one.proposal === id)) {
       throw new AlreadyDecidedError(`the proposal ${id} has an answer already; nothing was recorded`);
     }
-    const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: id, decision, rests: proposal.rests, decided };
-    const checked = decisionSchema.safeParse(record2);
-    if (!checked.success) throw new InvalidProposalError(`the answer was not recorded: ${issuesOf(checked.error)}`);
-    this.records.decisions.push(record2);
+    this.records.decisions.push(decisionRecordOf(proposal, decision, decided));
   }
   async markApplied(id, applied2) {
     const { proposals, applies, problems } = this.read();
@@ -46823,36 +46860,29 @@ var MemoryProposalStore = class {
     if (applies.some((one) => one.proposal === id) || problems.some((one) => one.record === "apply" && one.proposal === id)) {
       throw new AlreadyAppliedError(`the proposal ${id} was applied already; nothing was recorded`);
     }
-    const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: id, applied: applied2 };
-    const checked = applySchema.safeParse(record2);
-    if (!checked.success) throw new InvalidProposalError(`the apply was not recorded: ${issuesOf(checked.error)}`);
+    const record2 = applyRecordOf(id, applied2);
     const stored0 = this.records.applies;
     if (stored0 === void 0) this.records.applies = [record2];
     else stored0.push(record2);
   }
   /** Every record decoded, synchronously, so a check and its write have no await between them. */
   read() {
-    const load = { proposals: [], decisions: [], applies: [], problems: [] };
-    const read = this.records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
-    for (const one of read) {
-      if ("problem" in one) load.problems.push(one.problem);
-      else if (read.filter((other) => ("value" in other ? other.value.id : other.problem.proposal) === one.value.id).length > 1) {
-        load.problems.push({ record: "proposal", proposal: one.value.id, reason: "two records with one proposal id" });
-      } else load.proposals.push(one.value);
-    }
-    for (const raw of this.records.decisions) {
-      const one = decode4(decisionSchema, raw, "decision");
-      if ("problem" in one) load.problems.push(one.problem);
-      else load.decisions.push(one.value);
-    }
-    for (const raw of this.records.applies ?? []) {
-      const one = decode4(applySchema, raw, "apply");
-      if ("problem" in one) load.problems.push(one.problem);
-      else load.applies.push(one.value);
-    }
-    return load;
+    return proposalLoadOf(this.records);
   }
 };
+function proposalFileName(id, record2) {
+  return `${id}.${record2}.yaml`;
+}
+function serializeProposalFile(record2) {
+  return (0, import_yaml3.stringify)(record2);
+}
+function parseProposalFile(text) {
+  try {
+    return { raw: parseYaml(text) };
+  } catch (error62) {
+    return { problem: `invalid YAML: ${error62.message}` };
+  }
+}
 
 // src/instructions.ts
 var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save to it on your own initiative, without being asked, and keep it correct.
@@ -47576,7 +47606,7 @@ function createServer(deps) {
       updated: now().toISOString()
     };
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
-    const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link) => link.kind === kind2 && link.id === id));
+    const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
     const errors = validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories);
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
@@ -47599,7 +47629,7 @@ function createServer(deps) {
     const warnings = [
       ...bodyOnly ? ["The body changed but the summary did not; check that the summary still states the rule."] : [],
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
-      ...kept.map((link) => link.line)
+      ...kept.map((link2) => link2.line)
     ];
     return ok({ updated: { ...entryOf(memory), revision }, warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
   };
@@ -48412,9 +48442,9 @@ function message(error62) {
 }
 
 // src/store.ts
-import { createHash as createHash4, randomBytes } from "node:crypto";
+import { createHash as createHash4, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname as dirname2, join as join3, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -48475,6 +48505,10 @@ var FileStore = class {
     const result = { memories: [], problems: [] };
     for (const { scope, parts } of folders) await this.loadFolder(parts, { scope }, result);
     return result;
+  }
+  /** Runs a proposal step under the machine-local lock of that id, so a record write shares this root's locks (D8). */
+  proposalLock(id, run) {
+    return this.withLock(`proposal-${id}`, run);
   }
   /**
    * The keys of the folders under projects/ that are valid project keys, sorted; an empty folder counts. For the
@@ -49043,6 +49077,181 @@ var FileStore = class {
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
 };
+var FileProposalStore = class {
+  root;
+  newId;
+  lock;
+  /**
+   * lock runs a step under the id's lock. FileStore passes its own, so a proposal write shares the machine-local locks of
+   * the memory writes of the same root; an id never clashes with a memory's, whose name is a UUID, because a record's
+   * lock is `proposal-<id>`.
+   */
+  constructor(root2, lock, newId = randomUUID3) {
+    this.root = root2;
+    this.lock = lock;
+    this.newId = newId;
+  }
+  async list() {
+    return this.read();
+  }
+  /**
+   * Every record of the area, decoded by the one reader, with a proposal beside an unreadable record of its own id
+   * taken out: C9 reads such a record as unknown, never as absent, so the readable half is no proposal to answer
+   * either (contract PC10). One reader for list, decide and markApplied, so none of them can see a different store.
+   */
+  async read() {
+    const { records, problems: unreadable } = await this.readAll();
+    const load = proposalLoadOf(records);
+    const uncertain = new Set(unreadable.flatMap((problem) => problem.record === "proposal" && problem.proposal !== void 0 ? [problem.proposal] : []));
+    const proposals = load.proposals.filter((proposal) => !uncertain.has(proposal.id));
+    const twins = proposals.length === load.proposals.length ? [] : load.proposals.filter((proposal) => uncertain.has(proposal.id)).map((proposal) => ({ record: "proposal", proposal: proposal.id, reason: "this proposal has a second record that cannot be read; keep one" }));
+    return {
+      proposals,
+      decisions: load.decisions,
+      applies: load.applies,
+      problems: [...unreadable, ...twins, ...load.problems]
+    };
+  }
+  async create(draft) {
+    let record2 = proposalRecordOf(draft, this.newId());
+    for (; ; ) {
+      const id = record2.id;
+      let written;
+      await this.lock(areaLock(), async () => {
+        const { proposals } = await this.read();
+        const equal = proposals.find((proposal) => proposal.kind === draft.kind && sameProposalRests(proposal.rests, draft.rests));
+        if (equal !== void 0) {
+          written = { id: equal.id, created: false };
+          return;
+        }
+        if (await this.nameTaken(id, "proposal")) return;
+        try {
+          await this.write(this.pathOf(id, "proposal"), serializeProposalFile(record2));
+        } catch (error62) {
+          if (error62 instanceof RecordExistsError) return;
+          throw error62;
+        }
+        written = { id, created: true };
+      });
+      if (written !== void 0) return written;
+      record2 = proposalRecordOf(draft, this.newId());
+    }
+  }
+  async decide(id, decision, decided) {
+    await this.recordAnswer(
+      id,
+      "decision",
+      (proposal) => decisionRecordOf(proposal, decision, decided),
+      () => new AlreadyDecidedError(`the proposal ${id} has an answer already; nothing was recorded`)
+    );
+  }
+  async markApplied(id, applied2) {
+    await this.recordAnswer(id, "apply", () => applyRecordOf(id, applied2), () => new AlreadyAppliedError(`the proposal ${id} was applied already; nothing was recorded`));
+  }
+  /**
+   * Writes the one record of a proposal under its lock, refusing when one is there already. The proposal itself is
+   * checked inside the lock, so a record that cannot be read or of a newer format is no proposal to answer (contract PC8),
+   * and a twin of its id is none either (PC10).
+   */
+  async recordAnswer(id, record2, build, refuse) {
+    let refusal2;
+    await this.lock(lockName(id), async () => {
+      const { proposals } = await this.read();
+      const proposal = proposals.find((one) => one.id === id);
+      if (proposal === void 0) {
+        refusal2 = new NoProposalError(`no readable proposal has the id ${id}; nothing was recorded`);
+        return;
+      }
+      if (await this.nameTaken(id, record2)) {
+        refusal2 = refuse();
+        return;
+      }
+      try {
+        await this.write(this.pathOf(id, record2), serializeProposalFile(build(proposal)));
+      } catch (error62) {
+        if (error62 instanceof RecordExistsError) refusal2 = refuse();
+        else throw error62;
+      }
+    });
+    if (refusal2 !== void 0) throw refusal2;
+  }
+  /** Every record in the area, as the one decoder reads it; a name that is no record of it is skipped, never reported. */
+  async readAll() {
+    const records = { proposals: [], decisions: [], applies: [] };
+    const problems = [];
+    for (const name of await this.names()) {
+      const [, id, kind] = PROPOSAL_FILE_RE.exec(name) ?? [];
+      if (kind === void 0 || id === void 0) continue;
+      const record2 = kind;
+      let text;
+      try {
+        text = await readFile2(join3(this.root, PROPOSAL_AREA, name), "utf8");
+      } catch (error62) {
+        problems.push({ record: record2, proposal: id, reason: systemErrorCode(error62) ?? messageOf2(error62) });
+        continue;
+      }
+      const read = parseProposalFile(text);
+      if ("problem" in read) problems.push({ record: record2, proposal: id, reason: read.problem });
+      else records[kind === "proposal" ? "proposals" : kind === "decision" ? "decisions" : "applies"].push(read.raw);
+    }
+    return { records, problems };
+  }
+  /** The names in the area that could be a record, sorted; a missing area holds none, any other failure is the store's. */
+  async names() {
+    try {
+      return (await readdir2(join3(this.root, PROPOSAL_AREA))).filter((name) => PROPOSAL_FILE_RE.test(name)).sort();
+    } catch (error62) {
+      if (isNotFound(error62)) return [];
+      throw error62;
+    }
+  }
+  /** Whether a file of this id and kind is there, of any suffix: a twin is a problem, and a record never replaces one. */
+  async nameTaken(id, record2) {
+    const escape2 = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const taken = new RegExp(`^${escape2(proposalFileName(id, record2).slice(0, -".yaml".length))}(?:\\.\\d+)?\\.yaml$`);
+    return this.names().then((all) => all.some((name) => taken.test(name)));
+  }
+  pathOf(id, record2) {
+    return join3(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
+  }
+  /**
+   * Writes a new record file, create-only: made if the area is new, then written with the exclusive flag, which the
+   * filesystem itself refuses when the name is taken. A rename would replace silently, and the machine-local lock only
+   * orders this machine's writers, so on a synced folder two machines could otherwise both write one decision and the
+   * second would replace the first with no record of it (review finding 3). With the exclusive open the second writer
+   * fails, and its answer says a record is there already.
+   */
+  /**
+   * Writes a new record file, create-only and atomically. The text goes to a temp file first and is then hard-linked to
+   * its real name: the link is atomic, so a reader never sees a half-written record, and the filesystem refuses it when
+   * the name is taken (measured: the second link gives EEXIST). A rename would replace silently and the machine-local
+   * lock only orders this machine's writers, so on a synced folder two machines could both write one answer and the
+   * second would replace the first with no record of it; a plain exclusive write would close that gap but leave a
+   * truncated file behind if the writer died mid-write, which then reads as an answer for ever (review findings 3 and
+   * its re-review). Then the temp name is dropped, leaving the record's own link.
+   */
+  async write(path, text) {
+    await mkdir(dirname2(path), { recursive: true });
+    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    await writeFile(temp, text, "utf8");
+    try {
+      await link(temp, path);
+    } catch (error62) {
+      if (error62.code === "EEXIST") throw new RecordExistsError();
+      throw error62;
+    } finally {
+      await rm(temp, { force: true });
+    }
+  }
+};
+var RecordExistsError = class extends StoreError {
+};
+function lockName(id) {
+  return `proposal-${id}`;
+}
+function areaLock() {
+  return "proposal-area";
+}
 function assertLoadable(memory) {
   const problems = memoryProblems(memory);
   if (problems.length > 0) throw new StoreError(problems.join("; "));
@@ -49158,5 +49367,6 @@ if (move) {
     process.exit(1);
   }
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
-  await createServer({ store, places: store, session, autoMemory }).connect(new StdioServerTransport());
+  const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
+  await createServer({ store, places: store, session, autoMemory, proposals }).connect(new StdioServerTransport());
 }

@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.25 - 2026-11-02
+
+- The README now says what you can control about a memory, instead of leaving it to Claude:
+  - A new "When a memory loads" table lists all seven `delivery` values — `index`, `startup`, `prompt`, `question`,
+    `subagent`, `edit` and `on-demand` — with when Claude gets the memory and what it gets, and which of them cost you
+    every prompt rather than once a session.
+  - "What a memory holds" describes every field `save_memory` and `update_memory` take, including the ones the README
+    never mentioned: `expires`, `supersedes`, `overrides`, `overrideReason`, `importance` and `enforced`.
+  - "Finding a memory again" covers `search_memories` (its query, labels, `includeInactive`, and the report of memories
+    that exist but could not be read) and `list_labels`.
+- Under the hood, and nothing you see yet: the Dreamer's proposals, decisions and apply records are now kept in the
+  store, in a `proposals` folder beside `places`, so they outlive the session. Nothing creates a proposal in a live
+  session until the next story does, which is why this part changes nothing you can see.
+
 ## 0.4.24 - 2026-11-02
 
 - Fixed: a rule write now tells you, in the lines you confirm, when a rule's text will not arrive. Until now you only
