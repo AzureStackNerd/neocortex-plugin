@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.24 - 2026-11-02
+
+- Fixed: a rule write now tells you, in the lines you confirm, when a rule's text will not arrive. Until now you only
+  found out at the next session start, in a warning, and the rule was not in context until then.
+  - A line that ends with `, N characters` adds ` (more than one hook part holds, so it does not load)` when the rule's
+    block is larger than one hook part, or ` (here, the other rules at that moment leave no room, so it does not load
+    here)` when rules that sort before it, such as an enforced rule, take the room it needs.
+  - A rule the write pushes out of its moment gets a line of its own: `<id> "<title>" here: this write leaves it no
+    room at the prompt and question moments, so its text does not load there`. A newer rule sorts before an older one
+    of the same rank, so this is the usual case: save a second `prompt` rule of 6,000 characters beside a first one,
+    and the first one is named. At most five are named; the rest are counted in one line.
+  - Both are judged in the project you are in; another project may have more or less room. Nothing is refused: the
+    write goes through when you confirm it.
+
 ## 0.4.23 - 2026-11-02
 
 - Fixed: `dream_report`'s `indexBudget` and its `plans` no longer recommend different sets of memories to move. The

@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.23",
+  version: "0.4.24",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45773,18 +45773,18 @@ ${line}`}`;
   const short = memories.map((m) => indexLine(m, true));
   const shortenableIndexes = partCount === 1 ? [] : memories.flatMap((m, i) => shortenable(m, full[i], short[i]) ? [i] : []).reverse();
   const fillWith = (whereNotices) => {
-    const roomOf = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? whereNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
+    const roomOf2 = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? whereNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
     const fill = (count2) => {
       const cut = new Set(shortenableIndexes.slice(0, count2));
       const parts = [[]];
-      let room = roomOf(1);
+      let room = roomOf2(1);
       let unshown = 0;
       let shortened = 0;
       for (const [i, whole2] of full.entries()) {
         const line2 = cut.has(i) ? short[i] : whole2;
         while (unshown === 0 && line2.length + 1 > room && parts.length < partCount) {
           parts.push([]);
-          room = roomOf(parts.length);
+          room = roomOf2(parts.length);
         }
         if (unshown > 0 || line2.length + 1 > room) {
           unshown += 1;
@@ -45848,12 +45848,42 @@ function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
 function fullParts(kinds, active, byId, budgets, options = {}) {
   const broken = brokenWarning(kinds, options.problems ?? []);
   const rooms = budgets.map((budget, i) => i > 0 || broken === "" ? budget : Math.max(0, budget - broken.length - 2));
-  const { parts, notFit } = fullText(kinds, active, byId, rooms, options.priority ?? kinds);
-  return { parts: parts.map((text, i) => i === 0 ? [broken, text].filter((t) => t !== "").join("\n\n") : text), notFit };
+  const { parts, notFit, kept } = fullText(kinds, active, byId, rooms, options.priority ?? kinds);
+  return { parts: parts.map((text, i) => i === 0 ? [broken, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat() };
+}
+var MOMENT_FILLS = {
+  startup: { kinds: ["startup"], budgets: FULL_PART_BUDGETS },
+  prompt: { kinds: ["prompt"], budgets: [HOOK_CAP] },
+  question: { kinds: ["question", "prompt"], budgets: [HOOK_CAP], priority: ["prompt", "question"] },
+  subagent: { kinds: ["subagent"], budgets: [HOOK_CAP] },
+  edit: { kinds: ["edit"], budgets: [HOOK_CAP] }
+};
+var FILL_MOMENTS = Object.keys(MOMENT_FILLS);
+function deliveredAt(moment, active, byId, problems) {
+  const { kinds, budgets, priority } = MOMENT_FILLS[moment];
+  return fullParts(kinds, active, byId, budgets, { problems, ...priority === void 0 ? {} : { priority } }).placed;
+}
+function pushedOut(before, after, problems, skip) {
+  const moments = /* @__PURE__ */ new Map();
+  for (const moment of FILL_MOMENTS) {
+    const was = deliveredAt(moment, before.active, before.byId, problems).map((m) => m.id);
+    if (was.length === 0) continue;
+    const now = new Set(deliveredAt(moment, after.active, after.byId, problems).map((m) => m.id));
+    for (const id of was) if (!now.has(id) && !skip.has(id)) moments.set(id, [...moments.get(id) ?? [], moment]);
+  }
+  return after.active.flatMap((memory) => {
+    const at = moments.get(memory.id);
+    return at === void 0 ? [] : [{ memory, moments: at }];
+  });
+}
+function standingAt(memory, active, byId, problems = []) {
+  if (memory.delivery === "index" || memory.delivery === "on-demand" || !active.includes(memory)) return "loads";
+  if (loadedText(memory, byId).length > HOOK_CAP) return "too-long";
+  return deliveredAt(memory.delivery, active, byId, problems).includes(memory) ? "loads" : "no-room";
 }
 function fullText(kinds, active, byId, rooms, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
-  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0 };
+  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0, kept: rooms.map(() => []) };
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
   const blocks = chosen.map((m) => ({ memory: m, text: loadedText(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
@@ -45898,7 +45928,7 @@ function fullText(kinds, active, byId, rooms, priority) {
     const lastLine = later.length > 0 ? [laterLine(later, p + 2, kept.length)] : [];
     return [...p === 0 ? [...warning, ...heading === null ? [] : [heading]] : [], ...memories.map((m) => textOf.get(m) ?? ""), ...lastLine].join("\n\n");
   });
-  return { parts, notFit: skipped.length };
+  return { parts, notFit: skipped.length, kept };
 }
 function namedInWarning(memory) {
   return `"${shownCut(memory.title, 40)}" (${shortId(memory.id)})`;
@@ -46976,9 +47006,14 @@ var RuleGuard = class {
     const today = this.today();
     const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, today);
     hidersCheck(write.kind, loaded.problems, before, after, effect.days, this.session, today);
-    const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null);
+    const { standing, pushed } = roomOf(write, effect, before, after, this.session, today, loaded.problems);
+    const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null, standing, pushed);
     const carry = textToCarry(write, effect);
-    const rules = (/* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), ...effect.writtenRule === null ? [] : [effect.writtenRule]])).size;
+    const rules = (/* @__PURE__ */ new Set([
+      ...effect.changes.map((change) => change.id),
+      ...effect.writtenRule === null ? [] : [effect.writtenRule],
+      ...pushed.map((one) => one.memory.id)
+    ])).size;
     const short = refusedAs === void 0 ? { error: RULE_TEXT.tooLong(write.kind, rules), tool } : { error: RULE_TEXT.tooLong(write.kind, rules, refusedAs), tool };
     if (confirmation === null) {
       if (changesRules(effect)) {
@@ -47038,10 +47073,37 @@ function textToCarry(write, effect) {
 }
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
 var SWAP_MARK = " (another record of this memory)";
-function affectsOf(effect, before, after, created) {
+var STANDING_TEXT = {
+  // True in every place: no part of any moment holds more than one hook's cap.
+  "too-long": " (more than one hook part holds, so it does not load)",
+  // Judged in this session's place only, so it says "here" also on a line folded into "here and in other places".
+  "no-room": " (here, the other rules at that moment leave no room, so it does not load here)"
+};
+function roomOf(write, effect, before, after, session, today, problems) {
+  const was = resolve4(before, session, today);
+  const will = resolve4(after, session, today);
+  const own2 = /* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), write.kind === "remove" ? write.base.memory.id : write.memory.id]);
+  return { standing: (memory) => standingAt(memory, will.active, will.byId, problems), pushed: pushedOut(was, will, problems, own2) };
+}
+var PUSHED_NAMED = 5;
+var momentWords = (moments) => moments.length === 1 ? `the ${moments[0]} moment` : `the ${moments.slice(0, -1).join(", ")} and ${moments.at(-1)} moments`;
+function pushedLine(who, moments) {
+  return `${who} here: this write leaves it no room at ${momentWords(moments)}, so its text does not load there`;
+}
+function pushedRestLine(count2, moments) {
+  const [rules, them, their] = count2 === 1 ? ["rule", "it", "its"] : ["rules", "them", "their"];
+  return `${count2} more ${rules} here: this write leaves ${them} no room at ${momentWords(moments)}, so ${their} text does not load there`;
+}
+function affectsOf(effect, before, after, created, standing, pushed = []) {
   const beforeById = new Map(before.map((m) => [m.id, m]));
   const afterById = new Map(after.map((m) => [m.id, m]));
-  const size = (id) => `, ${loadedText(afterById.get(id), afterById).length} characters`;
+  const reaches = /* @__PURE__ */ new Map();
+  const size = (id) => {
+    const memory = afterById.get(id);
+    if (standing !== void 0 && !reaches.has(id)) reaches.set(id, standing(memory));
+    const state = reaches.get(id) ?? "loads";
+    return `, ${loadedText(memory, afterById).length} characters${state === "loads" ? "" : STANDING_TEXT[state]}`;
+  };
   const marked = (id) => {
     const versions = [before, after].flatMap((memories) => memories.filter((m) => m.id === id));
     return versions.length > 0 && versions.every((m) => m.enforced);
@@ -47066,6 +47128,9 @@ function affectsOf(effect, before, after, created) {
     const shown2 = afterById.get(written) ?? beforeById.get(written);
     lines.push(written === created ? `${who(written, shown2)}: saved; it does not load` : `${who(written, shown2)}: changed; its loading does not change${size(written)}`);
   }
+  for (const { memory, moments } of pushed.slice(0, PUSHED_NAMED)) lines.push(pushedLine(who(memory.id, memory), moments));
+  const rest = pushed.slice(PUSHED_NAMED);
+  if (rest.length > 0) lines.push(pushedRestLine(rest.length, FILL_MOMENTS.filter((moment) => rest.some((one) => one.moments.includes(moment)))));
   return lines.sort();
 }
 function loadingText(days, loads) {
