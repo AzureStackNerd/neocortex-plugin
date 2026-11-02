@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.22 - 2026-11-02
+
+- Added: the Dreamer works out its own clean-up proposals now, without a model: near-identical duplicates, expired
+  memories, links to a memory that no longer exists, and an older handoff. Each waits for your answer in
+  `dream_proposals` and an `accept` carries it out as before. Nothing proposes yet in a session: the store the server
+  keeps is in memory and stays empty until the Dreamer's next stories run the finder.
+- Changed: a handoff counts as old only against another handoff of its own name, so a project with two live
+  workstreams keeps a handoff for each instead of counting the second as dead weight. `dream_report`'s count changes
+  with it.
+- Fixed: a proposal closed because the record of an earlier apply of it could not be read used to disappear from
+  `dream_proposals` without a count. It is counted under `closed` now, and the answer says what that means.
+- Fixed: an answer recorded by an earlier version still reads after a format change. The answer record no longer names
+  one version, so a later one cannot silently make every earlier answer unreadable.
+
 ## 0.4.21 - 2026-11-02
 
 - Added: `dream_decide` takes `accept`, which writes the clean-up the proposal describes instead of only recording the

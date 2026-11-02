@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.21",
+  version: "0.4.22",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46288,11 +46288,20 @@ function deadOf(resolution, present) {
   const olderHandoffs = /* @__PURE__ */ new Set();
   const handoffs = resolution.active.filter((m) => carriesLabel(m, HANDOFF_LABEL)).sort((x, y) => compareText2(y.updated, x.updated) || compareText2(x.id, y.id));
   for (const memory of handoffs) {
-    const scope = scopeId(memory.scope);
-    if (newest.has(scope)) olderHandoffs.add(memory.id);
-    else newest.add(scope);
+    const key = handoffKey(memory);
+    if (newest.has(key)) olderHandoffs.add(memory.id);
+    else newest.add(key);
   }
   return { expired: new Set(resolution.expired.map((m) => m.id)), dangling, olderHandoffs };
+}
+var HANDOFF_TITLE_RE = /^handoff:\s*(\S.*)$/i;
+function handoffName(memory) {
+  const named = HANDOFF_TITLE_RE.exec(memory.title.trim());
+  return named === null ? null : named[1].trim();
+}
+function handoffKey(memory) {
+  const name = handoffName(memory);
+  return name === null ? `${scopeId(memory.scope)} ${memory.id}` : `${scopeId(memory.scope)} ${name}`;
 }
 function countsOf(dead) {
   return { expired: dead.expired.size, danglingLinks: dead.dangling.size, olderHandoffs: dead.olderHandoffs.size };
@@ -46599,9 +46608,14 @@ function planApply(proposal, records, context) {
     return { steps: retired === null ? [] : [retired] };
   }
   if (intent.act === "drop-link") {
-    const dropped = (memory) => !memory.supersedes.includes(intent.target) && !memory.overrides.includes(intent.target);
+    const dropped = (memory) => intent.targets.every((target) => !memory.supersedes.includes(target) && !memory.overrides.includes(target));
     const held = stepOf(intent.record, dropped, (base) => {
-      const memory = { ...base.memory, supersedes: withoutTarget(base.memory.supersedes, intent.target), overrides: withoutTarget(base.memory.overrides, intent.target), updated: stamp };
+      const memory = {
+        ...base.memory,
+        supersedes: withoutTargets(base.memory.supersedes, intent.targets),
+        overrides: withoutTargets(base.memory.overrides, intent.targets),
+        updated: stamp
+      };
       return { kind: "update", memory, base };
     });
     if (held !== null && "reason" in held) return { refusal: held };
@@ -46615,8 +46629,8 @@ function recordId(record2) {
 function addTarget(targets, target) {
   return targets.includes(target) ? [...targets] : [...targets, target];
 }
-function withoutTarget(targets, target) {
-  return targets.filter((one) => one !== target);
+function withoutTargets(targets, dropped) {
+  return targets.filter((one) => !dropped.includes(one));
 }
 function idsOf2(proposal) {
   const intent = proposal.intent;
@@ -46653,9 +46667,9 @@ function writtenIds(proposal) {
 
 // src/proposals.ts
 import { randomUUID } from "node:crypto";
-var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat"];
+var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat", "old-handoff"];
 var DECISIONS = ["reject", "keep-both", "accept"];
-var PROPOSAL_FORMAT = "1.1";
+var PROPOSAL_FORMAT = "1.2";
 var InvalidProposalError = class extends StoreError {
 };
 var NoProposalError = class extends StoreError {
@@ -46673,7 +46687,11 @@ var restsSchema = external_exports.array(restSchema).refine((rests) => rests.som
 var intentSchema = external_exports.discriminatedUnion("act", [
   external_exports.strictObject({ act: external_exports.literal("supersede"), survivor: external_exports.string().regex(UUID_RE), retired: external_exports.string().regex(UUID_RE) }),
   external_exports.strictObject({ act: external_exports.literal("retire"), retired: external_exports.string().regex(UUID_RE) }),
-  external_exports.strictObject({ act: external_exports.literal("drop-link"), record: external_exports.string().regex(UUID_RE), target: external_exports.string().regex(UUID_RE) })
+  external_exports.strictObject({
+    act: external_exports.literal("drop-link"),
+    record: external_exports.string().regex(UUID_RE),
+    targets: external_exports.array(external_exports.string().regex(UUID_RE)).min(1, "a drop-link names at least one target").refine((targets) => new Set(targets).size === targets.length, "a drop-link names each target once")
+  })
 ]);
 var proposalSchema = external_exports.strictObject({
   formatVersion: external_exports.union([external_exports.literal("1.0"), external_exports.literal(PROPOSAL_FORMAT)]),
@@ -46684,7 +46702,14 @@ var proposalSchema = external_exports.strictObject({
   intent: intentSchema.optional()
 });
 var applySchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), applied: external_exports.string().min(1) });
-var decisionSchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), decision: external_exports.enum(DECISIONS), rests: restsSchema, decided: external_exports.string().min(1) });
+var earlierFormat = external_exports.string().refine(isFormatVersion, 'formatVersion: must be a quoted "major.minor" string such as "1.1"');
+var decisionSchema = external_exports.strictObject({
+  formatVersion: earlierFormat,
+  proposal: external_exports.string().min(1),
+  decision: external_exports.enum(DECISIONS),
+  rests: restsSchema,
+  decided: external_exports.string().min(1)
+});
 var sameRest = (a, b) => a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision && a.shown === b.shown;
 var sameRests = (a, b) => a.length === b.length && a.every((rest) => b.some((other) => sameRest(rest, other)));
 function decode4(schema, raw, record2) {
@@ -47149,7 +47174,7 @@ var NEAR_TEXT = {
 };
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
-var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, or the record of an earlier answer to them, could not be read, and of proposal records that could not be read. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
 var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, keep-both, or accept. reject and keep-both change no memory. accept writes the clean-up the proposal describes, through the same guard as every other write, so a memory it changes that is a rule needs dream_decide_rule, which the user confirms in a prompt. Nothing is written when a memory it shows changed since the proposal was made. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
@@ -47183,7 +47208,7 @@ var PROPOSAL_TEXT = {
   stepBusy: (id) => `memory ${id} is being written by another session, so this write was not made; try again, and call dream_decide with accept and the same id to finish it`,
   /** What the second write of a supersede leaves behind when it is refused: the first one stands. */
   halfway: (written, refused) => `memory ${shortId(written)} was changed, and then the change to memory ${shortId(refused)} was refused, so the proposal is accepted and not fully applied; tell the user what did and did not change, and call dream_decide with accept and the same id to finish it`,
-  next: (memoryClosed, answerClosed, notRead) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers; record the user's answer with dream_decide and the proposal's id." + (memoryClosed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (answerClosed ? " Tell the user that some proposals here are closed because the record of an earlier answer to them could not be read or was written by a newer NeoCortex; for a newer one, update NeoCortex on this machine." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
+  next: (memoryClosed, answerClosed, notRead, appliedClosed = false) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers; record the user's answer with dream_decide and the proposal's id." + (memoryClosed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (answerClosed ? " Tell the user that some proposals here are closed because the record of an earlier answer to them could not be read or was written by a newer NeoCortex; for a newer one, update NeoCortex on this machine." : "") + (appliedClosed ? " Tell the user that some proposals here are closed because the record of an earlier apply of them could not be read or was written by a newer NeoCortex, so whether their changes ran is unknown; for a newer one, update NeoCortex on this machine." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
 };
 var SEARCH_LIMIT = 50;
 var LABEL_TEXT = {
@@ -47632,8 +47657,15 @@ function createServer(deps) {
     () => guarded(async () => {
       const { judged, notRead } = judgeAll(await listed3(), await seen());
       const closedFor = (...closures) => judged.filter((one) => one.state === "closed" && closures.includes(one.closure)).length;
-      const closed = { unreadable: closedFor("unreadable", "answerUnreadable"), newerFormat: closedFor("newerFormat", "answerNewer") };
-      const anyClosed = closed.unreadable + closed.newerFormat > 0;
+      const appliedUnreadable = closedFor("appliedUnreadable");
+      const appliedNewer = closedFor("appliedNewer");
+      const closed = {
+        unreadable: closedFor("unreadable", "answerUnreadable"),
+        newerFormat: closedFor("newerFormat", "answerNewer"),
+        ...appliedUnreadable > 0 ? { appliedUnreadable } : {},
+        ...appliedNewer > 0 ? { appliedNewer } : {}
+      };
+      const anyClosed = closed.unreadable + closed.newerFormat + appliedUnreadable + appliedNewer > 0;
       const anyNotRead = notRead.unreadable + notRead.newerFormat > 0;
       const waiting = judged.flatMap((one) => one.state === "waiting" ? [one] : []);
       const unfinished = judged.flatMap((one) => one.state === "accepted" ? [one.id] : []);
@@ -47647,7 +47679,7 @@ function createServer(deps) {
         ...unfinished.length > 0 ? { unfinished } : {},
         ...anyClosed ? { closed } : {},
         ...anyNotRead ? { notRead } : {},
-        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`)
+        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead, appliedUnreadable + appliedNewer > 0) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`)
       });
     })
   );
