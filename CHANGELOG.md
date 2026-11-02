@@ -2,6 +2,21 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.21 - 2026-11-02
+
+- Added: `dream_decide` takes `accept`, which writes the clean-up the proposal describes instead of only recording the
+  answer. Each write goes through the same rule guard as `update_memory` and `delete_memory`, in the order the proposal
+  states, and a write that fails stops the rest: the answer stays recorded, `dream_proposals` lists that proposal's id
+  under `unfinished`, and the same accept again finishes what is left and changes nothing already done. A plan that
+  cannot start at all -- a memory changed, moved or deleted since the proposal was made, one that cannot be read, an id
+  with two records, a link `update_memory` would refuse, or a memory this session may not write -- is answered before
+  anything is written, so the proposal stays open for you to read and refuse.
+- Added: the tool `dream_decide_rule`, the confirmed twin of `dream_decide` for an accept whose writes change which
+  rules load. Claude Code asks you in its own prompt on every call of it, and an accept that would change a rule through
+  `dream_decide` is refused and names this tool instead.
+- Not changed, deliberately: nothing creates proposals yet. The store the server keeps is in memory and stays empty
+  until the Dreamer's next stories add the finder's proposals, so you see no proposal to accept yet.
+
 ## 0.4.20 - 2026-11-01
 
 - Changed: a session's load reads 8 records at a time instead of one. On a memory folder a sync tool keeps current,

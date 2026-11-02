@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.20",
+  version: "0.4.21",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46501,23 +46501,35 @@ function fillPlanned(input2, place, cap, rewrites, moves) {
 function judge(proposal, load, seen) {
   const shown2 = proposal.rests.filter((rest) => rest.shown);
   if (!shown2.every((rest) => seen.visible.some((scope) => sameScope(scope, rest.scope)))) return { state: "not-here" };
+  const answer = load.problems.find((problem) => problem.record === "decision" && problem.proposal === proposal.id);
+  if (answer !== void 0) return { state: "closed", id: proposal.id, closure: answer.newerFormat !== void 0 ? "answerNewer" : "answerUnreadable" };
+  const decision = load.decisions.find((one) => one.proposal === proposal.id);
+  const appliedProblem = load.problems.find((problem) => problem.record === "apply" && problem.proposal === proposal.id);
+  if (appliedProblem !== void 0) return { state: "closed", id: proposal.id, closure: appliedProblem.newerFormat !== void 0 ? "appliedNewer" : "appliedUnreadable" };
+  if (decision !== void 0 && load.applies.some((one) => one.proposal === proposal.id)) return { state: "applied", id: proposal.id };
+  const later = load.proposals.find((other) => other.kind === proposal.kind && sameShown(other, proposal) && isLater(other, proposal));
+  if (later !== void 0) return { state: "closed", id: proposal.id, closure: "replaced" };
+  if (decision !== void 0 && decision.decision !== "accept") return { state: "decided", id: proposal.id };
   const memories = [];
   for (const rest of shown2) {
     const found = seen.loaded.memories.find((stored) => stored.memory.id === rest.id && sameScope(stored.memory.scope, rest.scope));
-    if (found !== void 0 && found.revision !== rest.revision) return { state: "closed", id: proposal.id, closure: "changed" };
+    if (found !== void 0 && found.revision !== rest.revision) {
+      if (decision !== void 0) break;
+      return { state: "closed", id: proposal.id, closure: "changed" };
+    }
     if (found !== void 0) {
       memories.push(found);
       continue;
     }
     const problem = seen.loaded.problems.find((one) => problemNames(one, rest.id));
-    if (problem !== void 0) return { state: "closed", id: proposal.id, closure: problem.newerFormat !== void 0 ? "newerFormat" : "unreadable" };
+    if (problem !== void 0) {
+      if (decision !== void 0) break;
+      return { state: "closed", id: proposal.id, closure: problem.newerFormat !== void 0 ? "newerFormat" : "unreadable" };
+    }
+    if (decision !== void 0) break;
     return { state: "closed", id: proposal.id, closure: "gone" };
   }
-  const later = load.proposals.find((other) => other.kind === proposal.kind && sameShown(other, proposal) && isLater(other, proposal));
-  if (later !== void 0) return { state: "closed", id: proposal.id, closure: "replaced" };
-  const answer = load.problems.find((problem) => problem.record === "decision" && problem.proposal === proposal.id);
-  if (answer !== void 0) return { state: "closed", id: proposal.id, closure: answer.newerFormat !== void 0 ? "answerNewer" : "answerUnreadable" };
-  if (load.decisions.some((decision) => decision.proposal === proposal.id)) return { state: "decided", id: proposal.id };
+  if (decision !== void 0) return { state: "accepted", id: proposal.id };
   return { state: "waiting", id: proposal.id, kind: proposal.kind, shown: memories, others: proposal.rests.length - shown2.length };
 }
 function judgeAll(load, seen) {
@@ -46541,16 +46553,116 @@ function isLater(a, b) {
   return a.created > b.created || a.created === b.created && a.id > b.id;
 }
 
+// src/dream/apply.ts
+function planApply(proposal, records, context) {
+  const intent = proposal.intent;
+  if (intent === void 0) return { refusal: { reason: "no-intent" } };
+  const { visible, stamp } = context;
+  for (const id of idsOf2(proposal)) {
+    if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
+  }
+  const recordOf = (id) => records.find((one) => recordId(one) === id);
+  const restOf = (id) => proposal.rests.find((rest) => rest.id === id);
+  const written = new Set(proposal.intent === void 0 ? [] : writtenIds(proposal));
+  for (const rest of proposal.rests) {
+    if (written.has(rest.id)) continue;
+    const record2 = recordOf(rest.id);
+    if (record2 === void 0) return { refusal: { reason: "moved", id: rest.id } };
+    if ("problem" in record2) return { refusal: { reason: "unreadable", id: rest.id } };
+    if (record2.stored.revision !== rest.revision) return { refusal: { reason: "moved", id: rest.id } };
+  }
+  const stepOf = (id, done, write, retire = false) => {
+    const record2 = recordOf(id);
+    if (record2 === void 0) return retire ? null : { reason: "moved", id };
+    if ("problem" in record2) return { reason: "unreadable", id };
+    if (done(record2.stored.memory)) return null;
+    if (!visible.some((scope) => sameScope(scope, record2.scope))) return { reason: "elsewhere", id };
+    const rest = restOf(id);
+    if (rest === void 0) return { reason: "unchecked", id };
+    return record2.stored.revision === rest.revision ? write(record2.stored) : { reason: "moved", id };
+  };
+  const stillHere = () => false;
+  if (intent.act === "supersede") {
+    const survivor = stepOf(intent.survivor, (memory) => memory.supersedes.includes(intent.retired), (base) => ({
+      kind: "update",
+      memory: { ...base.memory, supersedes: addTarget(base.memory.supersedes, intent.retired), updated: stamp },
+      base
+    }));
+    if (survivor !== null && "reason" in survivor) return { refusal: survivor };
+    const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
+    if (retired !== null && "reason" in retired) return { refusal: retired };
+    return { steps: [survivor, retired].flatMap((one) => one === null ? [] : [one]) };
+  }
+  if (intent.act === "retire") {
+    const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
+    if (retired !== null && "reason" in retired) return { refusal: retired };
+    return { steps: retired === null ? [] : [retired] };
+  }
+  if (intent.act === "drop-link") {
+    const dropped = (memory) => !memory.supersedes.includes(intent.target) && !memory.overrides.includes(intent.target);
+    const held = stepOf(intent.record, dropped, (base) => {
+      const memory = { ...base.memory, supersedes: withoutTarget(base.memory.supersedes, intent.target), overrides: withoutTarget(base.memory.overrides, intent.target), updated: stamp };
+      return { kind: "update", memory, base };
+    });
+    if (held !== null && "reason" in held) return { refusal: held };
+    return { steps: held === null ? [] : [held] };
+  }
+  return { refusal: { reason: "no-intent" } };
+}
+function recordId(record2) {
+  return "stored" in record2 ? record2.stored.memory.id : record2.problem.id;
+}
+function addTarget(targets, target) {
+  return targets.includes(target) ? [...targets] : [...targets, target];
+}
+function withoutTarget(targets, target) {
+  return targets.filter((one) => one !== target);
+}
+function idsOf2(proposal) {
+  const intent = proposal.intent;
+  const rests = proposal.rests.map((rest) => rest.id);
+  if (intent === void 0) return rests;
+  switch (intent.act) {
+    case "supersede":
+      return unique([intent.survivor, intent.retired, ...rests]);
+    case "retire":
+      return unique([intent.retired, ...rests]);
+    case "drop-link":
+      return unique([intent.record, ...rests]);
+    default:
+      return rests;
+  }
+}
+function unique(ids) {
+  return [...new Set(ids)];
+}
+function writtenIds(proposal) {
+  const intent = proposal.intent;
+  if (intent === void 0) return [];
+  switch (intent.act) {
+    case "supersede":
+      return [intent.survivor, intent.retired];
+    case "retire":
+      return [intent.retired];
+    case "drop-link":
+      return [intent.record];
+    default:
+      return [];
+  }
+}
+
 // src/proposals.ts
 import { randomUUID } from "node:crypto";
 var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat"];
-var DECISIONS = ["reject", "keep-both"];
-var PROPOSAL_FORMAT = "1.0";
+var DECISIONS = ["reject", "keep-both", "accept"];
+var PROPOSAL_FORMAT = "1.1";
 var InvalidProposalError = class extends StoreError {
 };
 var NoProposalError = class extends StoreError {
 };
 var AlreadyDecidedError = class extends StoreError {
+};
+var AlreadyAppliedError = class extends StoreError {
 };
 var scopeSchema = external_exports.discriminatedUnion("kind", [
   external_exports.strictObject({ kind: external_exports.literal("user") }),
@@ -46558,7 +46670,20 @@ var scopeSchema = external_exports.discriminatedUnion("kind", [
 ]);
 var restSchema = external_exports.strictObject({ scope: scopeSchema, id: external_exports.string().regex(UUID_RE), revision: external_exports.string().min(1), shown: external_exports.boolean() });
 var restsSchema = external_exports.array(restSchema).refine((rests) => rests.some((rest) => rest.shown), "a proposal shows at least one memory").refine((rests) => rests.every((rest, i) => rests.findIndex((other) => other.id === rest.id && sameScope(other.scope, rest.scope)) === i), "two rests of one memory");
-var proposalSchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), id: external_exports.string().min(1), kind: external_exports.enum(PROPOSAL_KINDS), rests: restsSchema, created: external_exports.string().min(1) });
+var intentSchema = external_exports.discriminatedUnion("act", [
+  external_exports.strictObject({ act: external_exports.literal("supersede"), survivor: external_exports.string().regex(UUID_RE), retired: external_exports.string().regex(UUID_RE) }),
+  external_exports.strictObject({ act: external_exports.literal("retire"), retired: external_exports.string().regex(UUID_RE) }),
+  external_exports.strictObject({ act: external_exports.literal("drop-link"), record: external_exports.string().regex(UUID_RE), target: external_exports.string().regex(UUID_RE) })
+]);
+var proposalSchema = external_exports.strictObject({
+  formatVersion: external_exports.union([external_exports.literal("1.0"), external_exports.literal(PROPOSAL_FORMAT)]),
+  id: external_exports.string().min(1),
+  kind: external_exports.enum(PROPOSAL_KINDS),
+  rests: restsSchema,
+  created: external_exports.string().min(1),
+  intent: intentSchema.optional()
+});
+var applySchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), applied: external_exports.string().min(1) });
 var decisionSchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), decision: external_exports.enum(DECISIONS), rests: restsSchema, decided: external_exports.string().min(1) });
 var sameRest = (a, b) => a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision && a.shown === b.shown;
 var sameRests = (a, b) => a.length === b.length && a.every((rest) => b.some((other) => sameRest(rest, other)));
@@ -46582,7 +46707,7 @@ function isRecord3(value) {
 var MemoryProposalStore = class {
   records;
   newId;
-  constructor(records = { proposals: [], decisions: [] }, newId = randomUUID) {
+  constructor(records = { proposals: [], decisions: [], applies: [] }, newId = randomUUID) {
     this.records = records;
     this.newId = newId;
   }
@@ -46590,7 +46715,14 @@ var MemoryProposalStore = class {
     return this.read();
   }
   async create(draft) {
-    const record2 = { formatVersion: PROPOSAL_FORMAT, id: this.newId(), kind: draft.kind, rests: draft.rests, created: draft.created };
+    const record2 = {
+      formatVersion: PROPOSAL_FORMAT,
+      id: this.newId(),
+      kind: draft.kind,
+      rests: draft.rests,
+      created: draft.created,
+      ...draft.intent === void 0 ? {} : { intent: draft.intent }
+    };
     const checked = proposalSchema.safeParse(record2);
     if (!checked.success) throw new InvalidProposalError(`the proposal was not stored: ${issuesOf(checked.error)}`);
     const { proposals } = this.read();
@@ -46612,9 +46744,22 @@ var MemoryProposalStore = class {
     if (!checked.success) throw new InvalidProposalError(`the answer was not recorded: ${issuesOf(checked.error)}`);
     this.records.decisions.push(record2);
   }
+  async markApplied(id, applied2) {
+    const { proposals, applies, problems } = this.read();
+    if (!proposals.some((one) => one.id === id)) throw new NoProposalError(`no readable proposal has the id ${id}; nothing was recorded`);
+    if (applies.some((one) => one.proposal === id) || problems.some((one) => one.record === "apply" && one.proposal === id)) {
+      throw new AlreadyAppliedError(`the proposal ${id} was applied already; nothing was recorded`);
+    }
+    const record2 = { formatVersion: PROPOSAL_FORMAT, proposal: id, applied: applied2 };
+    const checked = applySchema.safeParse(record2);
+    if (!checked.success) throw new InvalidProposalError(`the apply was not recorded: ${issuesOf(checked.error)}`);
+    const stored0 = this.records.applies;
+    if (stored0 === void 0) this.records.applies = [record2];
+    else stored0.push(record2);
+  }
   /** Every record decoded, synchronously, so a check and its write have no await between them. */
   read() {
-    const load = { proposals: [], decisions: [], problems: [] };
+    const load = { proposals: [], decisions: [], applies: [], problems: [] };
     const read = this.records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
     for (const one of read) {
       if ("problem" in one) load.problems.push(one.problem);
@@ -46626,6 +46771,11 @@ var MemoryProposalStore = class {
       const one = decode4(decisionSchema, raw, "decision");
       if ("problem" in one) load.problems.push(one.problem);
       else load.decisions.push(one.value);
+    }
+    for (const raw of this.records.applies ?? []) {
+      const one = decode4(applySchema, raw, "apply");
+      if ("problem" in one) load.problems.push(one.problem);
+      else load.applies.push(one.value);
     }
     return load;
   }
@@ -46676,11 +46826,15 @@ var RuleRefusedError = class extends Error {
 var DONE = { create: "saved", update: "changed", remove: "deleted" };
 var carryWords = (carry) => `plus ${carry.length === 1 ? carry[0] : `${carry.slice(0, -1).join(", ")} and ${carry.at(-1)}`} with the text that is to load (get_memory gives the stored text)`;
 var RULE_TEXT = {
-  needsRuleTool: (kind, carry) => `Nothing was ${DONE[kind]}: this call changes which rules load, and only the user can approve that. A rule is a memory that is enforced, or delivered at ${RULE_DELIVERY_WORDS}. If the user asked for this change, call ${RULE_TOOL[kind]} with the same arguments${carry.length === 0 ? "" : `, ${carryWords(carry)},`} and affects exactly as listed; the user confirms it in a prompt.`,
-  needsText: (carry) => `Nothing was changed: this change makes text load, and the user sees that text in the prompt only when the call carries it. Call update_rule again with the same arguments, ${carryWords(carry)}, and affects exactly as listed.`,
+  /**
+   * tool is the confirmed tool named in the refusal: save_rule, update_rule or delete_rule by default, and the twin of
+   * another writer that has one, dream_decide_rule (#397). Only the tool name varies; every other word is the guard's.
+   */
+  needsRuleTool: (kind, carry, tool = RULE_TOOL[kind]) => `Nothing was ${DONE[kind]}: this call changes which rules load, and only the user can approve that. A rule is a memory that is enforced, or delivered at ${RULE_DELIVERY_WORDS}. If the user asked for this change, call ${tool} with the same arguments${carry.length === 0 ? "" : `, ${carryWords(carry)},`} and affects exactly as listed; the user confirms it in a prompt.`,
+  needsText: (carry, tool = RULE_TOOL.update) => `Nothing was changed: this change makes text load, and the user sees that text in the prompt only when the call carries it. Call ${tool} again with the same arguments, ${carryWords(carry)}, and affects exactly as listed.`,
   noRule: (kind) => `Nothing was ${DONE[kind]}: this call changes no rule, so it needs no confirmation. Call ${TWIN_TOOL[kind]} with the same arguments, without affects.`,
-  mismatch: (kind) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${RULE_TOOL[kind]} again with affects exactly as listed.`,
-  tooLong: (kind, rules) => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller update_rule calls, each with the affects its own refusal lists.`,
+  mismatch: (kind, tool = RULE_TOOL[kind]) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${tool} again with affects exactly as listed.`,
+  tooLong: (kind, rules, tool = "update_rule") => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller ${tool} calls, each with the affects its own refusal lists.`,
   /**
    * A write that depends on a record the store could not read (spec 4.6, C9). It names no rule tool: no prompt can
    * show what such a record would load. A problem without text is one whose text itself could not be read (C7).
@@ -46728,7 +46882,7 @@ var KeepOneError = class extends Error {
   }
 };
 function readerOf(store2) {
-  return { location: store2.location, load: (scopes) => store2.load(scopes), scopes: () => store2.scopes() };
+  return { location: store2.location, load: (scopes) => store2.load(scopes), scopes: () => store2.scopes(), recordsOf: (id) => store2.recordsOf(id) };
 }
 var RuleGuard = class {
   store;
@@ -46741,7 +46895,7 @@ var RuleGuard = class {
     this.session = session;
     this.today = today;
   }
-  async write(write, confirmation) {
+  async write(write, confirmation, refusedAs) {
     if (write.kind !== "remove") {
       const problems = memoryProblems(write.memory);
       if (problems.length > 0) throw new StoreError(problems.join("; "));
@@ -46759,15 +46913,19 @@ var RuleGuard = class {
       takeover = takeoverOf(base, others, this.session);
     }
     if (confirmation === null && cannotChangeRules(write, others)) return this.perform(write);
-    const checked = this.queue.then(() => this.checked(write, confirmation, takeover));
+    const checked = this.queue.then(() => this.checked(write, confirmation, takeover, refusedAs));
     this.queue = checked.then(
       () => void 0,
       () => void 0
     );
     return checked;
   }
-  /** takeover: the record of a deleted user record's id in this session's project, which loads here after the delete (G-c). */
-  async checked(write, confirmation, takeover) {
+  /**
+   * takeover: the record of a deleted user record's id in this session's project, which loads here after the delete
+   * (G-c). refusedAs: the confirmed tool a refusal names, when the caller has a twin of its own (#397).
+   */
+  async checked(write, confirmation, takeover, refusedAs) {
+    const tool = refusedAs ?? RULE_TOOL[write.kind];
     const loaded = await this.store.load(visibleScopes(this.session));
     if (write.kind !== "create") baseCheck(write.kind, write.base, loaded);
     const before = loaded.memories.map((stored) => stored.memory);
@@ -46778,10 +46936,10 @@ var RuleGuard = class {
     const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null);
     const carry = textToCarry(write, effect);
     const rules = (/* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), ...effect.writtenRule === null ? [] : [effect.writtenRule]])).size;
-    const short = { error: RULE_TEXT.tooLong(write.kind, rules), tool: RULE_TOOL[write.kind] };
+    const short = refusedAs === void 0 ? { error: RULE_TEXT.tooLong(write.kind, rules), tool } : { error: RULE_TEXT.tooLong(write.kind, rules, refusedAs), tool };
     if (confirmation === null) {
       if (changesRules(effect)) {
-        const answer = { error: RULE_TEXT.needsRuleTool(write.kind, carry), tool: RULE_TOOL[write.kind], ...carry.length > 0 ? { carry } : {}, affects };
+        const answer = { error: RULE_TEXT.needsRuleTool(write.kind, carry, tool), tool, ...carry.length > 0 ? { carry } : {}, affects };
         throw new RuleRefusedError(answer, short);
       }
       return this.perform(write);
@@ -46789,10 +46947,10 @@ var RuleGuard = class {
     if (!changesRules(effect)) throw new RuleRefusedError({ error: RULE_TEXT.noRule(write.kind), tool: TWIN_TOOL[write.kind] });
     const carried = confirmation.carried ?? [];
     if (carry.some((field) => !carried.includes(field))) {
-      throw new RuleRefusedError({ error: RULE_TEXT.needsText(carry), tool: RULE_TOOL[write.kind], carry, affects }, short);
+      throw new RuleRefusedError({ error: RULE_TEXT.needsText(carry, tool), tool, carry, affects }, short);
     }
     if (!sameLines(affects, confirmation.affects)) {
-      throw new RuleRefusedError({ error: RULE_TEXT.mismatch(write.kind), tool: RULE_TOOL[write.kind], affects }, short);
+      throw new RuleRefusedError({ error: RULE_TEXT.mismatch(write.kind, tool), tool, affects }, short);
     }
     return this.perform(write);
   }
@@ -46992,7 +47150,9 @@ var NEAR_TEXT = {
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, or the record of an earlier answer to them, could not be read, and of proposal records that could not be read. It changes nothing.";
-var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, or keep-both. Neither changes a memory. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
+var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
+var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
+var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, keep-both, or accept. reject and keep-both change no memory. accept writes the clean-up the proposal describes, through the same guard as every other write, so a memory it changes that is a rule needs dream_decide_rule, which the user confirms in a prompt. Nothing is written when a memory it shows changed since the proposal was made. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
   failed: (code) => `the proposals could not be read or written${code === void 0 ? "" : ` (${code})`}; try again, and tell the user if it keeps failing`,
   none: "no proposal with that id waits here; call dream_proposals for the ones that do",
@@ -47004,8 +47164,25 @@ var PROPOSAL_TEXT = {
     unreadable: "a memory this proposal shows could not be read; it is closed and nothing was recorded; the index names the record to repair",
     newerFormat: "a memory this proposal shows was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded",
     answerUnreadable: "the record of an earlier answer to this proposal could not be read, so it stays closed; nothing was recorded; tell the user",
-    answerNewer: "the record of an earlier answer to this proposal was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded"
+    answerNewer: "the record of an earlier answer to this proposal was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded",
+    appliedUnreadable: "the record of an earlier apply of this proposal could not be read, so it stays closed; nothing was recorded; tell the user",
+    appliedNewer: "the record of an earlier apply of this proposal was written by a newer NeoCortex; update NeoCortex on this machine; nothing was recorded"
   },
+  /** Why an accept wrote nothing (#397, design-dreamer 3 (m), (b), (d), (g)); each names what the user can do next. */
+  refused: {
+    "no-intent": () => "this proposal carries no writes, so accepting it does nothing; nothing was written",
+    moved: (id) => `memory ${shortId(id)} changed, moved or was deleted since this proposal was made, and nothing was written; show the user what changed and let the next proposal show it on its new text`,
+    unreadable: (id) => `memory ${shortId(id)} cannot be read, so nothing was written; the index names the record to repair, and the proposal can be accepted again after that`,
+    elsewhere: (id) => `memory ${shortId(id)} is not in this session's scopes, so nothing was written; a proposal is applied where its memories show`,
+    "two-records": (id) => `memory ${shortId(id)} has more than one record, so this change was refused; ask the user which record to keep, then accept the proposal again`,
+    unchecked: (id) => `memory ${shortId(id)} is not a memory this proposal rests on, so nothing was written; tell the user`
+  },
+  /** What dream_proposals adds to its next step while a proposal is accepted and its writes have not all run (#397). */
+  unfinished: (count2) => `${count2} ${count2 === 1 ? "proposal is" : "proposals are"} accepted and not applied: its writes were refused or did not all run. Call dream_decide again with accept and the id, for each id under unfinished: it finishes what is left and changes nothing already done. Tell the user which one is unfinished and why, when the refusal said so.`,
+  /** A write of an accept that met a record another session holds: the design's busy answer (C6, #387). */
+  stepBusy: (id) => `memory ${id} is being written by another session, so this write was not made; try again, and call dream_decide with accept and the same id to finish it`,
+  /** What the second write of a supersede leaves behind when it is refused: the first one stands. */
+  halfway: (written, refused) => `memory ${shortId(written)} was changed, and then the change to memory ${shortId(refused)} was refused, so the proposal is accepted and not fully applied; tell the user what did and did not change, and call dream_decide with accept and the same id to finish it`,
   next: (memoryClosed, answerClosed, notRead) => "Show the user each waiting proposal: its kind and the memories it shows; read a memory with get_memory before you describe it. Nothing changes until the user answers; record the user's answer with dream_decide and the proposal's id." + (memoryClosed ? " Tell the user that some proposals here are closed because a memory they show could not be read or was written by a newer NeoCortex; the index names those records." : "") + (answerClosed ? " Tell the user that some proposals here are closed because the record of an earlier answer to them could not be read or was written by a newer NeoCortex; for a newer one, update NeoCortex on this machine." : "") + (notRead ? " Tell the user how many proposal records could not be read (notRead); for a newer one, update NeoCortex on this machine." : "")
 };
 var SEARCH_LIMIT = 50;
@@ -47095,6 +47272,96 @@ function createServer(deps) {
       const known = error62 instanceof NoProposalError || error62 instanceof AlreadyDecidedError;
       throw known ? error62 : new StoreError(PROPOSAL_TEXT.failed(systemErrorCode(error62)));
     }
+  };
+  const markedApplied = async (id) => {
+    try {
+      await proposals.markApplied(id, now().toISOString());
+    } catch (error62) {
+      if (error62 instanceof AlreadyAppliedError) return;
+      throw new StoreError(PROPOSAL_TEXT.failed(systemErrorCode(error62)));
+    }
+  };
+  const applyAccepted = async (proposal, plan, confirmation) => {
+    if (plan.refusal !== void 0 || plan.stop !== void 0) throw new StoreError(PROPOSAL_TEXT.failed(void 0));
+    const written = [];
+    for (const step of plan.steps) {
+      try {
+        await writeStep(step, confirmation);
+      } catch (error62) {
+        const id = step.kind === "update" ? step.memory.id : step.base.memory.id;
+        if (error62 instanceof StoreBusyError) return fail(halfwayOrRefused(written, PROPOSAL_TEXT.stepBusy(shortId(id)), step, proposal));
+        const rule = ruleAnswer(error62);
+        if (rule !== void 0) {
+          if (written.length === 0) return rule;
+          const answer = JSON.parse(rule.content[0].text);
+          return fail(`${answer.error} ${PROPOSAL_TEXT.halfway(written[0], id)}`);
+        }
+        const refused = refusal(step.kind === "update" ? "update" : "delete", error62, step.kind === "update" ? step.memory : step.base.memory);
+        if (refused !== void 0) return fail(halfwayOrRefused(written, refused, step, proposal));
+        if (written.length > 0) throw new StoreError(`${message(error62)} ${PROPOSAL_TEXT.halfway(written[0], id)}`);
+        throw error62;
+      }
+      written.push(step.kind === "update" ? step.memory.id : step.base.memory.id);
+    }
+    await markedApplied(proposal.id);
+    return void 0;
+  };
+  const writeStep = async (step, confirmation) => {
+    if (confirmation === null) return void await guard.write(step, null, "dream_decide_rule");
+    try {
+      await guard.write(step, null, "dream_decide_rule");
+    } catch (error62) {
+      if (!(error62 instanceof RuleRefusedError) || error62.answer.tool !== "dream_decide_rule") throw error62;
+      await guard.write(step, confirmation, "dream_decide_rule");
+    }
+  };
+  const halfwayOrRefused = (written, refused, step, proposal) => {
+    if (written.length === 0) return refused;
+    const first = written[0];
+    const second = step.kind === "update" ? step.memory.id : step.base.memory.id;
+    return `${refused} ${PROPOSAL_TEXT.halfway(first, second)} (proposal ${proposal.id})`;
+  };
+  const decideCall = async (args2, confirmation) => {
+    const loaded = await listed3();
+    const { judged } = judgeAll(loaded, await seen());
+    const found = judged.flatMap((one) => one.state === "not-here" ? [] : [one]).find((one) => one.id === args2.id);
+    if (found === void 0) return fail(PROPOSAL_TEXT.none);
+    if (found.state === "decided") return fail(PROPOSAL_TEXT.decided);
+    if (found.state === "closed") return fail(PROPOSAL_TEXT.closed[found.closure]);
+    if (found.state === "accepted" && args2.decision !== "accept") return fail(PROPOSAL_TEXT.decided);
+    const proposal = loaded.proposals.find((one) => one.id === found.id);
+    if (proposal === void 0) return fail(PROPOSAL_TEXT.none);
+    if (found.state === "applied") return fail(PROPOSAL_TEXT.decided);
+    const plan = args2.decision === "accept" ? await planOfAccept(proposal) : void 0;
+    if (plan?.stop !== void 0) return fail(plan.stop);
+    if (plan?.refusal !== void 0) return fail(refusalText(plan.refusal));
+    if (found.state !== "accepted") {
+      try {
+        await recorded(found.id, args2.decision);
+      } catch (error62) {
+        if (error62 instanceof AlreadyDecidedError) return fail(PROPOSAL_TEXT.decided);
+        if (error62 instanceof NoProposalError) return fail(PROPOSAL_TEXT.none);
+        throw error62;
+      }
+    }
+    if (args2.decision !== "accept") return ok({ decided: { id: found.id, decision: args2.decision } });
+    const outcome = plan === void 0 ? void 0 : await applyAccepted(proposal, plan, confirmation);
+    return outcome !== void 0 ? outcome : ok({ decided: { id: found.id, decision: args2.decision, applied: true } });
+  };
+  const refusalText = (stop) => {
+    const { reason } = stop;
+    return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "");
+  };
+  const planOfAccept = async (proposal) => {
+    const ids = idsOf2(proposal);
+    const records = (await Promise.all(ids.map((id) => reader.recordsOf(id)))).flat();
+    const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString() });
+    if (plan.refusal !== void 0) return plan;
+    const loaded = await reader.load(visibleScopes(deps.session));
+    const existing = loaded.memories.map((stored) => stored.memory);
+    const steps = plan.steps ?? [];
+    const errors = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
+    return errors.length === 0 ? { steps } : { stop: errors.join("; ") };
   };
   const waitingNotice = async (view) => {
     try {
@@ -47369,6 +47636,7 @@ function createServer(deps) {
       const anyClosed = closed.unreadable + closed.newerFormat > 0;
       const anyNotRead = notRead.unreadable + notRead.newerFormat > 0;
       const waiting = judged.flatMap((one) => one.state === "waiting" ? [one] : []);
+      const unfinished = judged.flatMap((one) => one.state === "accepted" ? [one.id] : []);
       return ok({
         waiting: waiting.map((one) => ({
           id: one.id,
@@ -47376,9 +47644,10 @@ function createServer(deps) {
           shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
           ...one.others > 0 ? { others: one.others } : {}
         })),
+        ...unfinished.length > 0 ? { unfinished } : {},
         ...anyClosed ? { closed } : {},
         ...anyNotRead ? { notRead } : {},
-        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead)
+        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`)
       });
     })
   );
@@ -47388,25 +47657,21 @@ function createServer(deps) {
       title: "Record the user's answer to a Dreamer's proposal",
       description: DECIDE_DESCRIPTION,
       inputSchema: {
-        id: external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting"),
-        decision: external_exports.enum(DECISIONS).describe("reject, or keep-both; neither changes a memory")
+        id: DECIDE_ID,
+        decision: DECIDE_ANSWER
       }
     },
-    ({ id, decision }) => guarded(async () => {
-      const { judged } = judgeAll(await listed3(), await seen());
-      const found = judged.flatMap((one) => one.state === "not-here" ? [] : [one]).find((one) => one.id === id);
-      if (found === void 0) return fail(PROPOSAL_TEXT.none);
-      if (found.state === "decided") return fail(PROPOSAL_TEXT.decided);
-      if (found.state === "closed") return fail(PROPOSAL_TEXT.closed[found.closure]);
-      try {
-        await recorded(found.id, decision);
-      } catch (error62) {
-        if (error62 instanceof AlreadyDecidedError) return fail(PROPOSAL_TEXT.decided);
-        if (error62 instanceof NoProposalError) return fail(PROPOSAL_TEXT.none);
-        throw error62;
-      }
-      return ok({ decided: { id: found.id, decision } });
-    })
+    ({ id, decision }) => guarded(() => decideCall({ id, decision }, null))
+  );
+  server.registerTool(
+    "dream_decide_rule",
+    {
+      title: "Apply a Dreamer's proposal after the user confirmed a rule change",
+      description: "Accept a Dreamer proposal whose writes change which rules load, after dream_decide refused it for exactly that reason. The user confirms every call in a prompt. Pass the arguments of that dream_decide call and affects exactly as its refusal listed; call it only for a change the user asked for.",
+      inputSchema: { affects: AFFECTS, id: DECIDE_ID, decision: DECIDE_ANSWER },
+      _meta: CONFIRMED
+    },
+    ({ affects, id, decision }) => guarded(() => decideCall({ id, decision }, { affects }))
   );
   server.registerTool(
     "set_context_labels",
@@ -48089,8 +48354,8 @@ var FileStore = class {
     return this.root;
   }
   async load(scopes) {
-    const unique = [...new Map(scopes.map((scope) => [scopeId(scope), scope])).values()].sort(canonicalOrder);
-    const folders = unique.map((scope) => ({ scope, parts: foldersOf(scope) }));
+    const unique2 = [...new Map(scopes.map((scope) => [scopeId(scope), scope])).values()].sort(canonicalOrder);
+    const folders = unique2.map((scope) => ({ scope, parts: foldersOf(scope) }));
     await this.assertRoot();
     const result = { memories: [], problems: [] };
     for (const { scope, parts } of folders) await this.loadFolder(parts, { scope }, result);

@@ -156,7 +156,9 @@ The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_mem
 `set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`,
 `dream_report`, which shows how optimized NeoCortex is for this place and changes nothing, `dream_proposals`, which
 lists the Dreamer's proposals that wait in this session and changes nothing, `dream_decide`, which records the user's
-answer to one of them and changes no memory, and `hook_context`, which is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
+answer to one of them -- reject and keep-both change no memory, accept writes the clean-up the proposal describes --
+`dream_decide_rule`, its confirmed twin for an accept whose writes change which rules load, and `hook_context`, which
+is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
 memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule
 a tool of the plugin is `mcp__plugin_neocortex_neocortex__<tool>`, and `mcp__plugin_neocortex_neocortex__*` matches
