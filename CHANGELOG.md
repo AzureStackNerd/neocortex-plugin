@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.26 - 2026-11-03
+
+- The Dreamer now proposes on its own, at most once a week: on the first prompt of a session, when its last run is more
+  than 7 days old -- or sooner, after a run that failed or was interrupted, since those are never waited out -- the
+  server starts one run in the background after the answer to that prompt is composed, so the hook never waits on it.
+  The run reads this session's own memories, makes the deterministic proposals for near-identical duplicates, expired
+  memories, dead links and old handoffs, and stores them; it writes no memory, only proposals and one run record in
+  `dream/run.yaml` beside `proposals/`. It has 5,000 ms of wall clock and keeps what it made when that runs out, and
+  `dream_report` now shows the last run and where a budget stop stopped. Two sessions on one machine cannot both claim
+  the run, and a run that dies leaves the next session free to try again. Still nothing across projects: repeats need
+  D6.
+
 ## 0.4.25 - 2026-11-02
 
 - The README now says what you can control about a memory, instead of leaving it to Claude:

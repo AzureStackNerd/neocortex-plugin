@@ -213,7 +213,9 @@ Set it for your user account, so it also holds for updates in later sessions: on
 
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
 `set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`,
-`dream_report`, which shows how optimized NeoCortex is for this place and changes nothing, `dream_proposals`, which
+`dream_report`, which shows how optimized NeoCortex is for this place and changes nothing -- and since the Dreamer
+proposes on its own, at most once a week, on the first prompt of a session, it also shows that last run and where a time
+budget stopped it -- `dream_proposals`, which
 lists the Dreamer's proposals that wait in this session and changes nothing, `dream_decide`, which records the user's
 answer to one of them -- reject and keep-both change no memory, accept writes the clean-up the proposal describes --
 `dream_decide_rule`, its confirmed twin for an accept whose writes change which rules load, and `hook_context`, which

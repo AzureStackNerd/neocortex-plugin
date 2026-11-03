@@ -1509,7 +1509,7 @@ var require_stringify = __commonJS({
         props.push(doc.directives.tagString(tag));
       return props.join(" ");
     }
-    function stringify4(item, ctx, onComment, onChompKeep) {
+    function stringify5(item, ctx, onComment, onChompKeep) {
       if (identity.isPair(item))
         return item.toString(ctx, onComment, onChompKeep);
       if (identity.isAlias(item)) {
@@ -1538,7 +1538,7 @@ var require_stringify = __commonJS({
 ${ctx.indent}${str}`;
     }
     exports.createStringifyContext = createStringifyContext;
-    exports.stringify = stringify4;
+    exports.stringify = stringify5;
   }
 });
 
@@ -1548,7 +1548,7 @@ var require_stringifyPair = __commonJS({
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
-    var stringify4 = require_stringify();
+    var stringify5 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
       const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
@@ -1570,7 +1570,7 @@ var require_stringifyPair = __commonJS({
       });
       let keyCommentDone = false;
       let chompKeep = false;
-      let str = stringify4.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
+      let str = stringify5.stringify(key, ctx, () => keyCommentDone = true, () => chompKeep = true);
       if (!explicitKey && !ctx.inFlow && str.length > 1024) {
         if (simpleKeys)
           throw new Error("With simple keys, single line scalar must not span more than 1024 characters");
@@ -1622,7 +1622,7 @@ ${indent}:`;
         ctx.indent = ctx.indent.substring(2);
       }
       let valueCommentDone = false;
-      const valueStr = stringify4.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
+      const valueStr = stringify5.stringify(value, ctx, () => valueCommentDone = true, () => chompKeep = true);
       let ws = " ";
       if (keyComment || vsb || vcb) {
         ws = vsb ? "\n" : "";
@@ -1763,7 +1763,7 @@ var require_addPairToJSMap = __commonJS({
     "use strict";
     var log = require_log();
     var merge2 = require_merge();
-    var stringify4 = require_stringify();
+    var stringify5 = require_stringify();
     var identity = require_identity();
     var toJS = require_toJS();
     function addPairToJSMap(ctx, map2, { key, value }) {
@@ -1799,7 +1799,7 @@ var require_addPairToJSMap = __commonJS({
       if (typeof jsKey !== "object")
         return String(jsKey);
       if (identity.isNode(key) && ctx?.doc) {
-        const strCtx = stringify4.createStringifyContext(ctx.doc, {});
+        const strCtx = stringify5.createStringifyContext(ctx.doc, {});
         strCtx.anchors = /* @__PURE__ */ new Set();
         for (const node2 of ctx.anchors.keys())
           strCtx.anchors.add(node2.anchor);
@@ -1866,12 +1866,12 @@ var require_stringifyCollection = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyCollection.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify4 = require_stringify();
+    var stringify5 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyCollection(collection, ctx, options) {
       const flow = ctx.inFlow ?? collection.flow;
-      const stringify5 = flow ? stringifyFlowCollection : stringifyBlockCollection;
-      return stringify5(collection, ctx, options);
+      const stringify6 = flow ? stringifyFlowCollection : stringifyBlockCollection;
+      return stringify6(collection, ctx, options);
     }
     function stringifyBlockCollection({ comment, items }, ctx, { blockItemPrefix, flowChars, itemIndent, onChompKeep, onComment }) {
       const { indent, options: { commentString } } = ctx;
@@ -1896,7 +1896,7 @@ var require_stringifyCollection = __commonJS({
           }
         }
         chompKeep = false;
-        let str2 = stringify4.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
+        let str2 = stringify5.stringify(item, itemCtx, () => comment2 = null, () => chompKeep = true);
         if (comment2)
           str2 += stringifyComment.lineComment(str2, itemIndent, commentString(comment2));
         if (chompKeep && comment2)
@@ -1963,7 +1963,7 @@ ${indent}${line}` : "\n";
         }
         if (comment)
           reqNewline = true;
-        let str = stringify4.stringify(item, itemCtx, () => comment = null);
+        let str = stringify5.stringify(item, itemCtx, () => comment = null);
         reqNewline || (reqNewline = lines.length > linesAtValue || str.includes("\n"));
         if (i < items.length - 1) {
           str += ",";
@@ -3324,7 +3324,7 @@ var require_stringifyDocument = __commonJS({
   "node_modules/yaml/dist/stringify/stringifyDocument.js"(exports) {
     "use strict";
     var identity = require_identity();
-    var stringify4 = require_stringify();
+    var stringify5 = require_stringify();
     var stringifyComment = require_stringifyComment();
     function stringifyDocument(doc, options) {
       const lines = [];
@@ -3339,7 +3339,7 @@ var require_stringifyDocument = __commonJS({
       }
       if (hasDirectives)
         lines.push("---");
-      const ctx = stringify4.createStringifyContext(doc, options);
+      const ctx = stringify5.createStringifyContext(doc, options);
       const { commentString } = ctx.options;
       if (doc.commentBefore) {
         if (lines.length !== 1)
@@ -3361,7 +3361,7 @@ var require_stringifyDocument = __commonJS({
           contentComment = doc.contents.comment;
         }
         const onChompKeep = contentComment ? void 0 : () => chompKeep = true;
-        let body = stringify4.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
+        let body = stringify5.stringify(doc.contents, ctx, () => contentComment = null, onChompKeep);
         if (contentComment)
           body += stringifyComment.lineComment(body, "", commentString(contentComment));
         if ((body[0] === "|" || body[0] === ">") && lines[lines.length - 1] === "---") {
@@ -3369,7 +3369,7 @@ var require_stringifyDocument = __commonJS({
         } else
           lines.push(body);
       } else {
-        lines.push(stringify4.stringify(doc.contents, ctx));
+        lines.push(stringify5.stringify(doc.contents, ctx));
       }
       if (doc.directives?.docEnd) {
         if (doc.comment) {
@@ -5505,7 +5505,7 @@ var require_cst_scalar = __commonJS({
 var require_cst_stringify = __commonJS({
   "node_modules/yaml/dist/parse/cst-stringify.js"(exports) {
     "use strict";
-    var stringify4 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
+    var stringify5 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
       switch (token.type) {
         case "block-scalar": {
@@ -5558,7 +5558,7 @@ var require_cst_stringify = __commonJS({
         res += stringifyToken(value);
       return res;
     }
-    exports.stringify = stringify4;
+    exports.stringify = stringify5;
   }
 });
 
@@ -7288,7 +7288,7 @@ var require_public_api = __commonJS({
       }
       return doc.toJS(Object.assign({ reviver: _reviver }, options));
     }
-    function stringify4(value, replacer, options) {
+    function stringify5(value, replacer, options) {
       let _replacer = null;
       if (typeof replacer === "function" || Array.isArray(replacer)) {
         _replacer = replacer;
@@ -7313,7 +7313,7 @@ var require_public_api = __commonJS({
     exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
-    exports.stringify = stringify4;
+    exports.stringify = stringify5;
   }
 });
 
@@ -7497,10 +7497,10 @@ var require_code = __commonJS({
     function interpolate(x) {
       return typeof x == "number" || typeof x == "boolean" || x === null ? x : safeStringify(Array.isArray(x) ? x.join(",") : x);
     }
-    function stringify4(x) {
+    function stringify5(x) {
       return new _Code(safeStringify(x));
     }
-    exports.stringify = stringify4;
+    exports.stringify = stringify5;
     function safeStringify(x) {
       return JSON.stringify(x).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
     }
@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.25",
+  version: "0.4.26",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45574,6 +45574,7 @@ function wordSimilarity(left, right) {
   return either === 0 ? 0 : shared / either;
 }
 var NEAR_DUPLICATE_MIN = 0.5;
+var NEAR_IDENTICAL_MIN = 0.8;
 var WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
 var STOP_WORDS = /* @__PURE__ */ new Set([
   "a",
@@ -46215,6 +46216,21 @@ function placeMeasures(input2, place) {
 function nearPairs(active) {
   return pairsIn(active, wordCache(), () => true);
 }
+function deadDetail(resolution, problems) {
+  const dead = deadOf(resolution, idsOf([...resolution.byId.keys()], problems));
+  const byId = resolution.byId;
+  const links = /* @__PURE__ */ new Map();
+  for (const key of dead.dangling) {
+    const [id, target] = key.split(" ");
+    links.set(id, [...links.get(id) ?? [], target]);
+  }
+  const memory = (id) => byId.get(id);
+  return {
+    expired: resolution.expired.filter((m) => dead.expired.has(m.id)),
+    dangling: [...links.keys()].sort(compareText2).map((id) => ({ memory: memory(id), targets: (links.get(id) ?? []).sort(compareText2) })),
+    olderHandoffs: resolution.active.filter((m) => dead.olderHandoffs.has(m.id)).sort((a, b) => compareText2(a.id, b.id))
+  };
+}
 function deadWeight(resolution, problems) {
   return countsOf(deadOf(resolution, idsOf([...resolution.byId.keys()], problems)));
 }
@@ -46618,18 +46634,18 @@ function planApply(proposal, records, context) {
   for (const id of idsOf2(proposal)) {
     if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
   }
-  const recordOf = (id) => records.find((one) => recordId(one) === id);
+  const recordOf2 = (id) => records.find((one) => recordId(one) === id);
   const restOf = (id) => proposal.rests.find((rest) => rest.id === id);
   const written = new Set(proposal.intent === void 0 ? [] : writtenIds(proposal));
   for (const rest of proposal.rests) {
     if (written.has(rest.id)) continue;
-    const record2 = recordOf(rest.id);
+    const record2 = recordOf2(rest.id);
     if (record2 === void 0) return { refusal: { reason: "moved", id: rest.id } };
     if ("problem" in record2) return { refusal: { reason: "unreadable", id: rest.id } };
     if (record2.stored.revision !== rest.revision) return { refusal: { reason: "moved", id: rest.id } };
   }
   const stepOf = (id, done, write, retire = false) => {
-    const record2 = recordOf(id);
+    const record2 = recordOf2(id);
     if (record2 === void 0) return retire ? null : { reason: "moved", id };
     if ("problem" in record2) return { reason: "unreadable", id };
     if (done(record2.stored.memory)) return null;
@@ -46710,6 +46726,133 @@ function writtenIds(proposal) {
       return [intent.record];
     default:
       return [];
+  }
+}
+
+// src/dream/propose.ts
+function propose(input2) {
+  const shown2 = /* @__PURE__ */ new Map();
+  for (const one of input2.memories) shown2.set(one.stored.memory.id, one);
+  const restOf = (memory) => {
+    const one = shown2.get(memory.id);
+    return { scope: memory.scope, id: memory.id, revision: one.stored.revision, shown: one.visible };
+  };
+  const visibleOf = (memory) => shown2.get(memory.id)?.visible === true;
+  const draftOf = (kind, intent, rests) => rests.some((rest) => rest.shown) ? { kind, rests, created: input2.created, intent } : null;
+  const drafts = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (draft) => {
+    if (draft === null) return;
+    const key = `${draft.kind} ${restKey(draft.rests)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    drafts.push(draft);
+  };
+  const claimed = /* @__PURE__ */ new Set();
+  const claim2 = (kind, intent, rests, ids) => {
+    const draft = draftOf(kind, intent, rests);
+    if (draft === null) return;
+    for (const id of ids) claimed.add(id);
+    push(draft);
+  };
+  const retire = (kind, one) => claim2(kind, { act: "retire", retired: one.id }, [restOf(one)], [one.id]);
+  for (const one of input2.dead.expired) retire("expired", one);
+  for (const one of input2.dead.olderHandoffs) retire("old-handoff", one);
+  for (const pair of input2.pairs) {
+    if (pair.score < NEAR_IDENTICAL_MIN) continue;
+    if (claimed.has(pair.a.id) || claimed.has(pair.b.id)) continue;
+    const [survivor, retired] = newerOf(pair.a, pair.b);
+    if (survivor.scope.kind === retired.scope.kind) {
+      claim2("duplicate", { act: "supersede", survivor: survivor.id, retired: retired.id }, [restOf(survivor), restOf(retired)], [survivor.id, retired.id]);
+    } else {
+      const copy = survivor.scope.kind === "project" ? survivor : retired;
+      claim2("duplicate", { act: "retire", retired: copy.id }, [restOf(copy)], [copy.id]);
+    }
+  }
+  for (const { memory, targets } of input2.dead.dangling) {
+    if (claimed.has(memory.id)) continue;
+    claim2("dead-link", { act: "drop-link", record: memory.id, targets }, [restOf(memory)], [memory.id]);
+  }
+  const counted = (memories) => memories.filter((memory) => !visibleOf(memory)).length;
+  return {
+    drafts,
+    unseen: {
+      duplicates: input2.pairs.filter((pair) => pair.score >= NEAR_IDENTICAL_MIN && (!visibleOf(pair.a) || !visibleOf(pair.b))).length,
+      expired: counted(input2.dead.expired),
+      dangling: counted(input2.dead.dangling.map((one) => one.memory)),
+      oldHandoffs: counted(input2.dead.olderHandoffs)
+    }
+  };
+}
+function newerOf(a, b) {
+  if (a.updated !== b.updated) return a.updated > b.updated ? [a, b] : [b, a];
+  return a.id < b.id ? [a, b] : [b, a];
+}
+function restKey(rests) {
+  return rests.map((rest) => `${rest.id} ${rest.revision} ${rest.shown}`).sort().join("|");
+}
+
+// src/dream/trigger.ts
+var DREAM_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
+var DREAM_BUDGET_MS = 5e3;
+var DREAM_STALE_MS = 6e4;
+var DREAM_RECORD_FORMAT = "1.0";
+function runDue(read, now) {
+  switch (read.state) {
+    case "none":
+    case "unreadable":
+      return true;
+    case "newerFormat":
+      return false;
+    case "record": {
+      const { outcome, started } = read.record;
+      const age = now.getTime() - Date.parse(started);
+      if (outcome === "running") return age >= DREAM_STALE_MS;
+      if (outcome === "failed") return true;
+      return age > DREAM_INTERVAL_MS;
+    }
+  }
+}
+async function dreamRun(deps) {
+  const started = deps.now();
+  const claim2 = { format: DREAM_RECORD_FORMAT, started: started.toISOString(), finished: null, outcome: "running", created: 0, stoppedAt: null };
+  const end = async (outcome, created2, stoppedAt) => {
+    try {
+      await deps.runs.write({ ...claim2, finished: deps.now().toISOString(), outcome, created: created2, stoppedAt });
+    } catch {
+    }
+    return { outcome, created: created2, stoppedAt };
+  };
+  let claimed;
+  try {
+    claimed = await deps.runs.begin((current) => runDue(current, started) ? claim2 : null);
+  } catch {
+    return { outcome: "failed", created: 0, stoppedAt: null };
+  }
+  if (!claimed) return { outcome: "not-due" };
+  const deadline = started.getTime() + (deps.budgetMs ?? DREAM_BUDGET_MS);
+  const overdue = () => deps.now().getTime() > deadline;
+  let created = 0;
+  try {
+    const load = await deps.load(visibleScopes(deps.session));
+    if (overdue()) return await end("budget", 0, "load");
+    const memories = load.memories.map((stored) => stored.memory);
+    const { drafts } = propose({
+      // Every memory here came from this session's authorised load of its visible scopes, so all of them are visible.
+      memories: load.memories.map((stored) => ({ stored, visible: true })),
+      pairs: nearPairs(resolve4(memories, deps.session, toLocalDate(deps.now())).active),
+      dead: deadDetail(resolve4(memories, deps.session, toLocalDate(deps.now())), load.problems),
+      created: deps.now().toISOString()
+    });
+    if (overdue()) return await end("budget", 0, "finder");
+    for (const draft of drafts) {
+      if (overdue()) return await end("budget", created, "create");
+      const result = await deps.proposals.create(draft);
+      if (result.created) created += 1;
+    }
+    return await end("ok", created, null);
+  } catch {
+    return await end("failed", created, null);
   }
 }
 
@@ -47387,6 +47530,21 @@ function createServer(deps) {
   const server = new McpServer({ name: "neocortex", version: package_default.version }, { instructions: INSTRUCTIONS });
   const reader = readerOf(deps.store);
   const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()));
+  let dreamStarted = false;
+  const dreamOnce = (event) => {
+    if (dreamStarted || deps.dream === void 0 || event === "SessionStart") return;
+    dreamStarted = true;
+    const dream = deps.dream;
+    const work = dreamRun({
+      runs: dream.runs,
+      proposals,
+      load: (scopes) => reader.load(scopes),
+      session: deps.session,
+      now,
+      ...dream.budgetMs === void 0 ? {} : { budgetMs: dream.budgetMs }
+    });
+    dream.onStart?.(work);
+  };
   const load = async () => {
     const { memories: stored, problems } = await reader.load(visibleScopes(deps.session));
     const memories = stored.map((s) => s.memory);
@@ -47705,6 +47863,18 @@ function createServer(deps) {
       return ok({ labels, contextLabels, ...placeProblems2.length > 0 ? { placeProblems: placeProblems2 } : {} });
     })
   );
+  const dreamReading = async () => {
+    if (deps.dream === void 0) return void 0;
+    const read = await deps.dream.runs.read();
+    if (read.state === "none") return void 0;
+    if (read.state === "unreadable") {
+      const { reason } = read;
+      return { unreadable: reason };
+    }
+    if (read.state === "newerFormat") return { newerFormat: read.format };
+    const { started, finished, outcome, created, stoppedAt } = read.record;
+    return { started, finished, outcome, created, stoppedAt };
+  };
   server.registerTool(
     "dream_report",
     { title: "Report how optimized NeoCortex is for this place", description: DREAM_DESCRIPTION },
@@ -47716,6 +47886,12 @@ function createServer(deps) {
       const pairs = nearPairs(input2.resolution.active);
       const plans = indexPlans(input2, place);
       const budget = indexBudget(input2, place, plans);
+      let dream;
+      try {
+        dream = await dreamReading();
+      } catch (error62) {
+        dream = { error: message(error62) };
+      }
       let store2;
       let repeats;
       try {
@@ -47760,7 +47936,8 @@ function createServer(deps) {
           deadWeight: deadWeight(input2.resolution, input2.problems),
           notLoaded: notLoaded(input2.problems)
         },
-        store: store2
+        store: store2,
+        ...dream === void 0 ? {} : { dream }
       });
     })
   );
@@ -47876,6 +48053,7 @@ function createServer(deps) {
         const place = PLACE_MOMENTS.includes(moment) ? await loadPlace(deps.places, deps.session) : null;
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
+        dreamOnce(event);
         return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place)) }] };
       } catch (error62) {
         return { content: [{ type: "text", text: hookFailure(moment, event, message(error62)) }] };
@@ -48442,6 +48620,7 @@ function message(error62) {
 }
 
 // src/store.ts
+var import_yaml4 = __toESM(require_dist(), 1);
 import { createHash as createHash4, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
 import { link, lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
@@ -48509,6 +48688,13 @@ var FileStore = class {
   /** Runs a proposal step under the machine-local lock of that id, so a record write shares this root's locks (D8). */
   proposalLock(id, run) {
     return this.withLock(`proposal-${id}`, run);
+  }
+  /**
+   * Runs one dream run's read-and-claim, or its end write, under this root's one dream lock (D9): two sessions on this
+   * machine cannot both claim a free gate. A database orders them for every machine instead.
+   */
+  dreamLock(run) {
+    return this.withLock("dream-run", run);
   }
   /**
    * The keys of the folders under projects/ that are valid project keys, sorted; an empty folder counts. For the
@@ -48997,15 +49183,7 @@ var FileStore = class {
   }
   /** Writes a temp file with a name of its own, then renames it over the target; never leaves the temp file behind. */
   async writeAtomically(target, text, id) {
-    await mkdir(dirname2(target), { recursive: true });
-    const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(temp, text, "utf8");
-    try {
-      await this.retryWhileBusy(id, () => rename(temp, target));
-    } catch (error62) {
-      await rm(temp, { force: true });
-      throw error62;
-    }
+    await writeAtomically(target, text, id, (opId, op) => this.retryWhileBusy(opId, op));
   }
   /** Removes the old file of a scope move; when that stays impossible, removes the new file again (design 5.4). */
   async finishMove(source, target, id) {
@@ -49018,17 +49196,7 @@ var FileStore = class {
   }
   /** Runs op, again while it fails because another process has the file open, within the budget; then StoreBusyError. */
   async retryWhileBusy(id, op) {
-    const deadline = Date.now() + this.busyBudgetMs;
-    for (; ; ) {
-      try {
-        await op();
-        return;
-      } catch (error62) {
-        if (!isBusy(codeOf2(error62))) throw error62;
-        if (Date.now() >= deadline) throw new StoreBusyError(id);
-      }
-      await pause();
-    }
+    return retryWhileBusy(id, op, this.busyBudgetMs);
   }
   async readIfPresent(path) {
     try {
@@ -49244,6 +49412,75 @@ var FileProposalStore = class {
     }
   }
 };
+var DREAM_AREA = "dream";
+var DREAM_RUN_FILE = "run.yaml";
+var DEFAULT_BUSY_BUDGET_MS = 2e3;
+var FileRunStore = class {
+  root;
+  lock;
+  /** lock runs one step under the store's dream lock; FileStore passes its own, so a claim shares this root's locks. */
+  constructor(root2, lock) {
+    this.root = root2;
+    this.lock = lock;
+  }
+  async read() {
+    let text;
+    try {
+      text = await readFile2(this.path(), "utf8");
+    } catch (error62) {
+      if (isNotFound(error62)) return { state: "none" };
+      return { state: "unreadable", reason: systemErrorCode(error62) ?? messageOf2(error62) };
+    }
+    let raw;
+    try {
+      raw = parseYaml(text);
+    } catch (error62) {
+      return { state: "unreadable", reason: messageOf2(error62) };
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { state: "unreadable", reason: "the record is not a YAML mapping" };
+    const fields = raw;
+    const format = fields.format;
+    if (isFormatVersion(format) && compareFormats(format, DREAM_RECORD_FORMAT) > 0) return { state: "newerFormat", format };
+    const record2 = recordOf(fields);
+    return record2 === null ? { state: "unreadable", reason: "the record does not hold the fields of a dream run" } : { state: "record", record: record2 };
+  }
+  async begin(decide) {
+    let written = false;
+    await this.lock(async () => {
+      const next = decide(await this.read());
+      if (next === null) return;
+      await this.writeNow(next);
+      written = true;
+    });
+    return written;
+  }
+  async write(record2) {
+    await this.lock(() => this.writeNow(record2));
+  }
+  /**
+   * The record rewritten in place: a full rewrite rather than a create-only write, because one run replaces the claim
+   * its predecessor left and a dead run leaves a `running` record that must be overwritable.
+   */
+  async writeNow(record2) {
+    await writeAtomically(this.path(), (0, import_yaml4.stringify)(record2), "dream-run", (id, op) => retryWhileBusy(id, op, DEFAULT_BUSY_BUDGET_MS));
+  }
+  path() {
+    return join3(this.root, DREAM_AREA, DREAM_RUN_FILE);
+  }
+};
+function recordOf(fields) {
+  const { format, started, finished, outcome, created, stoppedAt } = fields;
+  if (format !== DREAM_RECORD_FORMAT) return null;
+  if (typeof started !== "string" || Number.isNaN(Date.parse(started))) return null;
+  if (finished !== null && typeof finished !== "string") return null;
+  if (finished !== null && typeof finished === "string" && Number.isNaN(Date.parse(finished))) return null;
+  if (outcome !== "running" && outcome !== "ok" && outcome !== "budget" && outcome !== "failed") return null;
+  if (typeof created !== "number" || !Number.isInteger(created) || created < 0) return null;
+  if (stoppedAt !== null && stoppedAt !== "load" && stoppedAt !== "finder" && stoppedAt !== "create") return null;
+  if (outcome === "running" ? finished !== null : finished === null) return null;
+  if (outcome === "budget" !== (stoppedAt !== null)) return null;
+  return { format, started, finished, outcome, created, stoppedAt };
+}
 var RecordExistsError = class extends StoreError {
 };
 function lockName(id) {
@@ -49265,6 +49502,30 @@ function placeFile(stem) {
 }
 function placeLock(stem) {
   return `place-${stem}`;
+}
+async function writeAtomically(target, text, id, retry) {
+  await mkdir(dirname2(target), { recursive: true });
+  const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(temp, text, "utf8");
+  try {
+    await retry(id, () => rename(temp, target));
+  } catch (error62) {
+    await rm(temp, { force: true });
+    throw error62;
+  }
+}
+async function retryWhileBusy(id, op, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  for (; ; ) {
+    try {
+      await op();
+      return;
+    } catch (error62) {
+      if (!isBusy(codeOf2(error62))) throw error62;
+      if (Date.now() >= deadline) throw new StoreBusyError(id);
+    }
+    await pause();
+  }
 }
 function messageOf2(error62) {
   return error62 instanceof Error ? error62.message : String(error62);
@@ -49368,5 +49629,6 @@ if (move) {
   }
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
   const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
-  await createServer({ store, places: store, session, autoMemory, proposals }).connect(new StdioServerTransport());
+  const runs = new FileRunStore(root, (run) => store.dreamLock(run));
+  await createServer({ store, places: store, session, autoMemory, proposals, dream: { runs } }).connect(new StdioServerTransport());
 }
