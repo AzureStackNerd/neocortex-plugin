@@ -45231,7 +45231,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.28",
+  version: "0.4.29",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -49348,15 +49348,25 @@ var FileProposalStore = class {
   root;
   newId;
   lock;
+  linkFile;
+  removeFile;
+  lookUp;
+  renameFile;
+  busyBudgetMs;
   /**
    * lock runs a step under the id's lock. FileStore passes its own, so a proposal write shares the machine-local locks of
    * the memory writes of the same root; an id never clashes with a memory's, whose name is a UUID, because a record's
    * lock is `proposal-<id>`.
    */
-  constructor(root2, lock, newId = randomUUID3) {
+  constructor(root2, lock, newId = randomUUID3, options = {}) {
     this.root = root2;
     this.lock = lock;
     this.newId = newId;
+    this.linkFile = options.linkFile ?? link;
+    this.removeFile = options.removeFile ?? ((path) => rm(path, { force: true }));
+    this.lookUp = options.lookUp ?? lstat;
+    this.renameFile = options.renameFile ?? rename;
+    this.busyBudgetMs = options.busyBudgetMs ?? DEFAULT_BUSY_BUDGET_MS;
   }
   async list() {
     return this.read();
@@ -49482,13 +49492,6 @@ var FileProposalStore = class {
     return join3(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
   }
   /**
-   * Writes a new record file, create-only: made if the area is new, then written with the exclusive flag, which the
-   * filesystem itself refuses when the name is taken. A rename would replace silently, and the machine-local lock only
-   * orders this machine's writers, so on a synced folder two machines could otherwise both write one decision and the
-   * second would replace the first with no record of it (review finding 3). With the exclusive open the second writer
-   * fails, and its answer says a record is there already.
-   */
-  /**
    * Writes a new record file, create-only and atomically. The text goes to a temp file first and is then hard-linked to
    * its real name: the link is atomic, so a reader never sees a half-written record, and the filesystem refuses it when
    * the name is taken (measured: the second link gives EEXIST). A rename would replace silently and the machine-local
@@ -49496,19 +49499,59 @@ var FileProposalStore = class {
    * second would replace the first with no record of it; a plain exclusive write would close that gap but leave a
    * truncated file behind if the writer died mid-write, which then reads as an answer for ever (review findings 3 and
    * its re-review). Then the temp name is dropped, leaving the record's own link.
+   *
+   * A link refused with any other code than EEXIST -- every link on a medium with no hard links (FAT, exFAT, some network
+   * shares), and one that fails for any other reason on any medium -- takes a rename instead, made only while the name is
+   * still free (#427). That keeps the record atomic and refuses a name already there, but a writer on another machine
+   * that writes the same name between the lookup and the rename is replaced: on that path only this machine's lock
+   * orders the writers.
    */
   async write(path, text) {
     await mkdir(dirname2(path), { recursive: true });
     const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     await writeFile(temp, text, "utf8");
     try {
-      await link(temp, path);
+      await this.linkFile(temp, path);
     } catch (error62) {
-      if (error62.code === "EEXIST") throw new RecordExistsError();
-      throw error62;
-    } finally {
-      await rm(temp, { force: true });
+      if (codeOf2(error62) === "EEXIST") {
+        await this.dropTemp(temp);
+        throw new RecordExistsError();
+      }
+      await this.renameIfFree(temp, path);
+      return;
     }
+    await this.dropTemp(temp);
+  }
+  /**
+   * The write where a hard link is refused (#427): the temp file becomes the record by a rename, once the name is seen
+   * free. The lookup is made again before every try: on Windows a rename over a name another process holds open is
+   * expected to be refused with a busy code (not measured here), so a busy rename can mean the name was taken meanwhile,
+   * and a retry must never rename over it. A
+   * lookup that fails other than "not there" fails the write rather than reading as taken or as free (C8).
+   */
+  async renameIfFree(temp, path) {
+    try {
+      await retryWhileBusy(
+        path,
+        async () => {
+          if (!await isFree(path, this.lookUp)) throw new RecordExistsError();
+          await this.renameFile(temp, path);
+        },
+        this.busyBudgetMs
+      );
+    } catch (error62) {
+      await this.dropTemp(temp);
+      throw error62;
+    }
+  }
+  /**
+   * Removes a temp file, again while another process has it open, and never fails the write it served: the record is
+   * in place or refused by then, and a temp file left behind is never read, since the area lists record names only
+   * (#427).
+   */
+  async dropTemp(temp) {
+    await retryWhileBusy(temp, () => this.removeFile(temp), this.busyBudgetMs).catch(() => {
+    });
   }
 };
 var DREAM_AREA = "dream";
@@ -49517,15 +49560,17 @@ var DEFAULT_BUSY_BUDGET_MS = 2e3;
 var FileRunStore = class {
   root;
   lock;
+  readText;
   /** lock runs one step under the store's dream lock; FileStore passes its own, so a claim shares this root's locks. */
-  constructor(root2, lock) {
+  constructor(root2, lock, options = {}) {
     this.root = root2;
     this.lock = lock;
+    this.readText = options.readText ?? ((path) => readFile2(path, "utf8"));
   }
   async read() {
     let text;
     try {
-      text = await readFile2(this.path(), "utf8");
+      text = await this.readSettled();
     } catch (error62) {
       if (isNotFound(error62)) return { state: "none" };
       return { state: "unreadable", reason: systemErrorCode(error62) ?? messageOf2(error62) };
@@ -49542,6 +49587,22 @@ var FileRunStore = class {
     if (isFormatVersion(format) && compareFormats(format, DREAM_RECORD_FORMAT) > 0) return { state: "newerFormat", format };
     const record2 = recordOf(fields);
     return record2 === null ? { state: "unreadable", reason: "the record does not hold the fields of a dream run" } : { state: "record", record: record2 };
+  }
+  /**
+   * The record's text. A busy read is tried again for up to SETTLE_MS, as a load reads a busy memory (#387): a scanner
+   * or sync client holding the file a moment must not read as unreadable, which is due, and start a run that was not
+   * (#427). Any other failure is the record's at once; one still busy after SETTLE_MS is unreadable, as before.
+   */
+  async readSettled() {
+    const deadline = Date.now() + SETTLE_MS;
+    for (; ; ) {
+      try {
+        return await this.readText(this.path());
+      } catch (error62) {
+        if (!isBusy(codeOf2(error62)) || Date.now() >= deadline) throw error62;
+        await pause();
+      }
+    }
   }
   async begin(decide) {
     let written = false;
@@ -49677,6 +49738,15 @@ function codeOf2(error62) {
 }
 function isNotFound(error62) {
   return codeOf2(error62) === "ENOENT";
+}
+async function isFree(path, lookUp = lstat) {
+  try {
+    await lookUp(path);
+    return false;
+  } catch (error62) {
+    if (isNotFound(error62)) return true;
+    throw error62;
+  }
 }
 async function isGone(path) {
   try {

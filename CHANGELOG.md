@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.29 - 2026-11-03
+
+- Fixed: with the memory folder on a drive that has no hard links (FAT or exFAT, and some network shares), the Dreamer
+  could not store a single proposal and no proposal could be answered: every run ended as failed and started again in
+  the next session. Proposals, answers and applies are now written another way there, which still keeps each record
+  whole and still refuses one that is already there. On such a drive, two machines that answer the same proposal at the
+  same moment can overwrite each other's answer; on a drive with hard links nothing changes.
+- Fixed: a file held open for a moment by a virus scanner or a sync client no longer turns a stored proposal or answer
+  into an error, after which asking again said it was answered already, and no longer starts a Dreamer run that was
+  not due.
+
 ## 0.4.28 - 2026-11-03
 
 - Fixed: a memory you deleted in one project could come back through another project's import of Claude Code's
