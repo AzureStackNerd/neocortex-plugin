@@ -36314,6 +36314,7 @@ var PREVIEW_UNRECORDED_MAX = 10;
 var PREVIEW_IDENTICAL_MAX = 5;
 var PREVIEW_SKIPPED_MAX = 10;
 var PREVIEW_NOT_AUTO_MEMORY_MAX = 10;
+var PREVIEW_SUPPRESSED_MAX = 10;
 var INDEX = "MEMORY.md";
 var TOP_LEVEL_MD_RE = /^[^/\\]+\.md$/;
 var HASH_TAIL_RE = /^[A-Za-z0-9]+$/;
@@ -36460,6 +36461,7 @@ function previewOf(folders, scope, known) {
   const units = [];
   const identical = [];
   const unrecorded = [];
+  const suppressed = [];
   const skipped = [];
   const notAutoMemory = [];
   let alreadyImported = 0;
@@ -36481,14 +36483,16 @@ function previewOf(folders, scope, known) {
         continue;
       }
       const changed = unit.kind === "topic" && recordedSources.has(recordSourceOf(unit)) ? { ...unit, flags: [...unit.flags, "source-changed"] } : unit;
+      const listed3 = known.elsewhere?.get(unit.hash);
       if (known.ids.has(importId(scope, unit.hash))) unrecorded.push(changed);
+      else if (listed3 !== void 0) suppressed.push({ unit, ...listed3 });
       else units.push(changed);
     }
   }
   const names = ordered.map((folder) => folder.folder);
   const plan = JSON.stringify([scopeId(scope), names, units.map(contentOf), unrecorded.map((unit) => [unit.hash, recordSourceOf(unit)])]);
   const id = createHash("sha256").update(plan).digest("hex").slice(0, PLAN_ID_LENGTH);
-  return { id, folders: names, import: units, identical, alreadyImported, unrecorded, skipped, notListItems, notAutoMemory };
+  return { id, folders: names, import: units, identical, alreadyImported, unrecorded, suppressed, skipped, notListItems, notAutoMemory };
 }
 function memoryOf(unit, scope) {
   return { id: importId(scope, unit.hash), scope, ...contentOf(unit), created: unit.created, updated: unit.created };
@@ -45227,7 +45231,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.27",
+  version: "0.4.28",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47128,7 +47132,13 @@ var KeepOneError = class extends Error {
   }
 };
 function readerOf(store2) {
-  return { location: store2.location, load: (scopes) => store2.load(scopes), scopes: () => store2.scopes(), recordsOf: (id) => store2.recordsOf(id) };
+  return {
+    location: store2.location,
+    load: (scopes) => store2.load(scopes),
+    scopes: () => store2.scopes(),
+    recordsOf: (id) => store2.recordsOf(id),
+    recordsAt: (requests) => store2.recordsAt(requests)
+  };
 }
 var RuleGuard = class {
   store;
@@ -47514,6 +47524,20 @@ var IMPORT_TEXT = {
   noPlan: 'mode "apply" needs the plan id of the preview the user agreed to; call import_auto_memory with mode "preview" first',
   changed: (plan, now) => `the auto memory of this place, or what is already imported, changed since the preview (plan ${plan}, now ${now}); preview again`,
   unreadable: ({ record: record2, reason }) => `the import record ${record2} could not be read (${reason}); repair or delete it, then preview again`,
+  /**
+   * #358: another project's record cannot prove a hash absent, so it blocks the shared folders until it is repaired; one
+   * of a newer format, until NeoCortex is updated on this machine (the older-server words, as in PROPOSAL_TEXT).
+   */
+  unreadableElsewhere: (problem, project) => {
+    const { record: record2, reason } = shownProblem(problem);
+    return problem.newerFormat === void 0 ? `the import record ${record2} of project ${project} could not be read (${reason}); it lists what that project imported, so the shared folders cannot be imported until it is repaired there, or deleted there to let every memory it lists be offered again; then preview again` : `the import record ${record2} of project ${project} was written by a newer NeoCortex (format ${problem.newerFormat}) that this machine cannot read; it lists what that project imported, so the shared folders cannot be imported until NeoCortex is updated on this machine; then preview again`;
+  },
+  /** #358: a scope that cannot be listed hides any record it holds, so it blocks the shared folders as an unreadable one. */
+  notLookedUp: (reason) => `the import records of the other projects could not be looked up (${reason}); the shared folders cannot be imported until they can be read; then preview again`,
+  /** #358: what another project's record blocks is the shared apply only; this place's folder is not gated on it. */
+  placeStill: (placeNow) => 'This does not block the auto memory folder of this place: call import_auto_memory with mode "preview" and folder "place" to preview it' + (placeNow === 0 ? "." : `, which holds ${placeNow} not yet imported.`),
+  /** #358: the ways back of a unit another project's import record keeps out (spec 9, step 2). */
+  suppressedNext: `Also tell the user that suppressed lists memories of the shared folders that are not offered because the project it names imported them before, whether or not they are still there, so a memory the user deleted there does not come back. To have one anyway: save its text with save_memory, where delivery "index", the default, loads it at every start; or remove the line of that unit's hash from the import record suppressed names with update_memory, in the scope its recordIn names (user scope from here, a project from a session in that project), or delete that record with delete_memory when the line is its only one, then preview here again.`,
   /** The guard refused the record: it is a rule, or one of its links hides or brings back a rule (#281). */
   ruleRecord: (record2) => `rewriting the import record ${record2} would change which rules load; make it an on-demand memory that is not enforced and has no links: call update_memory on ${record2}, then update_rule with the affects its refusal lists`,
   /** An apply that stopped (spec 9, steps 3 and 4): at a memory the store refused, or at the record, or at both. */
@@ -48111,7 +48135,8 @@ function createServer(deps) {
       const { known } = importState(loaded, session, session.project);
       const sharedFolder2 = found.shared.folder === null || found.shared.files === null ? null : { folder: found.shared.folder, flat: true, files: found.shared.files };
       const sharedFolders = [...sharedFolder2 === null ? [] : [sharedFolder2], ...found.pinned === void 0 ? [] : [found.pinned]];
-      const shared = sharedFolders.length === 0 ? null : previewOf(sharedFolders, session.user, known);
+      const elsewhere = sharedFolders.length === 0 ? void 0 : await elsewhereOf(reader);
+      const shared = elsewhere === void 0 ? null : previewOf(sharedFolders, session.user, { ...known, elsewhere: elsewhere.hashes });
       const sharedIn = shown(sharedFolder2?.folder ?? found.lookedIn, PREVIEW_PATH_MAX);
       const settings = settingsAnswer(found, shared?.notAutoMemory.length ?? 0, shared?.skipped.length ?? 0);
       const told = found.shared.folder !== null || found.shared.unchecked !== void 0 || found.notRead.length > 0 || (shared?.skipped.length ?? 0) > 0;
@@ -48121,16 +48146,18 @@ function createServer(deps) {
         const { alreadyImported, notListItems } = preview2;
         const folders = preview2.folders.map((name) => shown(name, PREVIEW_PATH_MAX));
         const nothing = { place, lookedIn, folders, nothing: IMPORT_TEXT.nothingNew(where), alreadyImported, skipped: [], notListItems, ...named };
-        return ok({ ...nothing, ...settings, next: nothingNext(unreadable ?? IMPORT_TEXT.nothingNext(alreadyImported, where)) });
+        const first = [unreadable ?? IMPORT_TEXT.nothingNext(alreadyImported, where), ...suppressedNext(preview2)].join(" ");
+        return ok({ ...nothing, ...settings, next: nothingNext(first) });
       };
       const here = hereOf(found, session, known);
       const placeEmpty = here.kind === "none" || here.kind === "preview" && !shows(here.preview);
-      const sharedFirst = shared !== null && (offers(shared) || shared.skipped.length > 0 && placeEmpty);
+      const sharedFirst = shared !== null && (offers(shared) || shared.skipped.length + shared.suppressed.length > 0 && placeEmpty);
       const placePlan = mode === "apply" && here.kind === "preview" && here.preview.id === plan ? "place" : void 0;
       if ((folder ?? placePlan ?? (sharedFirst ? "shared" : "place")) === "shared") {
         if (shared === null) return fail(IMPORT_TEXT.noShared(sharedState(found.shared)));
         const placeNew = here.kind === "none" ? 0 : placeNewAfter(here.folders, session.project, known, shared);
-        const state2 = importState(loaded, session, session.user);
+        const own2 = importState(loaded, session, session.user);
+        const state2 = { ...own2, unreadable: own2.unreadable ?? elsewhere?.unreadable };
         if (mode === "apply" && plan !== void 0) {
           const reload = async () => importState(await load(), session, session.user);
           const active = new Map(loaded.resolution.active.map((memory) => [memory.id, memory]));
@@ -48141,11 +48168,13 @@ function createServer(deps) {
           const after = { placeNew, next: IMPORT_TEXT.sharedApplied(placeNew, unsorted) };
           return applyImport({ guard, place, scope: session.user, stamp: now().toISOString(), reload, after }, shared, state2, plan);
         }
-        const named = notAutoMemoryAnswer(shared);
+        const named = { ...notAutoMemoryAnswer(shared), ...suppressedAnswer(shared) };
         const { pinned } = found;
         const answered = pinned === void 0 ? shared : { ...shared, folders: [...new Set(shared.folders.map((name) => name === pinned.folder ? pinned.path : name))] };
         if (!shows(shared)) return nothingNew(answered, sharedIn, IMPORT_TEXT.sharedFolder, state2.unreadable, named);
-        const next2 = [state2.unreadable ?? IMPORT_TEXT.sharedNext(shared.id, placeNew), ...notReadNext].join(" ");
+        const placeNow = here.kind === "none" ? 0 : placeNewAfter(here.folders, session.project, known, { import: [], unrecorded: [] });
+        const blocked = own2.unreadable ?? (elsewhere?.unreadable === void 0 ? void 0 : `${elsewhere.unreadable} ${IMPORT_TEXT.placeStill(placeNow)}`);
+        const next2 = [blocked ?? IMPORT_TEXT.sharedNext(shared.id, placeNew), ...suppressedNext(shared), ...notReadNext].join(" ");
         return ok({ ...previewAnswer(place, sharedIn, answered, session.user), ...named, placeNew, ...settings, next: next2 });
       }
       if (here.kind === "none") {
@@ -48214,6 +48243,24 @@ function importState({ stored, problems }, session, scope) {
     record: stored.find((s) => s.memory.id === importRecordId(scope)),
     unreadable: problem === void 0 ? void 0 : IMPORT_TEXT.unreadable(shownProblem(problem))
   };
+}
+async function elsewhereOf(reader) {
+  try {
+    const scopes = await reader.scopes();
+    const projects = scopes.filter((scope) => scope.kind === "project");
+    const asked = projects.flatMap((project) => scopes.map((scope) => ({ project, scope, id: importRecordId(project) })));
+    const found = await reader.recordsAt(asked);
+    const hashes = /* @__PURE__ */ new Map();
+    let unreadable;
+    asked.forEach(({ project, scope }, n) => {
+      const record2 = found[n];
+      if (record2 !== void 0 && "problem" in record2) unreadable ??= IMPORT_TEXT.unreadableElsewhere(record2.problem, project.key);
+      else if (record2 !== void 0) for (const hash2 of recordedHashes(record2.stored.memory.body).keys()) hashes.set(hash2, { project, at: scope });
+    });
+    return { hashes, unreadable };
+  } catch (error62) {
+    return { hashes: /* @__PURE__ */ new Map(), unreadable: IMPORT_TEXT.notLookedUp(systemErrorCode(error62) ?? message(error62)) };
+  }
 }
 function hereOf(found, session, known) {
   if (found.kind === "none") return { kind: "none", lookedFor: found.lookedFor };
@@ -48334,6 +48381,19 @@ function shown(text, max = PREVIEW_TEXT_MAX) {
 function notAutoMemoryAnswer(preview) {
   const notAutoMemory = preview.notAutoMemory.slice(0, PREVIEW_NOT_AUTO_MEMORY_MAX).map((name) => shown(name));
   return { notAutoMemory, moreNotAutoMemory: unlisted(preview.notAutoMemory, PREVIEW_NOT_AUTO_MEMORY_MAX) };
+}
+function suppressedAnswer(preview) {
+  const suppressed = preview.suppressed.slice(0, PREVIEW_SUPPRESSED_MAX).map(({ unit, project, at }) => ({
+    unit: unit.hash.slice(0, UNIT_ID_LENGTH),
+    source: shown(unit.source),
+    project: project.key,
+    record: shortId(importRecordId(project)),
+    recordIn: scopeWords(at)
+  }));
+  return { suppressed, moreSuppressed: unlisted(preview.suppressed, PREVIEW_SUPPRESSED_MAX) };
+}
+function suppressedNext(preview) {
+  return preview.suppressed.length === 0 ? [] : [IMPORT_TEXT.suppressedNext];
 }
 function shownSkip({ source, reason }) {
   return { source: shown(source), reason: shown(reason) };
@@ -48814,6 +48874,42 @@ var FileStore = class {
       })
     );
     return reads.flat();
+  }
+  /**
+   * Each request's live record (MemoryStore.recordsAt): every folder listed once, and only a record its listing names
+   * read, as load reads it. So a missing record costs no wait (recordsOf waits SETTLE_MS for each), and a name that is no
+   * id, such as a conflict copy, is never read. A record mid-rename counts by its temp file, as in load (#387); a folder
+   * that cannot be listed throws, as in load.
+   */
+  async recordsAt(requests) {
+    for (const { id } of requests) if (!UUID_RE.test(id)) throw new StoreError(`invalid memory id ${id}`);
+    await this.assertRoot();
+    const listings = /* @__PURE__ */ new Map();
+    return Promise.all(
+      requests.map(async ({ scope, id }) => {
+        const parts = foldersOf(scope);
+        const key = parts.join("/");
+        if (!listings.has(key)) listings.set(key, this.idsListed(join3(this.root, ...parts)));
+        if (!(await listings.get(key))?.has(id)) return void 0;
+        return this.readRecord(join3(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
+      })
+    );
+  }
+  /** The ids a folder lists, by `<id>.md` or by the temp file of a write in progress (#387); a missing folder lists none. */
+  async idsListed(folder) {
+    let names;
+    try {
+      names = await readdir2(folder);
+    } catch (error62) {
+      if (isNotFound(error62)) return /* @__PURE__ */ new Set();
+      throw error62;
+    }
+    return new Set(
+      names.flatMap((name) => {
+        const id = name.endsWith(".md") ? name.slice(0, -".md".length) : TEMP_RE.exec(name)?.[1];
+        return id === void 0 ? [] : [id];
+      })
+    );
   }
   async readPlace(place) {
     const stem = placeStem(place);

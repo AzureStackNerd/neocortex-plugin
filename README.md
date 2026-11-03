@@ -302,8 +302,6 @@ that bypasses the tools.
 
 These are open and will be fixed in a later version:
 
-- A memory you deleted after importing it into one project can come back, into user scope, when you run the auto
-  memory import in another project and the folder `autoMemoryDirectory` names holds the same text. Delete it again.
 - A repository cloned through an SSH host alias on one machine, such as a `Host github-work` entry in
   `~/.ssh/config`, and directly on another gets a different project key on each, so each machine sees only its own
   project memories for it.

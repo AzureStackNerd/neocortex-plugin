@@ -2,6 +2,19 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.28 - 2026-11-03
+
+- Fixed: a memory you deleted in one project could come back through another project's import of Claude Code's
+  shared auto memory. When the folder `autoMemoryDirectory` names, or the pinned folder, held the same text, the import
+  offered it into user scope, where it then loaded in every project. The import of the shared folders now reads every
+  project's import record and keeps out what any of them imported before, whether or not that memory is still there.
+  Those memories are listed apart as `suppressed`, each with the project whose record lists it and where that record
+  is, and the answer says how to have one anyway: save its text yourself, or remove its line from that import record.
+  This place's own auto memory folder still imports into this project as before.
+- When another project's import record cannot be read, or its folder cannot be listed, only the import of the shared
+  folders waits until that is repaired; this place's own folder still imports, and the answer says so. A record written
+  by a newer NeoCortex asks you to update NeoCortex on this machine.
+
 ## 0.4.27 - 2026-11-03
 
 - Fixed: `dream_decide_rule`, which applies a Dreamer proposal that changes a rule, now takes `accept` only. A `reject` or
