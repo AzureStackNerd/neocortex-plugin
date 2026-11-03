@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.27 - 2026-11-03
+
+- Fixed: `dream_decide_rule`, which applies a Dreamer proposal that changes a rule, now takes `accept` only. A `reject` or
+  `keep-both` through it asked you to confirm a rule change that then could not happen; those two answers change no
+  memory and belong to `dream_decide`, which asks you nothing.
+- The README's description of the Dreamer is now what a user needs: when a run starts, what it reads, the four kinds it
+  proposes with what accepting each one does, and what it does not do yet. Nothing about the plugin points at the
+  source repository any more.
+
 ## 0.4.26 - 2026-11-03
 
 - The Dreamer now proposes on its own, at most once a week: on the first prompt of a session, when its last run is more
@@ -11,8 +20,8 @@ The sections up to 0.3.1 were written afterwards from the history.
   memories, dead links and old handoffs, and stores them; it writes no memory, only proposals and one run record in
   `dream/run.yaml` beside `proposals/`. It has 5,000 ms of wall clock and keeps what it made when that runs out, and
   `dream_report` now shows the last run and where a budget stop stopped. Two sessions on one machine cannot both claim
-  the run, and a run that dies leaves the next session free to try again. Still nothing across projects: repeats need
-  D6.
+  the run, and a run that dies leaves the next session free to try again. Still nothing across projects: a memory
+  repeated in three or more of your projects is not proposed on yet.
 
 ## 0.4.25 - 2026-11-02
 
@@ -25,8 +34,9 @@ The sections up to 0.3.1 were written afterwards from the history.
   - "Finding a memory again" covers `search_memories` (its query, labels, `includeInactive`, and the report of memories
     that exist but could not be read) and `list_labels`.
 - Under the hood, and nothing you see yet: the Dreamer's proposals, decisions and apply records are now kept in the
-  store, in a `proposals` folder beside `places`, so they outlive the session. Nothing creates a proposal in a live
-  session until the next story does, which is why this part changes nothing you can see.
+  store, in a `proposals` folder beside `places`, so they outlive the session. Nothing created a proposal in a live
+  session yet at this version, which is why this part changed nothing you could see; 0.4.26 is where the Dreamer
+  started making them.
 
 ## 0.4.24 - 2026-11-02
 
@@ -55,8 +65,9 @@ The sections up to 0.3.1 were written afterwards from the history.
 
 - Added: the Dreamer works out its own clean-up proposals now, without a model: near-identical duplicates, expired
   memories, links to a memory that no longer exists, and an older handoff. Each waits for your answer in
-  `dream_proposals` and an `accept` carries it out as before. Nothing proposes yet in a session: the store the server
-  keeps is in memory and stays empty until the Dreamer's next stories run the finder.
+  `dream_proposals` and an `accept` carries it out as before. Nothing proposed yet in a session at this version: the
+  store the server kept was in memory and stayed empty until something ran the finder, which 0.4.26 is the first
+  version to do.
 - Changed: a handoff counts as old only against another handoff of its own name, so a project with two live
   workstreams keeps a handoff for each instead of counting the second as dead weight. `dream_report`'s count changes
   with it.
@@ -77,8 +88,9 @@ The sections up to 0.3.1 were written afterwards from the history.
 - Added: the tool `dream_decide_rule`, the confirmed twin of `dream_decide` for an accept whose writes change which
   rules load. Claude Code asks you in its own prompt on every call of it, and an accept that would change a rule through
   `dream_decide` is refused and names this tool instead.
-- Not changed, deliberately: nothing creates proposals yet. The store the server keeps is in memory and stays empty
-  until the Dreamer's next stories add the finder's proposals, so you see no proposal to accept yet.
+- Not changed, deliberately: nothing created proposals yet at this version. The store the server kept was in memory
+  and stayed empty until something added the finder's proposals, so you saw no proposal to accept; 0.4.26 is where
+  they started arriving.
 
 ## 0.4.20 - 2026-11-01
 

@@ -45227,7 +45227,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.26",
+  version: "0.4.27",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47433,6 +47433,7 @@ var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characte
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
+var TWIN_ANSWER = external_exports.literal("accept").describe("only accept writes; reject and keep-both change no memory, so call dream_decide for them");
 var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, keep-both, or accept. reject and keep-both change no memory. accept writes the clean-up the proposal describes, through the same guard as every other write, so a memory it changes that is a rule needs dream_decide_rule, which the user confirms in a prompt. Nothing is written when a memory it shows changed since the proposal was made. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
   failed: (code) => `the proposals could not be read or written${code === void 0 ? "" : ` (${code})`}; try again, and tell the user if it keeps failing`,
@@ -47990,10 +47991,12 @@ function createServer(deps) {
     {
       title: "Apply a Dreamer's proposal after the user confirmed a rule change",
       description: "Accept a Dreamer proposal whose writes change which rules load, after dream_decide refused it for exactly that reason. The user confirms every call in a prompt. Pass the arguments of that dream_decide call and affects exactly as its refusal listed; call it only for a change the user asked for.",
-      inputSchema: { affects: AFFECTS, id: DECIDE_ID, decision: DECIDE_ANSWER },
+      // accept only (#426): the prompt comes from the flag before this handler runs, so the schema is where a reject
+      // has to fail, never a refusal after the user already confirmed.
+      inputSchema: { affects: AFFECTS, id: DECIDE_ID, decision: TWIN_ANSWER },
       _meta: CONFIRMED
     },
-    ({ affects, id, decision }) => guarded(() => decideCall({ id, decision }, { affects }))
+    ({ affects, id, decision }) => guarded(async () => decideCall({ id, decision }, { affects }))
   );
   server.registerTool(
     "set_context_labels",

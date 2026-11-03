@@ -18,7 +18,7 @@ code bundled into the server.
 - git on your `PATH`. In a repository NeoCortex reads the `origin` remote to know which project's memories belong
   there, and its server does not start in a repository where git cannot run.
 - Access to the public GitHub repository `AzureStackNerd/neocortex-plugin`, which needs no GitHub account or
-  credentials; see [GitHub over SSH or HTTPS](#github-over-ssh-or-https).
+  credentials.
 
 ## Install
 
@@ -57,6 +57,12 @@ code bundled into the server.
    `/plugin configure neocortex@azurestacknerd`, or install in a session with `/plugin install neocortex@azurestacknerd`,
    which asks for it. The same `/plugin configure` changes the folder later; that does not move the memories in the old
    folder.
+
+   The repository is public, so this needs no GitHub account or credentials. With the shorthand above, Claude Code
+   tries your SSH key first and falls back to HTTPS. If the SSH check gets in the way, set
+   `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` to clone over HTTPS only
+   (<https://code.claude.com/docs/en/env-vars>): `setx CLAUDE_CODE_PLUGIN_PREFER_HTTPS 1` on Windows, or
+   `export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` in your shell's profile on macOS and Linux.
 
 3. Turn off Claude Code's built-in auto memory, so NeoCortex is the only memory. The plugin cannot do this for you: of
    the settings a plugin ships, "Only two keys take effect from a plugin, agent and subagentStatusLine"
@@ -195,19 +201,43 @@ the allow rule (see [Permissions](#permissions)). A deleted memory moves to the 
 under the same path, from where you can put it back by hand. When that folder already holds a deleted copy of the same
 memory, the later one is `<id>.2.md`, then `<id>.3.md`; rename it to `<id>.md` when you put it back.
 
-## GitHub over SSH or HTTPS
+### Tidying your store: the Dreamer
 
-The plugin's repository is public, so the install and every update clone it without a GitHub account or credentials.
-For `owner/repo` shorthand, as above, "Claude Code checks whether your SSH key authenticates to `github.com`, then
-clones over SSH if it does and over HTTPS if it doesn't" (<https://code.claude.com/docs/en/plugins/install>). For SSH,
-"the host must already be in your `known_hosts` file and the key must work without a passphrase prompt" (same page).
+The Dreamer looks for the memories that are worth cleaning up and proposes what to do with each, one proposal at a
+time, for you to answer. It never changes a memory on its own: a proposal writes nothing until you accept it.
 
-To skip the SSH check and always use HTTPS, set
-`CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` "to clone GitHub owner/repo shorthand sources over HTTPS instead of SSH. Applies to
-plugin install and update, and to /plugin marketplace add and update" (<https://code.claude.com/docs/en/env-vars>).
-Set it for your user account, so it also holds for updates in later sessions: on Windows
-`setx CLAUDE_CODE_PLUGIN_PREFER_HTTPS 1`, which applies to terminals opened after it, and on macOS and Linux a line
-`export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` in your shell's profile.
+**It looks on its own, at most once a week.** When the last run is more than 7 days old, the first prompt you send in a
+session starts one run in the background, after the answer to that prompt is written, so nothing you see waits on it.
+A run that failed or was interrupted is retried sooner: it does not cost you a week of waiting. Two sessions open at
+once on one machine still make one run, and a session start is where a run never starts. The run stays inside a
+budget of 5,000 ms of its own work; when that runs out it keeps the proposals it already made and records where it
+stopped, so nothing is half-cleaned without a word.
+
+**It reads only what the session can show you**: your `user` memories and those of the project the session runs in. A
+memory of another project is never proposed on, because a proposal over text you cannot see is no proposal you could
+answer.
+
+What it proposes, without a model, from what it finds:
+
+| Kind | What it found | What accepting it does |
+| --- | --- | --- |
+| `duplicate` | Two memories that load in the same place whose text is nearly identical | Keeps the newer text and makes it `supersedes` the older one; a project copy of a user memory is retired instead |
+| `expired` | A memory whose `expires` date has passed | Deletes the memory (it can be put back from the `deleted` folder) |
+| `dead-link` | A `supersedes` or `overrides` id that no live memory has | Removes every such link from that memory |
+| `old-handoff` | A `handoff`-labelled memory that a later `Handoff: <name>` in the same scope replaced | Deletes the older handoff |
+
+**Answering one.** `dream_proposals` lists the proposals that wait in this session, each showing the memories it is
+about. `dream_decide` records your answer: `accept` writes the clean-up, `reject` and `keep-both` change nothing. A
+write that would change which rules load needs `dream_decide_rule` instead, and Claude Code asks you before that call.
+A proposal whose memory changed, moved or was deleted since it was made is closed rather than applied, so nothing is
+written on stale text.
+
+**The report.** `dream_report` shows this place's cost at each moment, the moves that would bring an oversized start
+under its budget, near duplicates, and what the last dream run did: when it started, whether it ended `ok`, `budget` or
+`failed`, how many proposals it created, and which stage a budget stop stopped. It changes nothing.
+
+What the Dreamer does not do yet: anything that needs a model, such as merged rewrites, contradictions or shortened
+summaries, and repeats of one memory across three or more of your projects.
 
 ## Permissions
 
@@ -264,8 +294,9 @@ rules that match the tool don't skip the prompt either"
 Agent SDK's `canUseTool` callback does receive these calls and can approve them" (same page), so there the application
 decides. A rule such an application approves is still named for 7 days in the index notices of every session start
 where it loads that runs NeoCortex's hooks. NeoCortex's own tools refuse a call that would make a rule start or stop
-loading unless a person confirms it in the client's prompt; what stays outside, such as two sessions or machines writing at once, clients that ignore the
-flag and writes that bypass the tools, is in section 7 of `docs/design-rule-guard.md` in the NeoCortex repository.
+loading unless a person confirms it in the client's prompt. That covers every call through the tools; it cannot cover
+two sessions or machines writing at the same moment, a client that ignores the flag, or an edit of the memory files
+that bypasses the tools.
 
 ## Known issues
 
