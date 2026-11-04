@@ -192,6 +192,9 @@ a memory that did not load never looks like no match. Its `includeInactive` retu
 overridden ones too, which the default search leaves out; use it to find what an `expires` date or a `supersedes` link
 took out of context, before deciding whether to change it.
 
+Because every word narrows, the server's instructions tell Claude to use your own words in any search. Only when that
+finds too little does it swap one of them for a synonym or a broader word, and it tells you which.
+
 `list_labels` shows the topic labels in use, with how many memories carry each, and the context labels of the places
 this store knows with how many places carry each. Reusing a label from that list is better than inventing a near
 duplicate, because a label is what makes two memories findable together.

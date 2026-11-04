@@ -45231,7 +45231,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.29",
+  version: "0.4.30",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47043,7 +47043,7 @@ When to save:
 Do not save: what the repository already records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters in this conversation.
 
 How to save:
-1. Call search_memories first. When a memory already covers it, use update_memory instead of saving a duplicate; when the new memory replaces an old decision, set supersedes.
+1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory instead of saving a duplicate; when the new memory replaces an old decision, set supersedes.
 2. One rule per memory. The summary is the rule itself in one sentence of at most 300 characters. It is what loads at every start of an index memory, so acting on the summary alone must be right.
 3. why is required: the reason, the incident or the user's own words. The body holds the detail and how to apply it.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label instead of inventing a near-duplicate.

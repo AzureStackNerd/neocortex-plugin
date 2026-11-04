@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.30 - 2026-11-04
+
+- Claude now searches your memories with your own words. A search finds only memories that hold every word in it, so
+  a word Claude added on its own could hide the very memory you meant. Only when your words find too little does Claude
+  swap one of them for a synonym or a broader word, and it tells you which.
+
 ## 0.4.29 - 2026-11-03
 
 - Fixed: with the memory folder on a drive that has no hard links (FAT or exFAT, and some network shares), the Dreamer
