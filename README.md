@@ -195,9 +195,16 @@ took out of context, before deciding whether to change it.
 Because every word narrows, the server's instructions tell Claude to use your own words in any search. Only when that
 finds too little does it swap one of them for a synonym or a broader word, and it tells you which.
 
-`list_labels` shows the topic labels in use, with how many memories carry each, and the context labels of the places
-this store knows with how many places carry each. Reusing a label from that list is better than inventing a near
-duplicate, because a label is what makes two memories findable together.
+How well that works is a number, not an opinion: `scripts/search-measure.ts` in the source repository asks a fixed set
+of questions of a fixed store with no model in the loop, and prints recall per question and one figure, so a change to
+search can be compared before and after. A question whose words do not all appear in any memory returns nothing today;
+the fixture records that as the expected answer and names the story meant to change it, so the row reads `FLIPPED`
+rather than silently passing when it does.
+
+`list_labels` shows the topic labels in use, with how many memories carry each, the context labels of the places this
+store knows with how many places carry each, and each repository's remote organisation and repository name. Reusing a
+label from that list is better than inventing a near duplicate, because a label is what makes two memories findable
+together.
 
 Claude is told to delete a memory only when you ask; to have Claude Code ask you as well, keep `delete_memory` out of
 the allow rule (see [Permissions](#permissions)). A deleted memory moves to the folder `deleted` in your memory folder,
@@ -240,7 +247,7 @@ under its budget, near duplicates, and what the last dream run did: when it star
 `failed`, how many proposals it created, and which stage a budget stop stopped. It changes nothing.
 
 What the Dreamer does not do yet: anything that needs a model, such as merged rewrites, contradictions or shortened
-summaries, and repeats of one memory across three or more of your projects.
+summaries, and promoting a repeat with a condition, which needs format 2.0.
 
 ## Permissions
 

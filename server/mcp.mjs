@@ -35983,6 +35983,7 @@ function sameScope(a, b) {
   return a.key === b.key;
 }
 var ORGANISATION_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+var REPO_RE = ORGANISATION_RE;
 var FOLDER_KEY_RE = /^[^\x00-\x1f\x7f]{1,4096}$/;
 function parseFolderKey(value) {
   if (!FOLDER_KEY_RE.test(value)) throw new Error(`invalid folder key ${JSON.stringify(value)}`);
@@ -35993,7 +35994,11 @@ function placeRefOf(place) {
 }
 var sessionSchema = external_exports.object({ project: external_exports.string().regex(PROJECT_KEY_RE, "invalid project key") });
 var placeInputSchema = external_exports.discriminatedUnion("kind", [
-  external_exports.strictObject({ kind: external_exports.literal("project"), organisation: external_exports.string().regex(ORGANISATION_RE).nullable() }),
+  external_exports.strictObject({
+    kind: external_exports.literal("project"),
+    organisation: external_exports.string().regex(ORGANISATION_RE).nullable(),
+    repo: external_exports.string().regex(REPO_RE).nullable().optional()
+  }),
   // The message never echoes the key, which can hold any character but a control character.
   external_exports.strictObject({ kind: external_exports.literal("folder"), key: external_exports.string().regex(FOLDER_KEY_RE, "invalid folder key") })
 ]);
@@ -36003,7 +36008,7 @@ function sessionFor(projectKey, place) {
   const key = parseProjectKey(parsed.data.project);
   const where = placeInputSchema.safeParse(place);
   if (!where.success) throw new Error(`invalid place for project ${key}: ${issueMessages(where.error.issues).join("; ")}`);
-  const sessionPlace = where.data.kind === "project" ? { kind: "project", key, organisation: where.data.organisation } : { kind: "folder", key: parseFolderKey(where.data.key) };
+  const sessionPlace = where.data.kind === "project" ? { kind: "project", key, organisation: where.data.organisation, repo: where.data.repo ?? null } : { kind: "folder", key: parseFolderKey(where.data.key) };
   return Object.freeze({ user: USER, project: projectScope(key), place: Object.freeze(sessionPlace) });
 }
 function visibleScopes(session) {
@@ -36833,10 +36838,20 @@ function organisationOf(normalizedRemote) {
   const organisation = segments.length >= 3 ? segments[1] : "";
   return ORGANISATION_RE.test(organisation) ? organisation : null;
 }
+function repoOf(normalizedRemote) {
+  const segments = normalizedRemote.split("/");
+  const repo = segments.length >= 3 ? segments[segments.length - 1] : "";
+  return REPO_RE.test(repo) ? repo : null;
+}
 function identifyDir(dir) {
   const remote = readOriginUrl(dir);
   const normalized = remote === null ? null : normalizeRemoteUrl(remote);
-  if (normalized !== null) return { projectKey: toKey(normalized), place: { kind: "project", organisation: organisationOf(normalized) } };
+  if (normalized !== null) {
+    return {
+      projectKey: toKey(normalized),
+      place: { kind: "project", organisation: organisationOf(normalized), repo: repoOf(normalized) }
+    };
+  }
   const folder = folderKeyOf(realFolder(dir));
   return { projectKey: folderProjectKey(folder), place: { kind: "folder", key: folder } };
 }
@@ -45231,7 +45246,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.30",
+  version: "0.4.31",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45260,7 +45275,15 @@ var package_default = {
 // src/place.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import { createHash as createHash3 } from "node:crypto";
-var PLACE_REGISTRY = { formats: [{ version: "1.0", fields: ["kind", "key", "labels", "updated"] }], steps: {} };
+var PLACE_REGISTRY = {
+  formats: [
+    { version: "1.0", fields: ["kind", "key", "labels", "updated"] },
+    { version: "1.1", fields: ["kind", "key", "labels", "updated", "organisation", "repo"] }
+  ],
+  // A 1.0 record has neither field; one that a hand added keeps its value rather than losing it to the upgrade, and
+  // the strict schema then judges it.
+  steps: { "1.0": (fields) => ({ ...fields, organisation: fields.organisation ?? null, repo: fields.repo ?? null }) }
+};
 var MAX_CONTEXT_LABELS = 10;
 var CONTEXT_LABEL_MAX = 40;
 var PROPOSED_MAX = 4;
@@ -45274,6 +45297,12 @@ var PlaceFormatError = class extends Error {
     this.newerFormat = newerFormat;
   }
 };
+function filledFromVisit(record2, visitor, updated) {
+  const organisation = record2.organisation ?? visitor.organisation;
+  const repo = record2.repo ?? visitor.repo;
+  if (organisation === record2.organisation && repo === record2.repo) return null;
+  return { ...record2, organisation, repo, updated };
+}
 function placeStem(place) {
   return createHash3("sha256").update(`${place.kind}:${place.key}`).digest("hex").slice(0, 16);
 }
@@ -45317,8 +45346,13 @@ var placeSchema = external_exports.strictObject({
   kind: external_exports.enum(["project", "folder"]),
   key: external_exports.string().regex(FOLDER_KEY_RE),
   labels: external_exports.array(labelSchema).max(MAX_CONTEXT_LABELS).refine((labels) => new Set(labels.map((label) => label.name)).size === labels.length, "a label appears twice"),
+  organisation: external_exports.string().regex(ORGANISATION_RE).nullable(),
+  repo: external_exports.string().regex(REPO_RE).nullable(),
   updated: external_exports.string().min(1)
-}).refine((fields) => fields.kind !== "project" || PROJECT_KEY_RE.test(fields.key), { message: "not a project key", path: ["key"] });
+}).refine((fields) => fields.kind !== "project" || PROJECT_KEY_RE.test(fields.key), { message: "not a project key", path: ["key"] }).refine((fields) => fields.kind !== "folder" || fields.organisation === null && fields.repo === null, {
+  message: "a folder place has no remote",
+  path: ["organisation"]
+});
 function decodePlaceRecord(data, stem, registry2 = PLACE_REGISTRY) {
   if (!isRecord2(data)) throw new PlaceFormatError("not a place record: expected a YAML mapping");
   let fields = data;
@@ -45355,10 +45389,10 @@ function decodePlaceRecord(data, stem, registry2 = PLACE_REGISTRY) {
     if (order < 0) throw new PlaceFormatError(`format ${format} place record could not be upgraded to ${current}: ${issues}`);
     throw new PlaceFormatError(issues);
   }
-  const { kind, key, labels, updated } = result.data;
+  const { kind, key, labels, organisation, repo, updated } = result.data;
   const place = kind === "project" ? { kind, key: parseProjectKey(key) } : { kind, key: parseFolderKey(key) };
   if (placeStem(place) !== stem) throw new PlaceFormatError(`kind and key do not match the file name ${stem}.yaml`);
-  return { record: { place, labels, updated }, format, unknown: unknown2 };
+  return { record: { place, labels, organisation, repo, updated }, format, unknown: unknown2 };
 }
 function readPlaceFile(text, stem, registry2 = PLACE_REGISTRY) {
   let data;
@@ -45389,6 +45423,8 @@ function encodePlaceRecord(record2, carry = { format: currentOf(PLACE_REGISTRY),
     kind: record2.place.kind,
     key: record2.place.key,
     labels: sortedLabels(record2.labels).map((label) => ({ name: label.name, confirmed: label.confirmed })),
+    organisation: record2.organisation,
+    repo: record2.repo,
     updated: record2.updated
   };
   const carried = Object.entries(carry.unknown).filter(([key]) => key !== "formatVersion" && !Object.hasOwn(own2, key));
@@ -45696,6 +45732,19 @@ async function loadPlace(places, session) {
   } catch (error62) {
     const problem = { file: "the place area", reason: `could not be read (${error62 instanceof Error ? error62.message : String(error62)})` };
     return stateOf({ state: "unreadable", problem, area: true }, [problem]);
+  }
+}
+async function visitPlace(places, session, now) {
+  const state = await loadPlace(places, session);
+  if (state.read.state !== "stored" || session.place.kind !== "project") return state;
+  const identity = { organisation: session.place.organisation, repo: session.place.repo };
+  const next = filledFromVisit(state.read.stored.record, identity, now.toISOString());
+  if (next === null) return state;
+  try {
+    await places.updatePlace(next, state.read.stored);
+    return { ...state, read: { state: "stored", stored: { ...state.read.stored, record: next } } };
+  } catch {
+    return state;
   }
 }
 function placeLine(state) {
@@ -46241,6 +46290,9 @@ function deadWeight(resolution, problems) {
 function notLoaded(problems) {
   return Object.fromEntries(PROBLEM_GROUPS.map(({ key, holds }) => [key, problems.filter(holds).length]));
 }
+function repeatClusters(memories, labels) {
+  return clustersOf(memories, labels, wordCache());
+}
 function storeFindings(load, scopes, labels, today) {
   const memories = load.memories.map((stored) => stored.memory);
   const present = idsOf(
@@ -46364,6 +46416,69 @@ function placeSession(projectKey) {
 }
 function compareText2(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+// src/dream/promotion.ts
+function narrowestCondition(cluster, places, about) {
+  const evidenceFor = (memory) => {
+    const keys = cluster.members.filter((other) => other.id !== memory.id && other.scope.kind === "project" && roundedSimilarity(memory, other) >= NEAR_IDENTICAL_MIN).map((other) => other.scope.kind === "project" ? other.scope.key : "");
+    if (memory.scope.kind === "project") keys.push(memory.scope.key);
+    return new Set(keys);
+  };
+  const mine = about === void 0 ? new Set(cluster.projects) : evidenceFor(about);
+  const distinct = mine;
+  if (distinct.size < REPEAT_MIN_PLACES) return { wait: "few-places", places: distinct.size };
+  const evidence = [...distinct].map((project) => ({ project, place: places.get(project) }));
+  const missing = evidence.find((one) => one.place === void 0);
+  if (missing !== void 0) return { wait: "unknown-organisation", project: missing.project };
+  const shared = new Set(evidence[0].place.labels.map((label) => label.name));
+  for (const { place } of evidence.slice(1)) {
+    const here = new Set(place.labels.map((label) => label.name));
+    for (const name of [...shared]) if (!here.has(name)) shared.delete(name);
+  }
+  for (const name of [...shared].sort()) {
+    const confirmed = evidence.every(({ place }) => place.labels.some((label) => label.name === name && label.confirmed));
+    return confirmed ? { wait: "label", label: name } : { wait: "unconfirmed", label: name };
+  }
+  const names = new Set(evidence.map(({ place }) => place.organisation));
+  if (names.has(null)) return { wait: "unknown-organisation", project: evidence.find(({ place }) => place.organisation === null).project };
+  if (names.size === 1) return { wait: "organisation", name: [...names][0] };
+  return { kind: "promote" };
+}
+function wordsIn(text) {
+  const words = /* @__PURE__ */ new Set();
+  for (const [word] of text.toLowerCase().matchAll(WORD_RE)) words.add(word);
+  return words;
+}
+function memoryText(memory) {
+  return [memory.title, memory.summary, memory.body].join(String.fromCharCode(10));
+}
+function leaks(text, names) {
+  const words = wordsIn(text);
+  for (const name of names) {
+    for (const word of wordsIn(name)) if (words.has(word)) return word;
+  }
+  return null;
+}
+function namesOf(place) {
+  return [...place.labels.map((label) => label.name), ...place.organisation === null ? [] : [place.organisation], ...place.repo === null ? [] : [place.repo]];
+}
+function evidenceOf(records, project) {
+  const found = records.find((record2) => record2.place.kind === "project" && record2.place.key === project);
+  return found === void 0 ? void 0 : { labels: found.labels, organisation: found.organisation, repo: found.repo };
+}
+function twinIn(text, candidates) {
+  let best = null;
+  for (const candidate of candidates) {
+    if (candidate.id === text.id) continue;
+    const score = roundedSimilarity(text, candidate);
+    if (score < NEAR_IDENTICAL_MIN) continue;
+    if (best === null || score > best.score || score === best.score && candidate.id < best.id) best = { id: candidate.id, score };
+  }
+  return best === null ? null : best.id;
+}
+function roundedSimilarity(a, b) {
+  return Math.round(similarity(a, b) * 100) / 100;
 }
 
 // src/dream/rebalance.ts
@@ -46634,7 +46749,7 @@ function isLater(a, b) {
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
   if (intent === void 0) return { refusal: { reason: "no-intent" } };
-  const { visible, stamp } = context;
+  const { visible, stamp, userScope } = context;
   for (const id of idsOf2(proposal)) {
     if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
   }
@@ -46675,6 +46790,23 @@ function planApply(proposal, records, context) {
     if (retired !== null && "reason" in retired) return { refusal: retired };
     return { steps: retired === null ? [] : [retired] };
   }
+  if (intent.act === "promote") {
+    const record2 = recordOf2(intent.record);
+    if (record2 !== void 0 && "stored" in record2) {
+      const twin = twinIn(
+        record2.stored.memory,
+        userScope.filter((one) => one.id !== intent.record)
+      );
+      if (twin !== null) return { refusal: { reason: "twin", id: intent.record, held: twin } };
+    }
+    const moved = stepOf(
+      intent.record,
+      (memory) => memory.scope.kind === "user",
+      (base) => ({ kind: "update", memory: { ...base.memory, scope: USER, updated: stamp }, base })
+    );
+    if (moved !== null && "reason" in moved) return { refusal: moved };
+    return { steps: moved === null ? [] : [moved] };
+  }
   if (intent.act === "drop-link") {
     const dropped = (memory) => intent.targets.every((target) => !memory.supersedes.includes(target) && !memory.overrides.includes(target));
     const held = stepOf(intent.record, dropped, (base) => {
@@ -46711,6 +46843,8 @@ function idsOf2(proposal) {
       return unique([intent.retired, ...rests]);
     case "drop-link":
       return unique([intent.record, ...rests]);
+    case "promote":
+      return unique([intent.record, ...rests]);
     default:
       return rests;
   }
@@ -46727,6 +46861,8 @@ function writtenIds(proposal) {
     case "retire":
       return [intent.retired];
     case "drop-link":
+      return [intent.record];
+    case "promote":
       return [intent.record];
     default:
       return [];
@@ -46777,9 +46913,48 @@ function propose(input2) {
     if (claimed.has(memory.id)) continue;
     claim2("dead-link", { act: "drop-link", record: memory.id, targets }, [restOf(memory)], [memory.id]);
   }
+  const blocked = { condition: 0, leak: [], twin: 0 };
+  const today = input2.session === void 0 ? void 0 : toLocalDate(new Date(input2.created));
+  const activeUser = input2.session === void 0 || today === void 0 ? [] : resolve4(input2.memories.map((one) => one.stored.memory).filter((m) => m.scope.kind === "user"), input2.session, today).active;
+  for (const cluster of input2.clusters ?? []) {
+    const mine = cluster.members.filter((memory) => memory.scope.kind === "project" && visibleOf(memory));
+    if (mine.length === 0) continue;
+    for (const member of mine) {
+      if (claimed.has(member.id)) continue;
+      const condition = narrowestCondition(cluster, input2.places ?? /* @__PURE__ */ new Map(), member);
+      if ("wait" in condition) {
+        blocked.condition += 1;
+        continue;
+      }
+      const names = cluster.projects.flatMap((project) => {
+        const place = input2.places?.get(project);
+        return place === void 0 ? [] : namesOf(place);
+      });
+      const token = leaks(memoryText(member), names);
+      if (token !== null) {
+        blocked.leak.push({ id: member.id, token });
+        continue;
+      }
+      const twin = twinIn(member, activeUser);
+      if (twin !== null) {
+        blocked.twin += 1;
+        const covered = activeUser.find((one) => one.id === twin);
+        const twinRest = covered === void 0 ? [] : [restOf(covered)];
+        claim2("repeat", { act: "retire", retired: member.id }, [restOf(member), ...twinRest, ...restsOfOthers(cluster, member, restOf)], [member.id]);
+        continue;
+      }
+      claim2(
+        "repeat",
+        { act: "promote", record: member.id },
+        [restOf(member), ...restsOfOthers(cluster, member, restOf)],
+        [member.id]
+      );
+    }
+  }
   const counted = (memories) => memories.filter((memory) => !visibleOf(memory)).length;
   return {
     drafts,
+    blocked,
     unseen: {
       duplicates: input2.pairs.filter((pair) => pair.score >= NEAR_IDENTICAL_MIN && (!visibleOf(pair.a) || !visibleOf(pair.b))).length,
       expired: counted(input2.dead.expired),
@@ -46787,6 +46962,15 @@ function propose(input2) {
       oldHandoffs: counted(input2.dead.olderHandoffs)
     }
   };
+}
+function restsOfOthers(cluster, mine, restOf) {
+  return cluster.members.filter((one) => one.id !== mine.id).flatMap((one) => {
+    try {
+      return [restOf(one)];
+    } catch {
+      return [];
+    }
+  });
 }
 function newerOf(a, b) {
   if (a.updated !== b.updated) return a.updated > b.updated ? [a, b] : [b, a];
@@ -46797,6 +46981,31 @@ function restKey(rests) {
 }
 
 // src/dream/trigger.ts
+function seenBy(session, scope) {
+  return visibleScopes(session).some(
+    (visible) => visible.kind === "user" ? scope.kind === "user" : scope.kind === "project" && visible.key === scope.key
+  );
+}
+async function wideStore(deps) {
+  try {
+    const scopes = await deps.scopes();
+    const load = await deps.load(scopes);
+    const candidates = load.memories.filter((stored) => stored.memory.scope.kind === "project").map((stored) => stored.memory);
+    const placeRecords = deps.places === void 0 ? { places: [], problems: [] } : await deps.places.loadPlaces();
+    const labels = /* @__PURE__ */ new Map();
+    const places = /* @__PURE__ */ new Map();
+    for (const record2 of placeRecords.places) {
+      if (record2.record.place.kind !== "project") continue;
+      const key = record2.record.place.key;
+      labels.set(key, record2.record.labels);
+      const evidence = evidenceOf([record2.record], key);
+      if (evidence !== void 0) places.set(key, evidence);
+    }
+    return { load, candidates, labels, places };
+  } catch {
+    return void 0;
+  }
+}
 var DREAM_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 var DREAM_BUDGET_MS = 5e3;
 var DREAM_STALE_MS = 6e4;
@@ -46838,15 +47047,19 @@ async function dreamRun(deps) {
   const overdue = () => deps.now().getTime() > deadline;
   let created = 0;
   try {
-    const load = await deps.load(visibleScopes(deps.session));
+    const today = toLocalDate(deps.now());
+    const wide = deps.scopes === void 0 ? void 0 : await wideStore(deps);
+    const load = wide?.load ?? await deps.load(visibleScopes(deps.session));
     if (overdue()) return await end("budget", 0, "load");
     const memories = load.memories.map((stored) => stored.memory);
     const { drafts } = propose({
-      // Every memory here came from this session's authorised load of its visible scopes, so all of them are visible.
-      memories: load.memories.map((stored) => ({ stored, visible: true })),
-      pairs: nearPairs(resolve4(memories, deps.session, toLocalDate(deps.now())).active),
-      dead: deadDetail(resolve4(memories, deps.session, toLocalDate(deps.now())), load.problems),
-      created: deps.now().toISOString()
+      // A memory is visible when the session's own scopes hold it; in the wide read every other project's copy is only
+      // counted, which is what 2.4 asks of a repeat.
+      memories: load.memories.map((stored) => ({ stored, visible: wide === void 0 || seenBy(deps.session, stored.memory.scope) })),
+      pairs: nearPairs(resolve4(memories, deps.session, today).active),
+      dead: deadDetail(resolve4(memories, deps.session, today), load.problems),
+      created: deps.now().toISOString(),
+      ...wide === void 0 ? {} : { clusters: repeatClusters(wide.candidates, wide.labels), places: wide.places, session: deps.session }
     });
     if (overdue()) return await end("budget", 0, "finder");
     for (const draft of drafts) {
@@ -46865,7 +47078,7 @@ var import_yaml3 = __toESM(require_dist(), 1);
 import { randomUUID } from "node:crypto";
 var PROPOSAL_KINDS = ["duplicate", "expired", "dead-link", "repeat", "old-handoff"];
 var DECISIONS = ["reject", "keep-both", "accept"];
-var PROPOSAL_FORMAT = "1.2";
+var PROPOSAL_FORMAT = "1.3";
 var PROPOSAL_AREA = "proposals";
 var PROPOSAL_FILE_RE = /^(.+)\.(proposal|decision|apply)(?:\.\d+)?\.yaml$/;
 var InvalidProposalError = class extends StoreError {
@@ -46885,22 +47098,25 @@ var restsSchema = external_exports.array(restSchema).refine((rests) => rests.som
 var intentSchema = external_exports.discriminatedUnion("act", [
   external_exports.strictObject({ act: external_exports.literal("supersede"), survivor: external_exports.string().regex(UUID_RE), retired: external_exports.string().regex(UUID_RE) }),
   external_exports.strictObject({ act: external_exports.literal("retire"), retired: external_exports.string().regex(UUID_RE) }),
+  // A promotion names the record and nothing else: user scope is the one target (2.5 rule 1, D6), so there is no field
+  // in which another project could be named (#401 review: without this arm every promote draft failed to store).
+  external_exports.strictObject({ act: external_exports.literal("promote"), record: external_exports.string().regex(UUID_RE) }),
   external_exports.strictObject({
     act: external_exports.literal("drop-link"),
     record: external_exports.string().regex(UUID_RE),
     targets: external_exports.array(external_exports.string().regex(UUID_RE)).min(1, "a drop-link names at least one target").refine((targets) => new Set(targets).size === targets.length, "a drop-link names each target once")
   })
 ]);
+var earlierFormat = external_exports.string().refine(isFormatVersion, 'formatVersion: must be a quoted "major.minor" string such as "1.1"');
 var proposalSchema = external_exports.strictObject({
-  formatVersion: external_exports.union([external_exports.literal("1.0"), external_exports.literal(PROPOSAL_FORMAT)]),
+  formatVersion: earlierFormat,
   id: external_exports.string().min(1),
   kind: external_exports.enum(PROPOSAL_KINDS),
   rests: restsSchema,
   created: external_exports.string().min(1),
   intent: intentSchema.optional()
 });
-var applySchema = external_exports.strictObject({ formatVersion: external_exports.literal(PROPOSAL_FORMAT), proposal: external_exports.string().min(1), applied: external_exports.string().min(1) });
-var earlierFormat = external_exports.string().refine(isFormatVersion, 'formatVersion: must be a quoted "major.minor" string such as "1.1"');
+var applySchema = external_exports.strictObject({ formatVersion: earlierFormat, proposal: external_exports.string().min(1), applied: external_exports.string().min(1) });
 var decisionSchema = external_exports.strictObject({
   formatVersion: earlierFormat,
   proposal: external_exports.string().min(1),
@@ -47467,7 +47683,8 @@ var PROPOSAL_TEXT = {
     unreadable: (id) => `memory ${shortId(id)} cannot be read, so nothing was written; the index names the record to repair, and the proposal can be accepted again after that`,
     elsewhere: (id) => `memory ${shortId(id)} is not in this session's scopes, so nothing was written; a proposal is applied where its memories show`,
     "two-records": (id) => `memory ${shortId(id)} has more than one record, so this change was refused; ask the user which record to keep, then accept the proposal again`,
-    unchecked: (id) => `memory ${shortId(id)} is not a memory this proposal rests on, so nothing was written; tell the user`
+    unchecked: (id) => `memory ${shortId(id)} is not a memory this proposal rests on, so nothing was written; tell the user`,
+    twin: (id, held) => `user scope already holds a memory this one repeats (${shortId(held ?? "")}), so promoting memory ${shortId(id)} was refused and nothing was written; offer to retire this copy instead: it is already covered there. No retire proposal for it exists yet, so the next dream run proposes one; or delete the copy with delete_memory if the user prefers to do it now`
   },
   /** What dream_proposals adds to its next step while a proposal is accepted and its writes have not all run (#397). */
   unfinished: (count2) => `${count2} ${count2 === 1 ? "proposal is" : "proposals are"} accepted and not applied: its writes were refused or did not all run. Call dream_decide again with accept and the id, for each id under unfinished: it finishes what is left and changes nothing already done. Tell the user which one is unfinished and why, when the refusal said so.`,
@@ -47566,6 +47783,8 @@ function createServer(deps) {
       load: (scopes) => reader.load(scopes),
       session: deps.session,
       now,
+      ...dream.scopes === void 0 ? {} : { scopes: dream.scopes },
+      ...dream.places === void 0 ? {} : { places: dream.places },
       ...dream.budgetMs === void 0 ? {} : { budgetMs: dream.budgetMs }
     });
     dream.onStart?.(work);
@@ -47671,15 +47890,20 @@ function createServer(deps) {
   };
   const refusalText = (stop) => {
     const { reason } = stop;
-    return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "");
+    return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "", reason === "twin" ? stop.held : void 0);
   };
   const planOfAccept = async (proposal) => {
     const ids = idsOf2(proposal);
     const records = (await Promise.all(ids.map((id) => reader.recordsOf(id)))).flat();
-    const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString() });
-    if (plan.refusal !== void 0) return plan;
     const loaded = await reader.load(visibleScopes(deps.session));
     const existing = loaded.memories.map((stored) => stored.memory);
+    const userScope = resolve4(
+      existing.filter((memory) => memory.scope.kind === "user"),
+      deps.session,
+      toLocalDate(now())
+    ).active;
+    const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString(), userScope });
+    if (plan.refusal !== void 0) return plan;
     const steps = plan.steps ?? [];
     const errors = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
     return errors.length === 0 ? { steps } : { stop: errors.join("; ") };
@@ -47869,7 +48093,7 @@ function createServer(deps) {
     "list_labels",
     {
       title: "List NeoCortex labels",
-      description: "The topic labels of active memories with their counts, and the context labels of places with the number of places that carry each. Reuse an existing label instead of inventing a near-duplicate."
+      description: "The topic labels of active memories with their counts, the context labels of places with the number of places that carry each, and each project place's remote organisation and repository. Reuse an existing label instead of inventing a near-duplicate."
     },
     () => guarded(async () => {
       const { resolution } = await load();
@@ -47884,8 +48108,16 @@ function createServer(deps) {
         for (const { name } of record2.labels) carried.set(name, (carried.get(name) ?? 0) + 1);
       }
       const contextLabels = [...carried].map(([label, count2]) => ({ label, places: count2 })).sort((a, b) => b.places - a.places || (a.label < b.label ? -1 : 1));
+      const placeRemotes = places.flatMap(
+        ({ record: record2 }) => record2.place.kind === "project" ? [{ place: record2.place.key, organisation: record2.organisation, repo: record2.repo }] : []
+      ).sort((a, b) => a.place < b.place ? -1 : a.place > b.place ? 1 : 0);
       const placeProblems2 = problems.map(shownProblem);
-      return ok({ labels, contextLabels, ...placeProblems2.length > 0 ? { placeProblems: placeProblems2 } : {} });
+      return ok({
+        labels,
+        contextLabels,
+        ...placeRemotes.length > 0 ? { placeRemotes } : {},
+        ...placeProblems2.length > 0 ? { placeProblems: placeProblems2 } : {}
+      });
     })
   );
   const dreamReading = async () => {
@@ -47921,9 +48153,35 @@ function createServer(deps) {
       let repeats;
       try {
         const scopes = await reader.scopes();
-        const found = storeFindings(await reader.load(scopes), scopes, /* @__PURE__ */ new Map(), toLocalDate(at));
+        let evidence = /* @__PURE__ */ new Map();
+        let labels = /* @__PURE__ */ new Map();
+        try {
+          const read = deps.places === void 0 ? { places: [], problems: [] } : await deps.places.loadPlaces();
+          for (const record2 of read.places) {
+            if (record2.record.place.kind !== "project") continue;
+            const key = record2.record.place.key;
+            labels = new Map([...labels, [key, record2.record.labels]]);
+            const one = evidenceOf([record2.record], key);
+            if (one !== void 0) evidence = new Map([...evidence, [key, one]]);
+          }
+        } catch {
+        }
+        const found = storeFindings(await reader.load(scopes), scopes, labels, toLocalDate(at));
         repeats = found.clusters.flatMap(
-          (cluster) => cluster.members.filter((m) => seenBy(deps.session, m.scope)).map((m) => ({ ...relatedEntryOf(m), otherPlaces: cluster.projects.length - 1 }))
+          (cluster) => (
+            // Per member, as propose.ts asks it: a cluster is joined by single linkage, so each copy stands on its own
+            // evidence, and a reword in the 0.5-0.8 band is one this report must call not promotable (AC 5).
+            cluster.members.filter((m) => seenBy2(deps.session, m.scope)).map((m) => {
+              const condition = narrowestCondition(cluster, evidence, m);
+              const names = cluster.projects.flatMap((project) => {
+                const place2 = evidence.get(project);
+                return place2 === void 0 ? [] : namesOf(place2);
+              });
+              const token = "kind" in condition ? leaks(memoryText(m), names) : null;
+              const blockedBy = "kind" in condition ? token === null ? null : { rule: "leak", token } : condition;
+              return { ...relatedEntryOf(m), otherPlaces: cluster.projects.length - 1, promotable: blockedBy === null, ...blockedBy === null ? {} : { blockedBy } };
+            })
+          )
         );
         const { projects, memories, clusters, deadWeight: dead, notLoaded: problems } = found;
         store2 = { projects, memories, nearDuplicatePairs: found.pairs.length, repeatClusters: clusters.length, deadWeight: dead, notLoaded: problems };
@@ -47970,7 +48228,8 @@ function createServer(deps) {
     "dream_proposals",
     { title: "List the Dreamer's proposals that wait here", description: PROPOSALS_DESCRIPTION },
     () => guarded(async () => {
-      const { judged, notRead } = judgeAll(await listed3(), await seen());
+      const proposalsLoaded = await listed3();
+      const { judged, notRead } = judgeAll(proposalsLoaded, await seen());
       const closedFor = (...closures) => judged.filter((one) => one.state === "closed" && closures.includes(one.closure)).length;
       const appliedUnreadable = closedFor("appliedUnreadable");
       const appliedNewer = closedFor("appliedNewer");
@@ -47989,7 +48248,13 @@ function createServer(deps) {
           id: one.id,
           kind: one.kind,
           shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
-          ...one.others > 0 ? { others: one.others } : {}
+          ...one.others > 0 ? { others: one.others } : {},
+          // A promote carries no format-2.0 condition TODAY, so the memory loads in EVERY place (src/policy.ts:76),
+          // including the owner's folder places the cluster's evidence never covered. The answer says it where the user
+          // agrees (decided 2026-11-05, #401): a cost this size must not be discoverable only in the design.
+          // `carriesCondition: false` is a statement about this format, not an invariant: whoever gives a promote a
+          // condition at format 2.0 must change this field with it, or it reports a cost that no longer applies.
+          ...proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent?.act === "promote" ? { carriesCondition: false, loadsEverywhere: true } : {}
         })),
         ...unfinished.length > 0 ? { unfinished } : {},
         ...anyClosed ? { closed } : {},
@@ -48047,17 +48312,27 @@ function createServer(deps) {
         const { record: record2, reason } = shownProblem(problem);
         return fail(read.area === true ? LABEL_TEXT.area(reason, record2) : LABEL_TEXT.unreadable(reason, record2));
       }
-      const next = { place, labels: normalized.labels, updated: now().toISOString() };
+      const identity = identityOf(deps.session.place);
+      const updated = now().toISOString();
+      const next = (stored) => ({
+        place,
+        labels: normalized.labels,
+        organisation: stored?.organisation ?? identity.organisation,
+        repo: stored?.repo ?? identity.repo,
+        updated
+      });
       const previous = read.state === "stored" ? read.stored.record.labels : null;
       try {
-        if (read.state === "none") await deps.places.createPlace(next);
-        else if (!sameLabels(read.stored.record.labels, next.labels)) await deps.places.updatePlace(next, read.stored);
+        if (read.state === "none") await deps.places.createPlace(next(null));
+        else if (!sameLabels(read.stored.record.labels, normalized.labels) || filledFromVisit(read.stored.record, identity, updated) !== null) {
+          await deps.places.updatePlace(next(read.stored.record), read.stored);
+        }
       } catch (error62) {
         const refused = await labelRefusal(error62, deps.places, place);
         if (refused === void 0) throw error62;
         return fail(refused);
       }
-      return ok({ place: placeName(place), labels: next.labels, previous });
+      return ok({ place: placeName(place), labels: normalized.labels, previous });
     })
   );
   server.registerTool(
@@ -48077,7 +48352,7 @@ function createServer(deps) {
     async ({ moment, event, part, prompt }) => {
       try {
         const { view, delivery } = await delivered();
-        const place = PLACE_MOMENTS.includes(moment) ? await loadPlace(deps.places, deps.session) : null;
+        const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         dreamOnce(event);
@@ -48221,7 +48496,7 @@ function createServer(deps) {
       let text;
       try {
         const input2 = await loadDelivery(reader, deps.session, now());
-        text = statusReport(input2, await deps.places.readPlace(placeRefOf(deps.session.place)), about);
+        text = statusReport(input2, await visitPlace(deps.places, deps.session, now()), about);
       } catch (error62) {
         text = statusUnread(about, error62);
       }
@@ -48509,7 +48784,7 @@ function moveRefusal(error62, memory, base, session) {
   const name = (record2) => record2 === self ? "this one" : `the one in ${scopeWords(record2.scope)}`;
   const one = others.length === 1;
   const places = others.map((record2) => scopeWords(record2.scope)).join(", ");
-  const unseen = others.filter((record2) => "stored" in record2 && !seenBy(session, record2.scope)).map((record2) => scopeWords(record2.scope));
+  const unseen = others.filter((record2) => "stored" in record2 && !seenBy2(session, record2.scope)).map((record2) => scopeWords(record2.scope));
   const dated = all.flatMap((record2) => {
     const time3 = "stored" in record2 ? Date.parse(record2.stored.memory.updated) : Number.NaN;
     return Number.isNaN(time3) ? [] : [{ record: record2, time: time3 }];
@@ -48574,14 +48849,17 @@ function movedRecordOf(record2, which, session) {
     return { which, scope, unreadable: format === void 0 ? reason : shownText(`written by a newer NeoCortex (format ${format})`) };
   }
   const { memory, revision } = record2.stored;
-  const content = seenBy(session, record2.scope) ? { title: shownText(memory.title), summary: shownText(memory.summary) } : {};
+  const content = seenBy2(session, record2.scope) ? { title: shownText(memory.title), summary: shownText(memory.summary) } : {};
   return { which, scope, revision, updated: shownText(memory.updated), bodyLength: memory.body.length, ...content };
 }
-function seenBy(session, scope) {
+function seenBy2(session, scope) {
   return visibleScopes(session).some((visible) => sameScope(visible, scope));
 }
 function capital(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+function identityOf(place) {
+  return place.kind === "project" ? { organisation: place.organisation, repo: place.repo } : { organisation: null, repo: null };
 }
 async function labelRefusal(error62, places, place) {
   if (error62 instanceof AlreadyExistsError || error62 instanceof ConflictError && !error62.gone) {
@@ -49799,5 +50077,7 @@ if (move) {
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
   const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
   const runs = new FileRunStore(root, (run) => store.dreamLock(run));
-  await createServer({ store, places: store, session, autoMemory, proposals, dream: { runs } }).connect(new StdioServerTransport());
+  await createServer({ store, places: store, session, autoMemory, proposals, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+    new StdioServerTransport()
+  );
 }

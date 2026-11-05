@@ -2,6 +2,19 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.31 - 2026-11-05
+
+- Each place now records its remote's organisation and repository, learned on your next visit, so a run in one project
+  can tell whether a memory belongs to one customer or to all of them. Nothing is added to a place whose labels you have
+  not set yet, so the first-visit reminder still appears.
+- The Dreamer now proposes a memory that repeats in three or more of your projects to be shared with all of them, once
+  per project, moving one copy to user scope and leaving your wording alone. Two things it will not do: it never shares
+  a repeat whose projects share a context label or belong to one customer (that waits for a later release), and it
+  never shares text that names one of those organisations, repositories or labels. A copy that only repeats the same
+  rule in other words is left alone rather than rewritten.
+- Fixed: the proposal format is no longer pinned when a record is read. Before this, raising the format would have made
+  every proposal and answer that was already stored read as invalid instead of as an older version.
+
 ## 0.4.30 - 2026-11-04
 
 - Claude now searches your memories with your own words. A search finds only memories that hold every word in it, so
