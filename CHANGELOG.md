@@ -2,6 +2,12 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.4.32 - 2026-11-05
+
+- Fixed: a shared memory proposed for all your projects could show a second copy from the project you were in, as though
+  both would be shared, while only one of them was. It also counted that copy as another project. It now shows your one
+  copy and one from each other project, and counts only those.
+
 ## 0.4.31 - 2026-11-05
 
 - Each place now records its remote's organisation and repository, learned on your next visit, so a run in one project

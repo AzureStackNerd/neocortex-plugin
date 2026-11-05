@@ -45246,7 +45246,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.31",
+  version: "0.4.32",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46964,13 +46964,19 @@ function propose(input2) {
   };
 }
 function restsOfOthers(cluster, mine, restOf) {
-  return cluster.members.filter((one) => one.id !== mine.id).flatMap((one) => {
+  const here = mine.scope.kind === "project" ? mine.scope.key : null;
+  const seenPlaces = /* @__PURE__ */ new Set();
+  const rests = [];
+  for (const one of cluster.members) {
+    if (one.id === mine.id || one.scope.kind !== "project" || one.scope.key === here) continue;
+    if (seenPlaces.has(one.scope.key)) continue;
     try {
-      return [restOf(one)];
+      rests.push(restOf(one));
+      seenPlaces.add(one.scope.key);
     } catch {
-      return [];
     }
-  });
+  }
+  return rests;
 }
 function newerOf(a, b) {
   if (a.updated !== b.updated) return a.updated > b.updated ? [a, b] : [b, a];
