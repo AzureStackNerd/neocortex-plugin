@@ -45372,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.3",
+  version: "0.5.4",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47567,7 +47567,8 @@ var RuleRefusedError = class extends Error {
   }
 };
 var DONE = { create: "saved", update: "changed", remove: "deleted" };
-var carryWords = (carry) => `plus ${carry.length === 1 ? carry[0] : `${carry.slice(0, -1).join(", ")} and ${carry.at(-1)}`} with the text that is to load (get_memory gives the stored text)`;
+var carryWords = (carry) => `plus ${fieldWords(carry)} with the text that is to load (get_memory gives the stored text)`;
+var fieldWords = (fields) => fields.length === 1 ? fields[0] : `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}`;
 var RULE_TEXT = {
   /**
    * tool is the confirmed tool named in the refusal: save_rule, update_rule or delete_rule by default, and the twin of
@@ -47575,6 +47576,18 @@ var RULE_TEXT = {
    */
   needsRuleTool: (kind, carry, tool = RULE_TOOL[kind]) => `Nothing was ${DONE[kind]}: this call changes which rules load, and only the user can approve that. A rule is a memory that is enforced, or delivered at ${RULE_DELIVERY_WORDS}. If the user asked for this change, call ${tool} with the same arguments${carry.length === 0 ? "" : `, ${carryWords(carry)},`} and affects exactly as listed; the user confirms it in a prompt.`,
   needsText: (carry, tool = RULE_TOOL.update) => `Nothing was changed: this change makes text load, and the user sees that text in the prompt only when the call carries it. Call ${tool} again with the same arguments, ${carryWords(carry)}, and affects exactly as listed.`,
+  /**
+   * A carried text that is not the stored text, from a call that writes none of its own (dream_decide_rule, #447). The
+   * one way through is the stored text: the accept is recorded already, so a change of the memory leaves the proposal
+   * unfinished, never closed. listed: the answer lists the lines, which it does only for a write that changes rules.
+   */
+  textDiffers: (differ, tool, listed3) => {
+    const [fields, it] = [fieldWords(differ), differ.length === 1 ? "it" : "them"];
+    const again = listed3 ? `with the same arguments, ${fields} exactly as get_memory gives ${it}, and affects exactly as listed` : `with the same arguments and affects, ${fields} exactly as get_memory gives ${it}`;
+    return `Nothing was changed: the ${fields} this call carries ${differ.length === 1 ? "is" : "are"} not the stored text, and this call writes no text of its own. Call ${tool} again ${again}.`;
+  },
+  /** A call that carries text for an accept that deletes a memory (#447): a delete makes no text of its own load. */
+  textOnDelete: (carried, tool) => `Nothing was written: this accept deletes a memory, and a delete makes no text of its own load, so it carries none. Call ${tool} again with the same arguments, without ${fieldWords(carried)}.`,
   noRule: (kind) => `Nothing was ${DONE[kind]}: this call changes no rule, so it needs no confirmation. Call ${TWIN_TOOL[kind]} with the same arguments, without affects.`,
   mismatch: (kind, tool = RULE_TOOL[kind]) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${tool} again with affects exactly as listed.`,
   tooLong: (kind, rules, tool = "update_rule") => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller ${tool} calls, each with the affects its own refusal lists.`,
@@ -47714,10 +47727,20 @@ var RuleGuard = class {
       }
       return this.perform(write);
     }
-    if (!changesRules(effect)) throw new RuleRefusedError({ error: RULE_TEXT.noRule(write.kind), tool: TWIN_TOOL[write.kind] });
+    const held = confirmation.text === void 0 ? [] : TEXT_FIELDS.filter((field) => confirmation.text?.[field] !== void 0);
+    if (write.kind === "remove" && held.length > 0) throw new RuleRefusedError({ error: RULE_TEXT.textOnDelete(held, tool), tool });
+    const differ = write.kind === "remove" || confirmation.text === void 0 ? [] : differingText(confirmation.text, write.memory);
+    if (!changesRules(effect)) {
+      if (held.length === 0) throw new RuleRefusedError({ error: RULE_TEXT.noRule(write.kind), tool: TWIN_TOOL[write.kind] });
+      if (differ.length > 0) throw new RuleRefusedError({ error: RULE_TEXT.textDiffers(differ, tool, false), tool });
+      return this.perform(write);
+    }
     const carried = confirmation.carried ?? [];
     if (carry.some((field) => !carried.includes(field))) {
       throw new RuleRefusedError({ error: RULE_TEXT.needsText(carry, tool), tool, carry, affects }, short);
+    }
+    if (differ.length > 0) {
+      throw new RuleRefusedError({ error: RULE_TEXT.textDiffers(differ, tool, true), tool, ...carry.length > 0 ? { carry } : {}, affects }, short);
     }
     if (!sameLines(affects, confirmation.affects)) {
       throw new RuleRefusedError({ error: RULE_TEXT.mismatch(write.kind, tool), tool, affects }, short);
@@ -47816,9 +47839,17 @@ function textToCarry(write, effect) {
   if (write.kind !== "update") return [];
   const [was, will] = [write.base.memory, write.memory];
   const starts = effect.changes.some((change) => change.id === will.id && change.after.some((loads, day) => loads && !change.before[day]));
-  if (!isRule(was) && isRule(will) || was.delivery !== will.delivery || starts) return loadingFields(will);
   const loaded = loadingFields(was);
-  return loadingFields(will).filter((field) => !loaded.includes(field));
+  const fields = !isRule(was) && isRule(will) || was.delivery !== will.delivery || starts ? loadingFields(will) : loadingFields(will).filter((field) => !loaded.includes(field));
+  return fields.filter((field) => will[field] !== "");
+}
+function differingText(text, memory) {
+  return TEXT_FIELDS.filter((field) => {
+    const carried = text[field];
+    if (carried === void 0) return false;
+    const stored = memory[field];
+    return carried !== (stored === null ? null : field === "summary" ? shownText(stored) : stored.toWellFormed());
+  });
 }
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
 var SWAP_MARK = " (another record of this memory)";
@@ -48039,6 +48070,7 @@ var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
 var TWIN_ANSWER = external_exports.literal("accept").describe("only accept writes; reject and keep-both change no memory, so call dream_decide for them");
+var TWIN_TEXT = { summary: UPDATE_INPUT.summary, why: UPDATE_INPUT.why, body: UPDATE_INPUT.body, overrideReason: UPDATE_INPUT.overrideReason };
 var DECIDE_DESCRIPTION = "Record the user's answer to one of the Dreamer's proposals that dream_proposals lists under waiting, by its whole id: reject, keep-both, or accept. reject and keep-both change no memory. accept writes the clean-up the proposal describes, through the same guard as every other write, so a memory it changes that is a rule needs dream_decide_rule, which the user confirms in a prompt. Nothing is written when a memory it shows changed since the proposal was made. Call it only for an answer the user gave in this conversation; any other proposal is refused and nothing is recorded.";
 var PROPOSAL_TEXT = {
   failed: (code) => `the proposals could not be read or written${code === void 0 ? "" : ` (${code})`}; try again, and tell the user if it keeps failing`,
@@ -48241,6 +48273,7 @@ function createServer(deps) {
   };
   const writeStep = async (step, confirmation) => {
     if (confirmation === null) return void await guard.write(step, null, "dream_decide_rule");
+    if ((confirmation.carried ?? []).length > 0) return void await guard.write(step, confirmation, "dream_decide_rule");
     try {
       await guard.write(step, null, "dream_decide_rule");
     } catch (error62) {
@@ -48268,6 +48301,10 @@ function createServer(deps) {
     const plan = args2.decision === "accept" ? await planOfAccept(proposal) : void 0;
     if (plan?.stop !== void 0) return fail(plan.stop);
     if (plan?.refusal !== void 0) return fail(refusalText(plan.refusal));
+    const carried = confirmation?.carried ?? [];
+    if (carried.length > 0 && plan?.steps?.some((step) => step.kind === "remove") === true) {
+      return ruleAnswer(new RuleRefusedError({ error: RULE_TEXT.textOnDelete(carried, "dream_decide_rule"), tool: "dream_decide_rule" }));
+    }
     if (found.state !== "accepted") {
       try {
         await recorded(found.id, args2.decision);
@@ -48696,13 +48733,13 @@ function createServer(deps) {
     "dream_decide_rule",
     {
       title: "Apply a Dreamer's proposal after the user confirmed a rule change",
-      description: "Accept a Dreamer proposal whose writes change which rules load, after dream_decide refused it for exactly that reason. The user confirms every call in a prompt. Pass the arguments of that dream_decide call and affects exactly as its refusal listed; call it only for a change the user asked for.",
+      description: "Accept a Dreamer proposal whose writes change which rules load, after dream_decide refused it for exactly that reason. The user confirms every call in a prompt. Pass the arguments of that dream_decide call, each text field its refusal names under carry exactly as get_memory gives it, and affects exactly as its refusal listed; call it only for a change the user asked for.",
       // accept only (#426): the prompt comes from the flag before this handler runs, so the schema is where a reject
       // has to fail, never a refusal after the user already confirmed.
-      inputSchema: { affects: AFFECTS, id: DECIDE_ID, decision: TWIN_ANSWER },
+      inputSchema: { affects: AFFECTS, id: DECIDE_ID, decision: TWIN_ANSWER, ...TWIN_TEXT },
       _meta: CONFIRMED
     },
-    ({ affects, id, decision }) => guarded(async () => decideCall({ id, decision }, { affects }))
+    ({ affects, id, decision, ...text }) => guarded(async () => decideCall({ id, decision }, { affects, carried: carriedOf(text), text }))
   );
   const labelsCall = async ({ labels }, confirmation) => {
     const normalized = normalizeContextLabels(labels);

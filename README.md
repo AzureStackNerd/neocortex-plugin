@@ -267,6 +267,8 @@ What it proposes, without a model, from what it finds:
 **Answering one.** `dream_proposals` lists the proposals that wait in this session, each showing the memories it is
 about. `dream_decide` records your answer: `accept` writes the clean-up, `reject` and `keep-both` change nothing. A
 write that would change which rules load needs `dream_decide_rule` instead, and Claude Code asks you before that call.
+When the accept makes a rule load in more places, such as sharing a project rule with all your places, that one prompt
+shows the rule's text as it will load.
 A proposal whose memory changed, moved or was deleted since it was made is closed rather than applied, so nothing is
 written on stale text.
 
@@ -288,7 +290,8 @@ proposes on its own, at most once a week, on the first prompt of a session, it a
 budget stopped it -- `dream_proposals`, which
 lists the Dreamer's proposals that wait in this session and changes nothing, `dream_decide`, which records the user's
 answer to one of them -- reject and keep-both change no memory, accept writes the clean-up the proposal describes --
-`dream_decide_rule`, its confirmed twin for an accept whose writes change which rules load, and `hook_context`, which
+`dream_decide_rule`, its confirmed twin for an accept whose writes change which rules load, which carries the text such
+a write makes load, and `hook_context`, which
 is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
 memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule

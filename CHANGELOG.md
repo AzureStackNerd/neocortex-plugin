@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.4 - 2026-11-07
+
+- Fixed: accepting the Dreamer's proposal to share one of your project rules with your other places no longer loops on
+  a refusal. One prompt shows the rule's text and where it starts loading; confirmed, the rule loads there from the
+  next prompt. Such a proposal you accepted on an earlier version, and that never applied, finishes with the same
+  accept as long as the rule has not changed since.
+- Using one memory folder from several machines? Update NeoCortex on each: a machine still on 0.5.3 keeps refusing
+  such an accept.
+
 ## 0.5.3 - 2026-11-07
 
 - Changed: the condition of an existing rule can be narrowed, widened or removed in one change you confirm, such as
