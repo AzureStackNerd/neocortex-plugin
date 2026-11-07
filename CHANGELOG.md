@@ -2,6 +2,22 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.2 - 2026-11-07
+
+- Added: a rule can apply only in places with a context label, such as one customer's rules in the places labelled for
+  that customer. Ask Claude to give a rule a label and confirm it as any rule change; the rule then arrives at the
+  session start, at every prompt, at a short question, at every edit and in every subagent only in places with that
+  label. A place nobody has labelled yet hides nothing, so such a rule arrives there until the place is labelled.
+  Claude proposes a label for a rule that belongs to one kind of place, and you confirm it. An existing rule gets a
+  label in three steps, each confirmed: make it a note, give the note the label, and make it a rule again; it keeps
+  its id.
+- Changed: a change of a place's labels that would make a rule start or stop loading there now asks you first and
+  names the rules (the first ones and the number of the others when there are many); without your yes, the labels stay
+  as they were. A place's first labels still take effect at once. While a memory in your user scope or this project
+  cannot be read, a change of a place's labels is refused, naming that memory.
+- Using one memory folder from several machines? Update NeoCortex on each: a machine still on 0.5.1 changes a place's
+  labels without asking, also when that starts or stops a labelled rule.
+
 ## 0.5.1 - 2026-11-07
 
 - Added: a rule can apply only inside a git repository. Ask Claude to keep a rule, such as a definition of done, to

@@ -169,13 +169,16 @@ session start, a subagent's start or a refresh; where it holds, its index line s
 the place.
 
 An update that leaves `appliesWhen` out keeps the condition; `null` or `{}` removes it. A rule can apply only inside a
-repo (`inRepo`), such as a definition of done, and then arrives at its own moment, a prompt, an edit or a subagent's
-start, only in sessions inside a repo; you confirm it like any rule change. Not possible yet: labels on a rule, a
-condition on a memory with `overrides`, file globs (`files`), and changing an existing rule's condition in one call
-(make it no rule, change the condition, make it a rule again); a project memory never takes one, because its project
-already fixes where it applies. Such a call is refused with the reason, and nothing is written; so is a call that
-names a field the tool does not know. Using one store from several machines? Update NeoCortex on each: a machine still
-at 0.5.0 delivers a rule that applies only inside a repo in folders too.
+repo (`inRepo`), such as a definition of done, or only in places with a label, such as one customer's rules, and then
+arrives at its own moment, a prompt, an edit or a subagent's start, only where that holds; you confirm it like any rule
+change, and Claude proposes such a label itself for a rule that belongs to one kind of place. A place's first labels
+take effect at once; a later label change that would make a rule start or stop loading there asks you first, naming
+those rules, through `set_context_labels_rule`. Not possible yet: a condition on a memory with `overrides`, file globs
+(`files`), and changing an existing rule's condition in one call (make it no rule, change the condition, make it a rule
+again); a project memory never takes one, because its project already fixes where it applies. Such a call is refused
+with the reason, and nothing is written; so is a call that names a field the tool does not know. Using one store from
+several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers a rule that applies only inside a repo in
+folders too, and one still at 0.5.1 changes a place's labels without asking, also when that starts or stops a rule.
 
 ### What a memory holds
 
@@ -274,7 +277,8 @@ whether it carries a condition and so loads only in some places, and shows that 
 ## Permissions
 
 The server's tools are `save_memory`, `update_memory`, `get_memory`, `search_memories`, `list_labels`,
-`set_context_labels`, `delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`,
+`set_context_labels`, `set_context_labels_rule`, its confirmed twin for a label change that starts or stops a rule here,
+`delete_memory`, `save_rule`, `update_rule`, `delete_rule`, `import_auto_memory`,
 `dream_report`, which shows how optimized NeoCortex is for this place and changes nothing -- and since the Dreamer
 proposes on its own, at most once a week, on the first prompt of a session, it also shows that last run and where a time
 budget stopped it -- `dream_proposals`, which
@@ -317,8 +321,8 @@ next to that allow rule:
 (<https://code.claude.com/docs/en/permissions>). The rule names the tool, not its mode, so it prompts for the preview
 too (not measured).
 
-The allow rule does not cover `save_rule`, `update_rule` and `delete_rule`: they write rules, and Claude Code asks
-before every call of them. Such a call carries the text that will load, and each line of its `affects` names how many
+The allow rule does not cover `save_rule`, `update_rule`, `delete_rule`, `dream_decide_rule` and
+`set_context_labels_rule`: they change which rules load, and Claude Code asks before every call of them. Such a call carries the text that will load, and each line of its `affects` names how many
 characters a rule puts in front of Claude; how Claude Code shows a long argument in the prompt is not checked. "Allow
 rules that match the tool don't skip the prompt either"
 (<https://code.claude.com/docs/en/mcp>, Require approval for a specific tool). In `dontAsk` mode, and with

@@ -45372,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.1",
+  version: "0.5.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45639,10 +45639,11 @@ function validateLinks(memory, existing) {
 }
 var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)})`;
 var CONDITION_TEXT = {
-  /** T1 on a save: a rule takes inRepo alone since #440; labels wait for S3 (#441) and files for #434. */
-  rule: () => `appliesWhen: ${RULE_WORDS()} takes only inRepo yet, no labels or files; leave them out`,
-  /** T1 on an update that makes a memory with labels or files a rule and leaves the condition as it is. */
-  becomesRule: () => `appliesWhen: this change makes a memory with labels or files ${RULE_WORDS()}, which takes only inRepo yet; first change its condition to inRepo alone, or remove it with appliesWhen null, then make it a rule`,
+  /**
+   * T1 since #441: a rule takes inRepo and labels, and files wait for #434. A save of a rule with files meets T3 below,
+   * as every memory does; only a hand-written files part that an update leaves as it is reaches this text.
+   */
+  becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, and a file condition is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
   /** AC5: the condition of a memory that is a rule before or after the change. Its way out is S6 of #440. */
   ruleChanged: () => `appliesWhen: the condition of ${RULE_WORDS()} cannot be set, changed or removed yet; leave appliesWhen out of this call. To change it, make the memory no rule first, change appliesWhen in a call of its own, then make it a rule again`,
   /** T2 on a save. */
@@ -45661,11 +45662,10 @@ var CONDITION_TEXT = {
 function conditionProblems(written, stored, current) {
   const after = canonicalCondition(written.appliesWhen);
   const placed = after?.inRepo === true || after?.labels !== void 0;
-  const ruleTakes = after === void 0 || after.labels === void 0 && after.files === void 0;
+  const filed = after?.files !== void 0;
   const problems = [];
   if (stored === void 0) {
     if (after === void 0) return problems;
-    if (isRule(written) && !ruleTakes) problems.push(CONDITION_TEXT.rule());
     if (written.overrides.length > 0) problems.push(CONDITION_TEXT.override);
     if (after.files !== void 0) problems.push(CONDITION_TEXT.files);
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
@@ -45674,7 +45674,7 @@ function conditionProblems(written, stored, current) {
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
   if (changed && (isRule(stored) || isRule(written))) problems.push(CONDITION_TEXT.ruleChanged());
-  if (!changed && !ruleTakes && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
+  if (!changed && filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
   if (changed && (stored.overrides.length > 0 || written.overrides.length > 0)) problems.push(CONDITION_TEXT.overrideChanged);
   if (!changed && after !== void 0 && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride);
   if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
@@ -45733,12 +45733,12 @@ function isRule(memory) {
 }
 var RULE_DELIVERIES = DELIVERIES.filter((delivery) => isRule({ delivery, enforced: false }));
 var PLACE_ORDER = { here: 0, elsewhere: 1, overriding: 2 };
-function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE) {
+function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE, hereAfter = here) {
   const ends = [...new Set([...before, ...after].flatMap((m) => m.expires !== null && m.expires >= today ? [m.expires] : []))].sort();
   const days = [{ kind: "today" }, ...ends.map((date5) => ({ kind: "after", date: date5 }))];
   const samples = days.map((day) => sampleDate(day, today));
   const was = loadingOf(before, session, samples, here);
-  const will = loadingOf(after, session, samples, here);
+  const will = loadingOf(after, session, samples, hereAfter);
   const none = samples.map(() => null);
   const changes = [.../* @__PURE__ */ new Set([...was.keys(), ...will.keys()])].map((key) => {
     const [id, place] = key.split(" ");
@@ -47495,21 +47495,24 @@ How to save:
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
 5. Use scope project when it only applies in this repository, scope user when everywhere.
-6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
+6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
 7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer; for a rule only inRepo, when it fits code work alone.
+When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer: a context label when it belongs to one kind of place, inRepo when it fits code work alone.
 
 At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
 
 When a start says its index is crowded, shrinking it is the user's choice: call dream_report, offer what it prices as movable, and on the user's yes call update_memory with delivery on-demand, one memory per call.`;
 
 // src/rule-guard.ts
+import { createHash as createHash4 } from "node:crypto";
 var RULE_TOOL = { create: "save_rule", update: "update_rule", remove: "delete_rule" };
 var TWIN_TOOL = { create: "save_memory", update: "update_memory", remove: "delete_memory" };
+var LABEL_TOOLS = { ordinary: "set_context_labels", confirmed: "set_context_labels_rule" };
 var TITLE_MAX2 = 80;
+var REFUSAL_MAX = 1e4;
 var RULE_DELIVERY_WORDS = `${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)}`;
 var TEXT_FIELDS = ["summary", "why", "body", "overrideReason"];
 var RuleRefusedError = class extends Error {
@@ -47534,6 +47537,15 @@ var RULE_TEXT = {
   noRule: (kind) => `Nothing was ${DONE[kind]}: this call changes no rule, so it needs no confirmation. Call ${TWIN_TOOL[kind]} with the same arguments, without affects.`,
   mismatch: (kind, tool = RULE_TOOL[kind]) => `Nothing was ${DONE[kind]}: affects does not match what this call changes now. If the user still wants this change, call ${tool} again with affects exactly as listed.`,
   tooLong: (kind, rules, tool = "update_rule") => `Nothing was ${DONE[kind]}: this call changes how ${rules} rules load, too many to list in one refusal. Split it: change the links over several smaller ${tool} calls, each with the affects its own refusal lists.`,
+  /**
+   * A label change that makes rules start or stop loading here (#441, K3). Claude tells the user and asks before the
+   * confirmed tool, which it calls only for a change the user asked for or confirms, never on its own proposal (S62).
+   */
+  needsLabelTool: `Nothing was changed: this label change makes the rules in affects start or stop loading here, and only the user can approve that. Tell the user which rules start or stop loading here and ask; only if the user asked for this change or confirms it, call ${LABEL_TOOLS.confirmed} with the same labels and affects exactly as listed; the user confirms it in a prompt.`,
+  /** The confirmed label tool for a change that needs no confirmation: no rule starts or stops, or the place's first labels. */
+  noLabelRule: `Nothing was changed: this label change needs no confirmation, since it makes no rule start or stop loading here or gives this place its first labels. Call ${LABEL_TOOLS.ordinary} with the same labels, without affects.`,
+  /** The confirmed label tool with lines that are not the change's lines now (S54, S55). */
+  labelMismatch: `Nothing was changed: affects does not match what this label change does now. If the user still wants this change, show the user these lines and call ${LABEL_TOOLS.confirmed} again with affects exactly as listed.`,
   /**
    * A write that depends on a record the store could not read (spec 4.6, C9). It names no rule tool: no prompt can
    * show what such a record would load. A problem without text is one whose text itself could not be read (C7).
@@ -47645,7 +47657,7 @@ var RuleGuard = class {
     const here = await this.here();
     const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, today, here);
     hidersCheck(write.kind, loaded.problems, before, after, effect.days, this.session, today, here);
-    const { standing, pushed } = roomOf(write, effect, before, after, this.session, today, loaded.problems, here);
+    const { standing, pushed } = roomOf(write.kind === "remove" ? write.base.memory.id : write.memory.id, effect, before, after, this.session, today, loaded.problems, here);
     const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null, standing, pushed);
     const carry = textToCarry(write, effect);
     const rules = (/* @__PURE__ */ new Set([
@@ -47676,7 +47688,64 @@ var RuleGuard = class {
     if (write.kind === "update") return this.store.update(write.memory, write.base);
     await this.store.remove(write.base);
   }
+  /**
+   * A change of this session's place labels (#441, K3; design-rule-guard 4.7.4 item 5) as one step of the queue of the
+   * checked writes (A9): work reads the place, judges the change with check and writes the place, and no checked memory
+   * write of this server runs between the read and the write (S59). Chained as write() chains, so a refusal or a failed
+   * place write never blocks the next step. The guard does not hold the place store: the server writes the record.
+   */
+  labelChange(work) {
+    const step = this.queue.then(() => work((from, to, confirmation) => this.labelCheck(from, to, confirmation)));
+    this.queue = step.then(
+      () => void 0,
+      () => void 0
+    );
+    return step;
+  }
+  /**
+   * K3 for one label change, from this place as its record holds it to the same place with the new names. A record of
+   * this session's scopes that cannot be read may be a rule with a label, so the change is refused as unknown, naming the
+   * first in load order (point 4); a copy is not one (G-b). Then the rules that start or stop loading here: none, and an
+   * unconfirmed change gives no lines; some, and it is refused to the confirmed label tool unless the confirmation
+   * states exactly the lines a refusal shows now (S54). A confirmation of a change that needs none is refused (S55).
+   */
+  async labelCheck(from, to, confirmation) {
+    const loaded = await this.store.load(visibleScopes(this.session));
+    const unknown2 = loaded.problems.find(isOwnRecord);
+    if (unknown2 !== void 0) throw new UnknownRecordError("update", unknown2.id, unknown2);
+    const memories = loaded.memories.map((stored) => stored.memory);
+    const today = this.today();
+    const effect = ruleEffect(memories, memories, null, this.session, today, from, to);
+    const { standing, pushed } = roomOf(null, effect, memories, memories, this.session, today, loaded.problems, from, to);
+    const rules = affectsOf(effect, memories, memories, null, standing);
+    const room = affectsOf({ ...effect, changes: [] }, memories, memories, null, void 0, pushed);
+    const shown2 = shownLabelLines(rules, room);
+    if (confirmation === null) {
+      if (!changesRules(effect)) return [];
+      throw new RuleRefusedError({ error: RULE_TEXT.needsLabelTool, tool: LABEL_TOOLS.confirmed, affects: shown2 });
+    }
+    if (!changesRules(effect)) throw new RuleRefusedError({ error: RULE_TEXT.noLabelRule, tool: LABEL_TOOLS.ordinary });
+    if (!sameLines(shown2, confirmation.affects)) throw new RuleRefusedError({ error: RULE_TEXT.labelMismatch, tool: LABEL_TOOLS.confirmed, affects: shown2 });
+    return shown2;
+  }
 };
+function labelRestLine(rest) {
+  const digest = createHash4("sha256").update(rest.join("\n")).digest("hex").slice(0, 8);
+  return rest.length === 1 ? `1 more rule here starts or stops loading (lines ${digest})` : `${rest.length} more rules here start or stop loading (lines ${digest})`;
+}
+function shownLabelLines(rules, room = []) {
+  const error62 = [RULE_TEXT.needsLabelTool, RULE_TEXT.labelMismatch].reduce((a, b) => b.length > a.length ? b : a);
+  const fits = (affects) => JSON.stringify({ error: error62, tool: LABEL_TOOLS.confirmed, affects }).length <= REFUSAL_MAX;
+  const whole2 = [...rules, ...room].sort();
+  if (fits(whole2)) return whole2;
+  const sorted = [...rules].sort();
+  let lines = whole2;
+  for (let named = sorted.length - 1; named >= 0; named -= 1) {
+    lines = [...sorted.slice(0, named), labelRestLine(sorted.slice(named)), ...room].sort();
+    if (fits(lines)) break;
+  }
+  return lines;
+}
 function cannotChangeRules(write, others = []) {
   const records = write.kind === "create" ? [write.memory] : write.kind === "update" ? [write.base.memory, write.memory] : [write.base.memory];
   return others.every((record2) => "stored" in record2 && plain(record2.stored.memory)) && records.every(plain);
@@ -47718,10 +47787,10 @@ var STANDING_TEXT = {
   // Judged in this session's place only, so it says "here" also on a line folded into "here and in other places".
   "no-room": " (here, the other rules at that moment leave no room, so it does not load here)"
 };
-function roomOf(write, effect, before, after, session, today, problems, here = UNKNOWN_HERE) {
+function roomOf(written, effect, before, after, session, today, problems, here = UNKNOWN_HERE, hereAfter = here) {
   const was = resolve4(before, session, today, here);
-  const will = resolve4(after, session, today, here);
-  const own2 = /* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), write.kind === "remove" ? write.base.memory.id : write.memory.id]);
+  const will = resolve4(after, session, today, hereAfter);
+  const own2 = /* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), ...written === null ? [] : [written]]);
   return { standing: (memory) => standingAt(memory, will.active, will.byId, problems), pushed: pushedOut(was, will, problems, own2) };
 }
 var PUSHED_NAMED = 5;
@@ -47841,7 +47910,7 @@ var CONDITION = external_exports.strictObject({
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
   files: external_exports.array(external_exports.string()).optional().describe("File globs; not possible yet")
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. A rule (enforced, or delivered at a moment other than index or on-demand) takes only inRepo yet, no labels or files; not possible yet on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -47883,6 +47952,17 @@ var UPDATE_INPUT = {
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
+var LABELS_INPUT = {
+  labels: external_exports.array(
+    external_exports.strictObject({
+      name: external_exports.string().describe("A short label for what kind of place this is, such as a customer or a technology; normalised like topic labels"),
+      confirmed: external_exports.boolean().describe("true only when the user confirmed this label; a label you propose is false")
+    })
+  ).max(MAX_CONTEXT_LABELS).describe("The complete list for this place; [] means no labels")
+};
+var LABEL_AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of set_context_labels listed, exactly: each rule this label change makes start or stop loading here. The user reads them in the prompt");
+var LABELS_DESCRIPTION = "Replace the context labels of the repository or folder this session works in. Context labels say what kind of place it is, such as a customer or a technology; they are not topic labels. Pass the complete list; [] means no labels. Set confirmed true only for a label the user confirmed; a label you propose is confirmed false and shows as proposed. A place's first labels take effect at once; a later change that makes a rule start or stop loading here is refused with the rules it affects, for set_context_labels_rule. Call list_labels first and reuse an existing name.";
+var LABELS_RULE_DESCRIPTION = "Replace the context labels of this repository or folder when the change makes a rule start or stop loading here, after set_context_labels refused it. The user confirms every call in a prompt. Pass the labels of that set_context_labels call and affects exactly as its refusal listed; call it only for a change the user asked for or confirmed.";
 var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. It also returns as nearDuplicates the active memories whose title, summary and body use much the same words as the new one; it compares plain word sets, so it misses a rewording in other words and counts test and tests as two words. The memory is saved either way. If the new memory replaces some of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Each link list you pass replaces the one the memory has, so pass in one list every id it should keep. Never move a memory to another scope to link it. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
 var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason, expires or appliesWhen. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
 var DELETE_DESCRIPTION = "Delete a memory. NeoCortex keeps the deleted memory, so it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
@@ -48573,53 +48653,72 @@ function createServer(deps) {
     },
     ({ affects, id, decision }) => guarded(async () => decideCall({ id, decision }, { affects }))
   );
-  server.registerTool(
-    "set_context_labels",
-    {
-      title: "Set the context labels of this repository or folder",
-      description: "Replace the context labels of the repository or folder this session works in. Context labels say what kind of place it is, such as a customer or a technology; they are not topic labels. Pass the complete list; [] means no labels. Set confirmed true only for a label the user confirmed; a label you propose is confirmed false and shows as proposed. Labels take effect at once. Call list_labels first and reuse an existing name.",
-      inputSchema: {
-        labels: external_exports.array(
-          external_exports.strictObject({
-            name: external_exports.string().describe("A short label for what kind of place this is, such as a customer or a technology; normalised like topic labels"),
-            confirmed: external_exports.boolean().describe("true only when the user confirmed this label; a label you propose is false")
-          })
-        ).max(MAX_CONTEXT_LABELS).describe("The complete list for this place; [] means no labels")
-      }
-    },
-    ({ labels }) => guarded(async () => {
-      const normalized = normalizeContextLabels(labels);
-      if ("error" in normalized) return fail(normalized.error);
-      const place = placeRefOf(deps.session.place);
-      const { read } = await deps.places.readPlace(place);
-      if (read.state === "unreadable") {
-        const { problem } = read;
-        if (problem.newerFormat !== void 0) return fail(LABEL_TEXT.newer(problem.newerFormat));
-        const { record: record2, reason } = shownProblem(problem);
-        return fail(read.area === true ? LABEL_TEXT.area(reason, record2) : LABEL_TEXT.unreadable(reason, record2));
-      }
-      const identity = identityOf(deps.session.place);
-      const updated = now().toISOString();
-      const next = (stored) => ({
-        place,
-        labels: normalized.labels,
-        organisation: stored?.organisation ?? identity.organisation,
-        repo: stored?.repo ?? identity.repo,
-        updated
-      });
-      const previous = read.state === "stored" ? read.stored.record.labels : null;
-      try {
-        if (read.state === "none") await deps.places.createPlace(next(null));
-        else if (!sameLabels(read.stored.record.labels, normalized.labels) || filledFromVisit(read.stored.record, identity, updated) !== null) {
-          await deps.places.updatePlace(next(read.stored.record), read.stored);
+  const labelsCall = async ({ labels }, confirmation) => {
+    const normalized = normalizeContextLabels(labels);
+    if ("error" in normalized) return fail(normalized.error);
+    const place = placeRefOf(deps.session.place);
+    const unconfirmable = () => ruleAnswer(new RuleRefusedError({ error: RULE_TEXT.noLabelRule, tool: LABEL_TOOLS.ordinary }));
+    try {
+      return await guard.labelChange(async (check2) => {
+        const { read } = await deps.places.readPlace(place);
+        if (read.state === "unreadable") {
+          const { problem } = read;
+          if (problem.newerFormat !== void 0) return fail(LABEL_TEXT.newer(problem.newerFormat));
+          const { record: record2, reason } = shownProblem(problem);
+          return fail(read.area === true ? LABEL_TEXT.area(reason, record2) : LABEL_TEXT.unreadable(reason, record2));
         }
-      } catch (error62) {
-        const refused = await labelRefusal(error62, deps.places, place);
-        if (refused === void 0) throw error62;
-        return fail(refused);
-      }
-      return ok({ place: placeName(place), labels: normalized.labels, previous });
-    })
+        const identity = identityOf(deps.session.place);
+        const updated = now().toISOString();
+        const next = (stored) => ({
+          place,
+          labels: normalized.labels,
+          organisation: stored?.organisation ?? identity.organisation,
+          repo: stored?.repo ?? identity.repo,
+          updated
+        });
+        const previous = read.state === "stored" ? read.stored.record.labels : null;
+        let affects;
+        if (read.state === "none") {
+          if (confirmation !== null) return unconfirmable();
+        } else if (sameNames(read.stored.record.labels, normalized.labels)) {
+          if (confirmation !== null) return unconfirmable();
+        } else {
+          const from = hereFrom(read);
+          const lines = await check2(from, { inRepo: from.inRepo, labels: normalized.labels.map((label) => label.name) }, confirmation);
+          if (confirmation !== null) affects = lines;
+        }
+        try {
+          if (read.state === "none") await deps.places.createPlace(next(null));
+          else if (!sameLabels(read.stored.record.labels, normalized.labels) || filledFromVisit(read.stored.record, identity, updated) !== null) {
+            await deps.places.updatePlace(next(read.stored.record), read.stored);
+          }
+        } catch (error62) {
+          const refused = await labelRefusal(error62, deps.places, place);
+          if (refused === void 0) throw error62;
+          return fail(refused);
+        }
+        return ok({ place: placeName(place), labels: normalized.labels, previous, ...affects === void 0 ? {} : { affects } });
+      });
+    } catch (error62) {
+      const rule = ruleAnswer(error62);
+      if (rule !== void 0) return rule;
+      throw error62;
+    }
+  };
+  server.registerTool(
+    LABEL_TOOLS.ordinary,
+    { title: "Set the context labels of this repository or folder", description: LABELS_DESCRIPTION, inputSchema: LABELS_INPUT },
+    (args2) => guarded(() => labelsCall(args2, null))
+  );
+  server.registerTool(
+    LABEL_TOOLS.confirmed,
+    {
+      title: "Set this place's context labels (the user confirms every call)",
+      description: LABELS_RULE_DESCRIPTION,
+      inputSchema: { affects: LABEL_AFFECTS, ...LABELS_INPUT },
+      _meta: CONFIRMED
+    },
+    ({ affects, ...args2 }) => guarded(() => labelsCall(args2, { affects }))
   );
   server.registerTool(
     "hook_context",
@@ -49014,7 +49113,6 @@ function baseOf(stored, memory) {
   if (base === void 0) throw new Error(`memory ${shortId(memory.id)} was not loaded in this call`);
   return base;
 }
-var REFUSAL_MAX = 1e4;
 function carriedOf(args2) {
   return TEXT_FIELDS.filter((field) => args2[field] !== void 0);
 }
@@ -49149,6 +49247,10 @@ function capital(text) {
 function identityOf(place) {
   return place.kind === "project" ? { organisation: place.organisation, repo: place.repo } : { organisation: null, repo: null };
 }
+function sameNames(a, b) {
+  const names = (labels) => [...new Set(labels.map((label) => normalizeLabel(label.name)))].sort().join("\n");
+  return names(a) === names(b);
+}
 async function labelRefusal(error62, places, place) {
   if (error62 instanceof AlreadyExistsError || error62 instanceof ConflictError && !error62.gone) {
     let current = "not readable now";
@@ -49269,7 +49371,7 @@ function message(error62) {
 
 // src/store.ts
 var import_yaml4 = __toESM(require_dist(), 1);
-import { createHash as createHash4, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
+import { createHash as createHash5, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
 import { link, lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -49298,7 +49400,7 @@ function userLockBase(warn = () => {
 }
 function revisionOf(text) {
   const unmarked2 = text.startsWith(BYTE_ORDER_MARK3) ? text.slice(BYTE_ORDER_MARK3.length) : text;
-  return createHash4("sha256").update(unmarked2.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
+  return createHash5("sha256").update(unmarked2.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
 }
 var FileStore = class {
   root;
@@ -49618,7 +49720,7 @@ var FileStore = class {
     if (this.locks === void 0) {
       const real = realpathSync2.native(this.root);
       const key = process.platform === "win32" ? real.toLowerCase() : real;
-      this.locks = join3(this.lockBase, createHash4("sha256").update(key).digest("hex").slice(0, 16));
+      this.locks = join3(this.lockBase, createHash5("sha256").update(key).digest("hex").slice(0, 16));
     }
     return this.locks;
   }
