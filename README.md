@@ -157,6 +157,22 @@ A rule is a memory that loads on its own, at session start, with every prompt or
 when a subagent starts, or that is enforced. Claude changes a rule only with `save_rule`, `update_rule` or
 `delete_rule`, and Claude Code asks you before every call of them; see [Permissions](#permissions).
 
+### Where a memory applies
+
+A memory can also say where it applies, beyond its scope, in `appliesWhen`: `labels` names context labels a place must
+carry, every one of them, and `inRepo: true` means only in a session inside a git repository. Ask Claude, for example
+"remember that, but only for places labelled contoso". Where the condition does not hold, the memory is not in the
+session start, a subagent's start or a refresh; where it holds, its index line shows the condition, such as
+`[user · labels contoso]`. `search_memories` still finds it everywhere and says what it would need there, such as
+`not here: needs label contoso`. The index header shows this place's context labels, and Claude changes them with
+`set_context_labels`. A place nobody has labelled yet hides no memory, so a labelled memory shows there until you label
+the place.
+
+An update that leaves `appliesWhen` out keeps the condition; `null` or `{}` removes it. A condition is not possible yet
+on a rule, on a memory with `overrides`, or as file globs (`files`), and a project memory never takes one, because its
+project already fixes where it applies. Such a call is refused with the reason, and nothing is written; so is a call
+that names a field the tool does not know.
+
 ### What a memory holds
 
 `save_memory` and `update_memory` take these fields. `scope`, `title`, `summary`, `why` and `body` are required;
@@ -174,9 +190,10 @@ the rest are optional.
 | `delivery` | When it loads; see [When a memory loads](#when-a-memory-loads) |
 | `enforced` | Another scope can never override this memory. Use it for the rules that must not be lost to a project's own wording |
 | `expires` | `YYYY-MM-DD`: after that date the memory no longer loads, and it becomes a candidate for `dream_report` to retire |
+| `appliesWhen` | Where it applies, beyond its scope: `labels` a place must all carry, `inRepo: true` for inside a git repository; see [Where a memory applies](#where-a-memory-applies) |
 | `supersedes` | Ids of memories this one replaces. A live memory they name stops loading, here and everywhere it would |
-| `overrides` | Ids of `user` memories this `project` memory deviates from. Only a project memory may override a user one, and only in its own project, and one that is `enforced` cannot be overridden |
-| `overrideReason` | Required with `overrides`: why this project departs from the user-wide memory |
+| `overrides` | Ids of memories this one departs from. Any memory may override another, and the target stops loading where both apply; an `enforced` memory cannot be overridden, and neither can one that is more specific than the override |
+| `overrideReason` | Required with `overrides`: why this memory departs from the one it names |
 
 `supersedes` and `overrides` both take ids, not titles, and both are links you can also read back with `get_memory`
 on either side. To undo one, `update_memory` the memory that carries the link and remove the id from the field.
@@ -247,7 +264,8 @@ under its budget, near duplicates, and what the last dream run did: when it star
 `failed`, how many proposals it created, and which stage a budget stop stopped. It changes nothing.
 
 What the Dreamer does not do yet: anything that needs a model, such as merged rewrites, contradictions or shortened
-summaries, and promoting a repeat with a condition, which needs format 2.0.
+summaries, and proposing a condition for a repeat it promotes. A promote moves the memory as it is: a proposal says
+whether it carries a condition and so loads only in some places, and shows that condition.
 
 ## Permissions
 
@@ -340,6 +358,9 @@ Or in a session, run `/plugin` and choose either of these (<https://code.claude.
 The new version "loads in your next session, or after you run `/reload-plugins` in a running one"
 (<https://code.claude.com/docs/en/plugins/cli-reference>). Your memories stay: they are in your memory folder, not in
 the plugin. What each version changed is in [CHANGELOG.md](CHANGELOG.md).
+
+From 0.5.0 on, a memory is written in format 2.0, which NeoCortex 0.4.32 and older cannot read. Update every machine
+that shares your memory folder.
 
 ## Remove
 

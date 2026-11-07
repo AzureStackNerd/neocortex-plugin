@@ -35921,7 +35921,15 @@ var FIELDS_1_0 = [
   "created",
   "updated"
 ];
-var REGISTRY = { formats: [{ version: "1.0", fields: FIELDS_1_0 }], steps: {} };
+var FIELDS_2_0 = [...FIELDS_1_0, "appliesWhen"];
+var REGISTRY = {
+  formats: [
+    { version: "1.0", fields: FIELDS_1_0 },
+    { version: "2.0", fields: FIELDS_2_0 }
+  ],
+  // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means.
+  steps: { "1.0": (fields) => fields }
+};
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
 }
@@ -35965,6 +35973,115 @@ function upgrade(fields, from, registry2 = REGISTRY) {
     }
   }
   return current;
+}
+
+// src/text.ts
+var UNSHOWN_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+var UNSHOWN_RE = new RegExp(UNSHOWN_CHAR_RE.source, "gu");
+function shownText(text) {
+  return text.replace(UNSHOWN_RE, String.fromCharCode(65533)).toWellFormed();
+}
+function normalizeLabel(label) {
+  return label.trim().toLowerCase().replace(/\s+/g, "-");
+}
+function normalizeLabels(labels) {
+  const cleaned = labels.map(normalizeLabel).filter((label) => label !== "");
+  return [...new Set(cleaned)].sort();
+}
+function carriesLabel(labelled, label) {
+  return labelled.labels.includes(label);
+}
+
+// src/condition.ts
+var CONDITION_PARTS = ["inRepo", "labels", "files"];
+var UNKNOWN_HERE = { inRepo: "unknown", labels: "unknown" };
+function canonicalFiles(files) {
+  const cleaned = files.map((file2) => file2.trim()).filter((file2) => file2 !== "");
+  return [...new Set(cleaned)].sort();
+}
+function canonicalCondition(condition) {
+  if (condition === void 0) return void 0;
+  const labels = normalizeLabels(condition.labels ?? []);
+  const files = canonicalFiles(condition.files ?? []);
+  const canonical = {};
+  if (condition.inRepo === true) canonical.inRepo = true;
+  if (labels.length > 0) canonical.labels = labels;
+  if (files.length > 0) canonical.files = files;
+  return CONDITION_PARTS.some((part) => canonical[part] !== void 0) ? canonical : void 0;
+}
+function sameCondition(a, b) {
+  const [x, y] = [canonicalCondition(a), canonicalCondition(b)];
+  if (x === void 0 || y === void 0) return x === y;
+  const same = (p, q) => (p ?? []).length === (q ?? []).length && (p ?? []).every((value, index) => value === (q ?? [])[index]);
+  return x.inRepo === y.inRepo && same(x.labels, y.labels) && same(x.files, y.files);
+}
+function presentParts(canonical) {
+  return CONDITION_PARTS.filter((part) => canonical[part] !== void 0);
+}
+function conditionParts(condition) {
+  const canonical = canonicalCondition(condition);
+  return canonical === void 0 ? 0 : presentParts(canonical).length;
+}
+function conditionWords(condition) {
+  const canonical = canonicalCondition(condition);
+  if (canonical === void 0) return "";
+  const words = [];
+  for (const part of presentParts(canonical)) {
+    switch (part) {
+      case "inRepo":
+        words.push("in a repo");
+        break;
+      case "labels": {
+        const labels = canonical.labels;
+        if (labels !== void 0) words.push(`labels ${labels.map(shownText).join(", ")}`);
+        break;
+      }
+      case "files": {
+        const files = canonical.files;
+        if (files !== void 0) words.push(`files ${files.map(shownText).join(", ")}`);
+        break;
+      }
+    }
+  }
+  return words.join("; ");
+}
+function hereCarries(here, label) {
+  const labels = here.labels;
+  return labels !== "unknown" && carriesLabel({ labels: [...labels] }, label);
+}
+function firstMissingLabel(labels, here) {
+  return here.labels === "unknown" ? void 0 : labels.find((label) => !hereCarries(here, label));
+}
+function conditionHolds(condition, here) {
+  const canonical = canonicalCondition(condition);
+  if (canonical === void 0) return true;
+  if (canonical.inRepo === true && here.inRepo === false) return false;
+  const wanted = canonical.labels;
+  if (wanted !== void 0 && firstMissingLabel(wanted, here) !== void 0) return false;
+  return true;
+}
+function notHereWords(condition, here) {
+  const canonical = canonicalCondition(condition);
+  if (canonical === void 0) return "";
+  for (const part of presentParts(canonical)) {
+    switch (part) {
+      case "inRepo":
+        if (here.inRepo === false) return "not here: needs a repo";
+        break;
+      case "labels": {
+        const labels = canonical.labels;
+        const missing = labels === void 0 ? void 0 : firstMissingLabel(labels, here);
+        if (missing !== void 0) return `not here: needs label ${shownText(missing)}`;
+        break;
+      }
+      case "files": {
+        const files = canonical.files;
+        if (files !== void 0 && files.length > 0) return `not here: needs a file ${shownText(files[0])}`;
+        break;
+      }
+    }
+  }
+  return "";
 }
 
 // src/memory.ts
@@ -36033,11 +36150,8 @@ function problemNames(problem, id) {
 function isOwnRecord(problem) {
   return problem.id !== void 0 && problem.copy !== true;
 }
-var UNSHOWN_CHAR_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
-var UNSHOWN_RE = new RegExp(UNSHOWN_CHAR_RE.source, "gu");
-function shownText(text) {
-  return text.replace(UNSHOWN_RE, "\uFFFD").toWellFormed();
-}
+var UNSHOWN_CHAR_RE2 = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+var UNSHOWN_RE2 = new RegExp(UNSHOWN_CHAR_RE2.source, "gu");
 function truncate(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1)}\u2026`;
 }
@@ -36045,7 +36159,7 @@ function shownCut(text, max) {
   return shownText(truncate(text, max));
 }
 function unshownCharOf(text) {
-  const found = UNSHOWN_CHAR_RE.exec(text)?.[0];
+  const found = UNSHOWN_CHAR_RE2.exec(text)?.[0];
   return found === void 0 ? null : `U+${(found.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
 }
 function loneSurrogateOf(text) {
@@ -36120,6 +36234,11 @@ var NewerFormatError = class extends StoreError {
   }
 };
 var memoryId = external_exports.string().regex(UUID_RE, "must be a lowercase UUID");
+var appliesWhenSchema = external_exports.strictObject({
+  inRepo: external_exports.literal(true).optional(),
+  labels: external_exports.array(external_exports.string()).optional(),
+  files: external_exports.array(external_exports.string()).optional()
+});
 var frontmatterSchema = external_exports.strictObject({
   id: memoryId,
   title: external_exports.string().trim().min(1),
@@ -36134,7 +36253,8 @@ var frontmatterSchema = external_exports.strictObject({
   overrideReason: external_exports.string().nullable(),
   expires: external_exports.string().regex(DATE_RE, "must be YYYY-MM-DD").nullable(),
   created: external_exports.string().min(1),
-  updated: external_exports.string().min(1)
+  updated: external_exports.string().min(1),
+  appliesWhen: appliesWhenSchema.optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36194,7 +36314,19 @@ function decodeRecord(data, body, location, registry2 = REGISTRY) {
   if (result.data.id !== location.id) {
     throw new MemoryFormatError(`id ${result.data.id} does not match the file name ${location.id}`);
   }
-  return { memory: { ...result.data, labels: normalizeLabels(result.data.labels), scope: location.scope, body: text }, format, unknown: unknown2 };
+  return {
+    memory: {
+      ...result.data,
+      labels: normalizeLabels(result.data.labels),
+      scope: location.scope,
+      body: text,
+      // A hand-written condition that means the same thing must load as the same condition: labels sorted and
+      // normalised, empty lists dropped. One that canonicalises to nothing is every condition, so no key at all.
+      ...result.data.appliesWhen === void 0 ? {} : { appliesWhen: canonicalCondition(result.data.appliesWhen) }
+    },
+    format,
+    unknown: unknown2
+  };
 }
 function parseYaml(text, firstLine = 1) {
   const lineCounter = new import_yaml.LineCounter();
@@ -36261,16 +36393,6 @@ function memoryProblems(memory) {
   return problems;
 }
 var KIND_LABELS = /* @__PURE__ */ new Set(["context", "feedback", "reference", "user"]);
-function normalizeLabel(label) {
-  return label.trim().toLowerCase().replace(/\s+/g, "-");
-}
-function normalizeLabels(labels) {
-  const cleaned = labels.map(normalizeLabel).filter((label) => label !== "");
-  return [...new Set(cleaned)].sort();
-}
-function carriesLabel(memory, label) {
-  return memory.labels.includes(label);
-}
 function shortId(id) {
   return id.slice(0, SHORT_ID_LENGTH);
 }
@@ -36284,6 +36406,7 @@ function findByIdPrefix(memories, prefix, unloadedIds = []) {
   return { memory: matches[0] };
 }
 function toFrontmatter(memory) {
+  const canonical = canonicalCondition(memory.appliesWhen);
   return {
     id: memory.id,
     title: memory.title,
@@ -36298,7 +36421,10 @@ function toFrontmatter(memory) {
     overrideReason: memory.overrideReason,
     expires: memory.expires,
     created: memory.created,
-    updated: memory.updated
+    updated: memory.updated,
+    // Absent when the memory applies everywhere, so a record without a condition keeps exactly the 1.0 keys and a
+    // condition that canonicalises to nothing writes no key at all.
+    ...canonical === void 0 ? {} : { appliesWhen: canonical }
   };
 }
 function issueMessages(issues) {
@@ -45246,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.4.32",
+  version: "0.5.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45320,7 +45446,7 @@ function normalizeContextLabels(input2) {
   for (const { name: raw, confirmed } of input2) {
     const name = normalizeLabel(raw);
     if (name === "") return { error: `context label ${shownFolderKey(raw)} is empty` };
-    if (UNSHOWN_CHAR_RE.test(name)) return { error: `context label ${shownFolderKey(raw)} holds an invisible or control character` };
+    if (UNSHOWN_CHAR_RE2.test(name)) return { error: `context label ${shownFolderKey(raw)} holds an invisible or control character` };
     if (name.length > CONTEXT_LABEL_MAX) return { error: `context label ${name} is longer than ${CONTEXT_LABEL_MAX} characters` };
     const known = states.get(name);
     if (known !== void 0 && known !== confirmed) return { error: `context label ${name} is given twice, once confirmed and once not` };
@@ -45339,7 +45465,7 @@ function labelList(labels) {
   return sortedLabels(labels).map((label) => label.confirmed ? label.name : `${label.name}${PROPOSED_MARK}`).join(", ");
 }
 var labelSchema = external_exports.strictObject({
-  name: external_exports.string().min(1).max(CONTEXT_LABEL_MAX).refine((name) => !UNSHOWN_CHAR_RE.test(name), "holds an invisible or control character").refine((name) => normalizeLabel(name) === name, "must be lowercase, without spaces"),
+  name: external_exports.string().min(1).max(CONTEXT_LABEL_MAX).refine((name) => !UNSHOWN_CHAR_RE2.test(name), "holds an invisible or control character").refine((name) => normalizeLabel(name) === name, "must be lowercase, without spaces"),
   confirmed: external_exports.boolean()
 });
 var placeSchema = external_exports.strictObject({
@@ -45456,16 +45582,37 @@ function isRecord2(value) {
 var SCOPE_RANK = { user: 0, project: 1 };
 var IMPORTANCE_RANK = { low: 0, normal: 1, high: 2 };
 var LINK_KINDS = ["supersedes", "overrides"];
+var LINK_VERB = { supersedes: "replaces", overrides: "overrides" };
 function linkProblem(kind, source, target) {
   if (source.id === target.id) return `${kind}: a memory cannot point to itself`;
   if (kind === "supersedes") {
     return sameScope(source.scope, target.scope) ? null : `supersedes: ${shortId(target.id)} is in another scope; supersedes only replaces a memory in the same scope`;
   }
-  if (SCOPE_RANK[target.scope.kind] >= SCOPE_RANK[source.scope.kind]) {
-    return `overrides: ${shortId(target.id)} is not in a broader scope; a project memory can only override a user memory`;
-  }
   if (target.enforced) return `overrides: ${shortId(target.id)} "${shownCut(target.title, 80)}" is enforced and cannot be overridden`;
+  if (narrower(target, source)) {
+    return `overrides: ${shortId(target.id)} is more specific than this memory; change or delete the more specific one instead`;
+  }
   return null;
+}
+function narrower(a, b) {
+  if (a.scope.kind !== b.scope.kind) return a.scope.kind === "project";
+  const from = canonicalCondition(a.appliesWhen) ?? {};
+  const to = canonicalCondition(b.appliesWhen) ?? {};
+  let narrowerSomewhere = false;
+  const fromRepo = from.inRepo === true;
+  const toRepo = to.inRepo === true;
+  if (toRepo && !fromRepo) return false;
+  if (fromRepo && !toRepo) narrowerSomewhere = true;
+  const fromLabels = from.labels ?? [];
+  const toLabels = to.labels ?? [];
+  if (!toLabels.every((label) => fromLabels.includes(label))) return false;
+  if (fromLabels.length > toLabels.length) narrowerSomewhere = true;
+  const fromFiles = from.files ?? [];
+  const toFiles = to.files ?? [];
+  if (toFiles.length > 0 && fromFiles.length === 0) return false;
+  if (fromFiles.length > 0 && toFiles.length === 0) narrowerSomewhere = true;
+  else if (fromFiles.length !== toFiles.length || fromFiles.some((file2, index) => file2 !== toFiles[index])) return false;
+  return narrowerSomewhere;
 }
 function validateLinks(memory, existing) {
   const byId = new Map(existing.map((m) => [m.id, m]));
@@ -45477,7 +45624,7 @@ function validateLinks(memory, existing) {
         errors.push(`${kind}: no memory with id ${shortId(id)}`);
         continue;
       }
-      const problem = linkProblem(kind, memory, target) ?? (kind === "supersedes" && replacesInTurn(memory, target, byId) ? `supersedes: ${shortId(id)} already replaces this memory, directly or through others; that would be a cycle` : null);
+      const problem = linkProblem(kind, memory, target) ?? (linksInTurn(kind, memory, target, byId) ? `${kind}: ${shortId(id)} already ${LINK_VERB[kind]} this memory, directly or through others; that would be a cycle` : null);
       if (problem !== null) errors.push(problem);
     }
   }
@@ -45490,7 +45637,56 @@ function validateLinks(memory, existing) {
   }
   return errors;
 }
-function resolve4(memories, session, today) {
+var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)})`;
+var CONDITION_TEXT = {
+  /** T1 on a save. */
+  rule: () => `appliesWhen: ${RULE_WORDS()} cannot carry a condition yet; save it without appliesWhen`,
+  /** T1 on an update that makes a memory with a condition a rule and leaves the condition as it is. */
+  becomesRule: () => `appliesWhen: this change makes a memory with a condition ${RULE_WORDS()}, which cannot carry a condition yet; remove the condition first with appliesWhen null, then make it a rule`,
+  /** AC5: the condition of a memory that is a rule before or after the change. */
+  ruleChanged: () => `appliesWhen: the condition of ${RULE_WORDS()} cannot be set, changed or removed yet; leave appliesWhen out of this call, and change a condition only in a call of its own while the memory is no rule`,
+  /** T2 on a save. */
+  override: "appliesWhen: a memory with overrides cannot carry a condition yet; save it without appliesWhen",
+  /** T2 on an update that sets, changes or removes the condition of a memory with overrides before or after. */
+  overrideChanged: "appliesWhen: the condition of a memory with overrides cannot be set, changed or removed yet; leave appliesWhen out of this call, and change a condition only in a call of its own while the memory has no overrides",
+  /** T2 on an update that gives a memory with a condition overrides. */
+  becomesOverride: "overrides: a memory with a condition cannot override another yet; remove the condition first with appliesWhen null, then set overrides",
+  /** T3. */
+  files: "appliesWhen: a file condition (files) is not possible yet; leave files out",
+  /** The project reason (design-scopes 2.4). */
+  project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
+  /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
+  overridden: (by) => `appliesWhen: ${shortId(by.id)} "${shownCut(by.title, 80)}" overrides this memory, and with this condition that override would no longer hold; take this memory out of its overrides first, or leave its condition as it is`
+};
+function conditionProblems(written, stored, current) {
+  const after = canonicalCondition(written.appliesWhen);
+  const placed = after?.inRepo === true || after?.labels !== void 0;
+  const problems = [];
+  if (stored === void 0) {
+    if (after === void 0) return problems;
+    if (isRule(written)) problems.push(CONDITION_TEXT.rule());
+    if (written.overrides.length > 0) problems.push(CONDITION_TEXT.override);
+    if (after.files !== void 0) problems.push(CONDITION_TEXT.files);
+    if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
+    return problems;
+  }
+  const before = canonicalCondition(stored.appliesWhen);
+  const changed = !sameCondition(before, after);
+  if (changed && (isRule(stored) || isRule(written))) problems.push(CONDITION_TEXT.ruleChanged());
+  if (!changed && after !== void 0 && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
+  if (changed && (stored.overrides.length > 0 || written.overrides.length > 0)) problems.push(CONDITION_TEXT.overrideChanged);
+  if (!changed && after !== void 0 && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride);
+  if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
+  if (written.scope.kind === "project" && placed && (changed || stored.scope.kind !== "project")) problems.push(CONDITION_TEXT.project);
+  if (changed) {
+    for (const by of current) {
+      if (by.id === written.id || !by.overrides.includes(written.id)) continue;
+      if (linkProblem("overrides", by, stored) === null && linkProblem("overrides", by, written) !== null) problems.push(CONDITION_TEXT.overridden(by));
+    }
+  }
+  return problems;
+}
+function resolve4(memories, session, today, here = UNKNOWN_HERE) {
   const visible = memories.filter((m) => m.scope.kind === "user" || sameScope(m.scope, session.project));
   const byId = new Map(visible.map((m) => [m.id, m]));
   const expired = visible.filter((m) => m.expires !== null && m.expires < today);
@@ -45500,23 +45696,32 @@ function resolve4(memories, session, today) {
   const ignored = [];
   const superseded = linkedTargets("supersedes", live, byId, liveById, ignored);
   const current = live.filter((m) => !superseded.has(m.id));
-  const overridden = linkedTargets("overrides", current, byId, liveById, ignored);
+  const overridden = linkedTargets("overrides", current, byId, liveById, ignored, here);
+  const shown2 = current.filter((m) => !overridden.has(m.id));
   return {
-    active: current.filter((m) => !overridden.has(m.id)).sort(compareForContext),
+    active: shown2.filter((m) => conditionHolds(m.appliesWhen, here)).sort(compareForContext),
+    elsewhere: shown2.filter((m) => !conditionHolds(m.appliesWhen, here)).sort(compareForContext),
     expired: expired.sort(compareForContext),
     byId,
     ignored,
     current
   };
 }
-function hidersOf(memories, target, session, date5) {
-  const { byId, expired, current } = resolve4(memories, session, date5);
+function hidesAt(memory, here) {
+  if (!conditionHolds(memory.appliesWhen, here)) return false;
+  return memory.appliesWhen?.files === void 0 || memory.appliesWhen.files.length === 0;
+}
+function hidersOf(memories, target, session, date5, here = UNKNOWN_HERE) {
+  const { byId, expired, current } = resolve4(memories, session, date5, here);
   const live = [...byId.values()].filter((m) => !expired.includes(m));
-  const hiders = [...live.filter((m) => m.supersedes.includes(target)), ...current.filter((m) => m.overrides.includes(target))];
+  const hiders = [
+    ...live.filter((m) => m.supersedes.includes(target)),
+    ...current.filter((m) => m.overrides.includes(target) && hidesAt(m, here))
+  ];
   return [...new Set(hiders.map((m) => `${m.id} ${scopeId(m.scope)}`))].sort();
 }
 function compareForContext(a, b) {
-  return Number(b.enforced) - Number(a.enforced) || IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance] || SCOPE_RANK[b.scope.kind] - SCOPE_RANK[a.scope.kind] || compareText(b.updated, a.updated) || compareText(a.id, b.id);
+  return Number(b.enforced) - Number(a.enforced) || IMPORTANCE_RANK[b.importance] - IMPORTANCE_RANK[a.importance] || SCOPE_RANK[b.scope.kind] - SCOPE_RANK[a.scope.kind] || conditionParts(b.appliesWhen) - conditionParts(a.appliesWhen) || compareText(b.updated, a.updated) || compareText(a.id, b.id);
 }
 function toLocalDate(date5) {
   const pad = (n) => String(n).padStart(2, "0");
@@ -45527,12 +45732,12 @@ function isRule(memory) {
 }
 var RULE_DELIVERIES = DELIVERIES.filter((delivery) => isRule({ delivery, enforced: false }));
 var PLACE_ORDER = { here: 0, elsewhere: 1, overriding: 2 };
-function ruleEffect(before, after, written, session, today) {
+function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE) {
   const ends = [...new Set([...before, ...after].flatMap((m) => m.expires !== null && m.expires >= today ? [m.expires] : []))].sort();
   const days = [{ kind: "today" }, ...ends.map((date5) => ({ kind: "after", date: date5 }))];
   const samples = days.map((day) => sampleDate(day, today));
-  const was = loadingOf(before, session, samples);
-  const will = loadingOf(after, session, samples);
+  const was = loadingOf(before, session, samples, here);
+  const will = loadingOf(after, session, samples, here);
   const none = samples.map(() => null);
   const changes = [.../* @__PURE__ */ new Set([...was.keys(), ...will.keys()])].map((key) => {
     const [id, place] = key.split(" ");
@@ -45549,7 +45754,7 @@ function sampleDate(day, today) {
 function changesRules(effect) {
   return effect.changes.length > 0 || effect.writtenRule !== null;
 }
-function loadingOf(memories, session, samples) {
+function loadingOf(memories, session, samples, here) {
   const user = memories.filter((m) => m.scope.kind === "user");
   const loading = /* @__PURE__ */ new Map();
   const mark = (memory, place, day) => {
@@ -45559,8 +45764,8 @@ function loadingOf(memories, session, samples) {
     loading.set(key, row);
   };
   samples.forEach((sample, day) => {
-    for (const memory of resolve4(memories, session, sample).active) if (isRule(memory)) mark(memory, "here", day);
-    for (const memory of resolve4(user, session, sample).active) {
+    for (const memory of resolve4(memories, session, sample, here).active) if (isRule(memory)) mark(memory, "here", day);
+    for (const memory of resolve4(user, session, sample, UNKNOWN_HERE).active) {
       if (!isRule(memory)) continue;
       mark(memory, "elsewhere", day);
       if (memory.enforced) mark(memory, "overriding", day);
@@ -45568,28 +45773,29 @@ function loadingOf(memories, session, samples) {
   });
   return loading;
 }
-function linkedTargets(kind, sources, byId, liveById, ignored) {
+function linkedTargets(kind, sources, byId, liveById, ignored, here) {
   const targets = /* @__PURE__ */ new Set();
   for (const source of sources) {
+    if (kind === "overrides" && here !== void 0 && !hidesAt(source, here)) continue;
     for (const id of source[kind]) {
       const target = byId.get(id);
       if (target === void 0) continue;
-      const problem = linkProblem(kind, source, target) ?? (kind === "supersedes" && replacesInTurn(source, target, liveById) ? `supersedes: ${shortId(id)} in turn replaces this memory (a cycle), so both load` : null);
+      const problem = linkProblem(kind, source, target) ?? (linksInTurn(kind, source, target, liveById) ? `${kind}: ${shortId(id)} in turn ${LINK_VERB[kind]} this memory (a cycle), so both load` : null);
       if (problem === null) targets.add(id);
       else ignored.push(`${shortId(source.id)} ${problem}`);
     }
   }
   return targets;
 }
-function replacesInTurn(source, target, byId) {
+function linksInTurn(kind, source, target, byId) {
   if (!byId.has(target.id)) return false;
   const seen = /* @__PURE__ */ new Set([target.id]);
   const stack = [target];
   while (stack.length > 0) {
     const current = stack.pop();
-    for (const id of current.supersedes) {
+    for (const id of current[kind]) {
       const next = id === source.id ? source : byId.get(id);
-      if (next === void 0 || linkProblem("supersedes", current, next) !== null) continue;
+      if (next === void 0 || linkProblem(kind, current, next) !== null) continue;
       if (next.id === source.id) return true;
       if (!seen.has(id)) {
         seen.add(id);
@@ -45800,7 +46006,12 @@ function placeUpdateWarning(state) {
 }
 function indexLine(memory, shortened = false) {
   const mark = memory.enforced ? ", enforced" : memory.importance === "high" ? ", high" : "";
-  return `- [${memory.scope.kind}${mark}] ${shownCut(memory.title, 80)} \u2014 ${shortened ? "\u2026" : shownText(memory.summary)} \xB7 ${shortId(memory.id)}`;
+  const condition = conditionOf(memory);
+  return `- [${memory.scope.kind}${mark}${condition}] ${shownCut(memory.title, 80)} \u2014 ${shortened ? "\u2026" : shownText(memory.summary)} \xB7 ${shortId(memory.id)}`;
+}
+function conditionOf(memory) {
+  const words = conditionWords(memory.appliesWhen);
+  return words === "" ? "" : ` \xB7 ${shownCut(words, 80)}`;
 }
 function shortenable(memory, whole2 = indexLine(memory), short = indexLine(memory, true)) {
   return !memory.enforced && memory.importance !== "high" && short.length < whole2.length;
@@ -45900,10 +46111,11 @@ function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
   return { text: parts[0], notFit };
 }
 function fullParts(kinds, active, byId, budgets, options = {}) {
-  const broken = brokenWarning(kinds, options.problems ?? []);
-  const rooms = budgets.map((budget, i) => i > 0 || broken === "" ? budget : Math.max(0, budget - broken.length - 2));
+  const warnings = [filesWarning(kinds, active), brokenWarning(kinds, options.problems ?? [])].filter((warning) => warning !== "");
+  const lead = warnings.join("\n\n");
+  const rooms = budgets.map((budget, i) => i > 0 || lead === "" ? budget : Math.max(0, budget - lead.length - 2 * warnings.length));
   const { parts, notFit, kept } = fullText(kinds, active, byId, rooms, options.priority ?? kinds);
-  return { parts: parts.map((text, i) => i === 0 ? [broken, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat() };
+  return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat() };
 }
 var MOMENT_FILLS = {
   startup: { kinds: ["startup"], budgets: FULL_PART_BUDGETS },
@@ -45999,13 +46211,13 @@ function sessionContext(input2, options = NO_PLACE) {
 
 ${fullText2}`;
 }
-async function loadDelivery(store2, session, now, current = CURRENT_FORMAT) {
-  return deliveryOf(await store2.load(visibleScopes(session)), store2.location, session, now, current);
+async function loadDelivery(store2, session, now, current = CURRENT_FORMAT, here = UNKNOWN_HERE) {
+  return deliveryOf(await store2.load(visibleScopes(session)), store2.location, session, now, current, here);
 }
-function deliveryOf({ memories: stored, problems }, location, session, now, current = CURRENT_FORMAT) {
+function deliveryOf({ memories: stored, problems }, location, session, now, current = CURRENT_FORMAT, here = UNKNOWN_HERE) {
   const memories = stored.map((s) => s.memory);
   const newer = stored.filter((s) => compareFormats(s.format, current) > 0);
-  const resolution = resolve4(memories, session, toLocalDate(now));
+  const resolution = resolve4(memories, session, toLocalDate(now), here);
   return { projectKey: session.project.key, location, resolution, problems, newer, recentRules: recentRules(resolution.active, now) };
 }
 function loadedText(memory, byId) {
@@ -46026,7 +46238,7 @@ function loadedText(memory, byId) {
   }
 }
 function fullBlock(memory, byId) {
-  const tag = memory.enforced ? `${memory.scope.kind}, enforced` : memory.scope.kind;
+  const tag = `${memory.enforced ? `${memory.scope.kind}, enforced` : memory.scope.kind}${conditionOf(memory)}`;
   const lines = [`### [${tag}] ${shownCut(memory.title, 80)} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
   for (const id of memory.overrides) {
     const target = byId.get(id);
@@ -46040,6 +46252,18 @@ function fullBlock(memory, byId) {
   if (memory.body !== "") lines.push(memory.body);
   return lines.join("\n");
 }
+function filesWarning(kinds, active) {
+  if (!kinds.includes("edit")) return "";
+  const conditioned = active.filter(
+    (memory) => kinds.includes(memory.delivery) && memory.appliesWhen?.files !== void 0 && memory.appliesWhen.files.length > 0
+  );
+  if (conditioned.length === 0) return "";
+  const one = conditioned.length === 1;
+  const named = conditioned.slice(0, FILES_WARNING_NAMED).map((memory) => `"${shownCut(memory.title, 80)}" (${shortId(memory.id)})`);
+  const rest = conditioned.length > FILES_WARNING_NAMED ? ` and ${conditioned.length - FILES_WARNING_NAMED} more` : "";
+  return `WARNING: the edit hook passes no file path, so ${conditioned.length} NeoCortex ${one ? "memory" : "memories"} with a file condition ${one ? "loads" : "load"} at every edit: ${named.join(", ")}${rest}. Say so before answering.`;
+}
+var FILES_WARNING_NAMED = 5;
 function brokenWarning(kinds, problems) {
   const ours = problems.filter((p) => p.delivery !== void 0 && kinds.includes(p.delivery));
   if (ours.length === 0) return "";
@@ -46093,7 +46317,7 @@ var STATUS_TEXT = {
   labels: (state) => `Context labels of this place: ${state}`,
   memories: (total, location) => `${total} ${total === 1 ? "memory" : "memories"} of the user and this project in ${location}; other projects are not read here`,
   active: (user, project) => `Active: ${user + project} (user ${user}, project ${project})`,
-  inactive: (expired, superseded, overridden) => `Not active: ${expired} expired, ${superseded} superseded, ${overridden} overridden`,
+  inactive: (expired, superseded, overridden, notHere) => `Not active: ${expired} expired, ${superseded} superseded, ${overridden} overridden, ${notHere} not here`,
   unsorted: (count2) => `Imported memories waiting to be sorted: ${count2}`,
   problems: (count2) => count2 === 0 ? "Load problems: none" : `Load problems: ${count2}`,
   moment: (delivery) => `, missing at moment ${delivery}`
@@ -46119,7 +46343,7 @@ function problemGroup(title, problems) {
 }
 function statusReport(input2, place, about) {
   const { resolution, problems, newer } = input2;
-  const { active, expired, current, byId } = resolution;
+  const { active, expired, current, byId, elsewhere } = resolution;
   const activeIn = (kind) => active.filter((m) => m.scope.kind === kind).length;
   const labels = placeLabels(place.read);
   const notices = [updateWarning(problems), newerNotice(newer), expiredNotice(expired), ignoredNotice(resolution.ignored)].filter((n) => n !== "");
@@ -46130,7 +46354,7 @@ function statusReport(input2, place, about) {
     STATUS_TEXT.labels(labels),
     STATUS_TEXT.memories(byId.size, input2.location),
     STATUS_TEXT.active(activeIn("user"), activeIn("project")),
-    STATUS_TEXT.inactive(expired.length, byId.size - expired.length - current.length, current.length - active.length),
+    STATUS_TEXT.inactive(expired.length, byId.size - expired.length - current.length, current.length - active.length - elsewhere.length, elsewhere.length),
     STATUS_TEXT.unsorted(active.filter((m) => carriesLabel(m, UNSORTED_LABEL)).length),
     STATUS_TEXT.problems(problems.length + place.problems.length),
     ...PROBLEM_GROUPS.flatMap(({ title, holds }) => problemGroup(title, problems.filter(holds))),
@@ -47254,30 +47478,32 @@ function parseProposalFile(text) {
 }
 
 // src/instructions.ts
-var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save to it on your own initiative, without being asked, and keep it correct.
+var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save on your own initiative, unasked, and keep it correct.
 
 When to save:
-- feedback: the user corrects you or confirms a non-obvious approach. Save the rule and why, so the mistake does not happen twice.
-- user: facts about the user's role, preferences and way of working.
-- context: decisions, constraints and goals of ongoing work that the code and git history do not show. Turn relative dates into absolute ones.
-- reference: where to find things outside the repository (URLs, dashboards, tickets, folders).
+- feedback: the user corrects you or confirms a non-obvious approach. Save the rule and why, so it does not recur.
+- user: the user's role, preferences, way of working.
+- context: decisions, constraints and goals of ongoing work that the code and git history do not show. Make dates absolute.
+- reference: where to find things outside the repo (URLs, dashboards, tickets, folders).
 
-Do not save: what the repository already records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters in this conversation.
+Do not save: what the repository records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters in this conversation.
 
 How to save:
-1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory instead of saving a duplicate; when the new memory replaces an old decision, set supersedes.
-2. One rule per memory. The summary is the rule itself in one sentence of at most 300 characters. It is what loads at every start of an index memory, so acting on the summary alone must be right.
-3. why is required: the reason, the incident or the user's own words. The body holds the detail and how to apply it.
-4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label instead of inventing a near-duplicate.
-5. Use scope project when the memory only applies in this repository, scope user when it applies everywhere.
-6. delivery: index is the field's default, and it is for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance, which is the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory, so it is out of sight at a start, never lost. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for a rule injected at that moment. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
-7. When a memory turns out wrong or outdated, update it. Delete only with the user's agreement.
+1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision, set supersedes.
+2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
+3. why is required: the reason, the incident or the user's words. The body holds the detail.
+4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
+5. Use scope project when it only applies in this repository, scope user when everywhere.
+6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory, so it is out of sight at a start, never lost. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
+7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-At session start the index shows each memory as "[scope] title \u2014 summary \xB7 id". Call get_memory with the id before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
+When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared non-rule memory, propose its condition and show it in your answer.
 
-When a start says this place's index is crowded, shrinking it is the user's choice: call dream_report for the memories it prices as movable, offer that at most once in a session, and call update_memory with delivery on-demand only on the user's yes, one memory per call; say that delivery index puts it back.`;
+At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
+
+When a start says its index is crowded, shrinking it is the user's choice: call dream_report, offer what it prices as movable, and on the user's yes call update_memory with delivery on-demand, one memory per call.`;
 
 // src/rule-guard.ts
 var RULE_TOOL = { create: "save_rule", update: "update_rule", remove: "delete_rule" };
@@ -47366,12 +47592,18 @@ var RuleGuard = class {
   store;
   session;
   today;
+  /**
+   * What this place is, for the condition a write sets or changes (#431): read per checked write, so a label set in the
+   * same session is seen. Absent means the guard judges with UNKNOWN_HERE, which hides nothing.
+   */
+  here;
   /** The checked writes, one at a time (A9): each loads, checks and writes after the one before it settled. */
   queue = Promise.resolve();
-  constructor(store2, session, today) {
+  constructor(store2, session, today, here = async () => UNKNOWN_HERE) {
     this.store = store2;
     this.session = session;
     this.today = today;
+    this.here = here;
   }
   async write(write, confirmation, refusedAs) {
     if (write.kind !== "remove") {
@@ -47409,9 +47641,10 @@ var RuleGuard = class {
     const before = loaded.memories.map((stored) => stored.memory);
     const after = takeover === null ? applied(before, write) : [...applied(before, write), takeover];
     const today = this.today();
-    const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, today);
-    hidersCheck(write.kind, loaded.problems, before, after, effect.days, this.session, today);
-    const { standing, pushed } = roomOf(write, effect, before, after, this.session, today, loaded.problems);
+    const here = await this.here();
+    const effect = ruleEffect(before, after, write.kind === "remove" ? null : write.memory.id, this.session, today, here);
+    hidersCheck(write.kind, loaded.problems, before, after, effect.days, this.session, today, here);
+    const { standing, pushed } = roomOf(write, effect, before, after, this.session, today, loaded.problems, here);
     const affects = affectsOf(effect, before, after, write.kind === "create" ? write.memory.id : null, standing, pushed);
     const carry = textToCarry(write, effect);
     const rules = (/* @__PURE__ */ new Set([
@@ -47484,9 +47717,9 @@ var STANDING_TEXT = {
   // Judged in this session's place only, so it says "here" also on a line folded into "here and in other places".
   "no-room": " (here, the other rules at that moment leave no room, so it does not load here)"
 };
-function roomOf(write, effect, before, after, session, today, problems) {
-  const was = resolve4(before, session, today);
-  const will = resolve4(after, session, today);
+function roomOf(write, effect, before, after, session, today, problems, here = UNKNOWN_HERE) {
+  const was = resolve4(before, session, today, here);
+  const will = resolve4(after, session, today, here);
   const own2 = /* @__PURE__ */ new Set([...effect.changes.map((change) => change.id), write.kind === "remove" ? write.base.memory.id : write.memory.id]);
   return { standing: (memory) => standingAt(memory, will.active, will.byId, problems), pushed: pushedOut(was, will, problems, own2) };
 }
@@ -47576,13 +47809,13 @@ function takeoverOf(base, others, session) {
   }
   return here;
 }
-function hidersCheck(kind, problems, before, after, days, session, today) {
+function hidersCheck(kind, problems, before, after, days, session, today, here = UNKNOWN_HERE) {
   for (const problem of problems) {
     if (!isOwnRecord(problem)) continue;
     const id = problem.id;
     for (const day of days) {
       const date5 = sampleDate(day, today);
-      if (hidersOf(before, id, session, date5).join("\n") !== hidersOf(after, id, session, date5).join("\n")) {
+      if (hidersOf(before, id, session, date5, here).join("\n") !== hidersOf(after, id, session, date5, here).join("\n")) {
         throw new UnknownRecordError(kind, id, problem);
       }
     }
@@ -47602,6 +47835,12 @@ function sameLines(a, b) {
 // src/server.ts
 var ID = external_exports.string().min(8).describe("Memory id, or its first 8 characters as shown in the index");
 var LINK_IDS = external_exports.array(external_exports.string()).describe("Memory ids, or their first 8 characters");
+var CONDITION = external_exports.strictObject({
+  inRepo: external_exports.literal(true).optional().describe("true: only in a session inside a git repository"),
+  labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
+  files: external_exports.array(external_exports.string()).optional().describe("File globs; not possible yet")
+});
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet on a rule (enforced, or delivered at a moment other than index or on-demand), on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -47617,7 +47856,8 @@ var SAVE_INPUT = {
   supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces"),
   overrides: LINK_IDS.default([]).describe("User memories this project memory deviates from; needs overrideReason"),
   overrideReason: reasonInputSchema.optional(),
-  expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads")
+  expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
+  appliesWhen: CONDITION.optional().describe(CONDITION_WORDS)
 };
 var MISSING_REVISION = "revision is required: pass the revision from the last response that showed this memory (get_memory, search_memories, save_memory or update_memory), or call get_memory first";
 var REVISION = external_exports.string({ error: MISSING_REVISION }).min(1).describe("The revision of this memory from the last response that showed it; read a memory you know only from the index with get_memory first");
@@ -47636,13 +47876,14 @@ var UPDATE_INPUT = {
   supersedes: LINK_IDS.optional(),
   overrides: LINK_IDS.optional(),
   overrideReason: reasonInputSchema.nullable().optional(),
-  expires: external_exports.string().regex(DATE_RE).nullable().optional()
+  expires: external_exports.string().regex(DATE_RE).nullable().optional(),
+  appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`)
 };
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
 var CONFIRMED = { "anthropic/requiresUserInteraction": true };
 var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. It also returns as nearDuplicates the active memories whose title, summary and body use much the same words as the new one; it compares plain word sets, so it misses a rewording in other words and counts test and tests as two words. The memory is saved either way. If the new memory replaces some of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Each link list you pass replaces the one the memory has, so pass in one list every id it should keep. Never move a memory to another scope to link it. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
-var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason or expires. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
+var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason, expires or appliesWhen. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
 var DELETE_DESCRIPTION = "Delete a memory. NeoCortex keeps the deleted memory, so it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
 var UPDATE_RULE_DESCRIPTION = "Change a memory when the change touches a rule or makes one start or stop loading, after update_memory refused it. The user confirms every call in a prompt. Pass the arguments of that update_memory call and affects exactly as its refusal listed.";
@@ -47774,10 +48015,23 @@ var UNIT_ID_LENGTH = 8;
 function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   const newId = deps.newId ?? randomUUID2;
+  const hereNow = () => deps.here !== void 0 ? Promise.resolve(deps.here) : readHere();
+  const hereFrom = (read) => {
+    const inRepo = deps.placeDir === void 0 ? "unknown" : insideRepo(deps.placeDir);
+    return read.state === "stored" ? { inRepo, labels: read.stored.record.labels.map((label) => label.name) } : { inRepo, labels: "unknown" };
+  };
+  const readHere = async () => {
+    try {
+      const { read } = await deps.places.readPlace(placeRefOf(deps.session.place));
+      return hereFrom(read);
+    } catch {
+      return { inRepo: deps.placeDir === void 0 ? "unknown" : insideRepo(deps.placeDir), labels: "unknown" };
+    }
+  };
   const proposals = deps.proposals ?? new MemoryProposalStore();
   const server = new McpServer({ name: "neocortex", version: package_default.version }, { instructions: INSTRUCTIONS });
   const reader = readerOf(deps.store);
-  const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()));
+  const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()), () => hereNow());
   let dreamStarted = false;
   const dreamOnce = (event) => {
     if (dreamStarted || deps.dream === void 0 || event === "SessionStart") return;
@@ -47798,7 +48052,8 @@ function createServer(deps) {
   const load = async () => {
     const { memories: stored, problems } = await reader.load(visibleScopes(deps.session));
     const memories = stored.map((s) => s.memory);
-    return { stored, memories, problems, resolution: resolve4(memories, deps.session, toLocalDate(now())) };
+    const here = await hereNow();
+    return { stored, memories, problems, here, resolution: resolve4(memories, deps.session, toLocalDate(now()), here) };
   };
   const seen = async () => {
     const scopes = visibleScopes(deps.session);
@@ -47921,17 +48176,18 @@ function createServer(deps) {
       return { failed: true };
     }
   };
-  const delivered = async () => {
+  const delivered = async (here = UNKNOWN_HERE) => {
     const view = await seen();
-    return { view, delivery: deliveryOf(view.loaded, reader.location, deps.session, now()) };
+    return { view, delivery: deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here) };
   };
   const saveCall = async (args2, confirmation) => {
-    const { memories, problems, resolution } = await load();
+    const { memories, problems, resolution, here } = await load();
     const supersedes = resolveIds(memories, problems, args2.supersedes);
     const overrides = resolveIds(memories, problems, args2.overrides);
     if ("error" in supersedes) return fail(supersedes.error);
     if ("error" in overrides) return fail(overrides.error);
     const stamp = now().toISOString();
+    const condition = canonicalCondition(args2.appliesWhen);
     const memory = {
       id: newId(),
       scope: args2.scope === "project" ? deps.session.project : deps.session.user,
@@ -47948,9 +48204,10 @@ function createServer(deps) {
       overrideReason: blankToNull(args2.overrideReason),
       expires: args2.expires ?? null,
       created: stamp,
-      updated: stamp
+      updated: stamp,
+      ...condition === void 0 ? {} : { appliesWhen: condition }
     };
-    const errors = validateLinks(memory, memories);
+    const errors = [...conditionProblems(memory, void 0, resolution.current), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -47969,23 +48226,30 @@ function createServer(deps) {
       ] : [],
       ...near.length > 0 ? [nearNext(id, memory, near.map((n) => n.memory))] : []
     ];
+    const elsewhere = new Set(resolution.elsewhere.map((m) => m.id));
+    const entryHere = (m) => ({ ...relatedEntryOf(m), ...elsewhere.has(m.id) ? { notHere: notHereWords(m.appliesWhen ?? {}, here) } : {} });
     return ok({
       // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none.
       saved: { ...entryOf(memory), revision },
-      related: related.map(relatedEntryOf),
-      nearDuplicates: near.map(({ memory: match, score }) => ({ ...relatedEntryOf(match), score })),
+      related: related.map(entryHere),
+      nearDuplicates: near.map(({ memory: match, score }) => ({ ...entryHere(match), score })),
       next: next.length > 0 ? next.join(" ") : void 0,
       affects: confirmation?.affects
     });
   };
   server.registerTool(
     "save_memory",
-    { title: "Save a memory to NeoCortex", description: SAVE_DESCRIPTION, inputSchema: SAVE_INPUT },
+    { title: "Save a memory to NeoCortex", description: SAVE_DESCRIPTION, inputSchema: external_exports.strictObject(SAVE_INPUT) },
     (args2) => guarded(() => saveCall(args2, null))
   );
   server.registerTool(
     "save_rule",
-    { title: "Save a NeoCortex rule (the user confirms every call)", description: SAVE_RULE_DESCRIPTION, inputSchema: { affects: AFFECTS, ...SAVE_INPUT }, _meta: CONFIRMED },
+    {
+      title: "Save a NeoCortex rule (the user confirms every call)",
+      description: SAVE_RULE_DESCRIPTION,
+      inputSchema: external_exports.strictObject({ affects: AFFECTS, ...SAVE_INPUT }),
+      _meta: CONFIRMED
+    },
     ({ affects, ...args2 }) => guarded(() => saveCall(args2, { affects }))
   );
   const updateCall = async (args2, confirmation) => {
@@ -48000,6 +48264,7 @@ function createServer(deps) {
     if ("error" in supersedes) return fail(supersedes.error);
     if ("error" in overrides) return fail(overrides.error);
     const kind = args2.scope ?? previous.scope.kind;
+    const condition = args2.appliesWhen === void 0 ? previous.appliesWhen : canonicalCondition(args2.appliesWhen ?? void 0);
     const memory = {
       id: previous.id,
       scope: kind === "project" ? deps.session.project : deps.session.user,
@@ -48016,11 +48281,15 @@ function createServer(deps) {
       overrideReason: args2.overrideReason === void 0 ? previous.overrideReason : blankToNull(args2.overrideReason),
       expires: args2.expires === void 0 ? previous.expires : args2.expires,
       created: previous.created,
-      updated: now().toISOString()
+      updated: now().toISOString(),
+      ...condition === void 0 ? {} : { appliesWhen: condition }
     };
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
-    const errors = validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories);
+    const errors = [
+      ...conditionProblems(memory, previous, resolution.current),
+      ...validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories)
+    ];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -48048,19 +48317,24 @@ function createServer(deps) {
   };
   server.registerTool(
     "update_memory",
-    { title: "Update a NeoCortex memory", description: UPDATE_DESCRIPTION, inputSchema: UPDATE_INPUT },
+    { title: "Update a NeoCortex memory", description: UPDATE_DESCRIPTION, inputSchema: external_exports.strictObject(UPDATE_INPUT) },
     (args2) => guarded(() => updateCall(args2, null))
   );
   server.registerTool(
     "update_rule",
-    { title: "Change a NeoCortex rule (the user confirms every call)", description: UPDATE_RULE_DESCRIPTION, inputSchema: { affects: AFFECTS, ...UPDATE_INPUT }, _meta: CONFIRMED },
+    {
+      title: "Change a NeoCortex rule (the user confirms every call)",
+      description: UPDATE_RULE_DESCRIPTION,
+      inputSchema: external_exports.strictObject({ affects: AFFECTS, ...UPDATE_INPUT }),
+      _meta: CONFIRMED
+    },
     ({ affects, ...args2 }) => guarded(() => updateCall(args2, { affects, carried: carriedOf(args2) }))
   );
   server.registerTool(
     "get_memory",
     {
       title: "Get a NeoCortex memory",
-      description: "The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden.",
+      description: "The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden, or not here (it exists and is valid, but its condition does not hold at this place; the text still comes back).",
       inputSchema: { id: ID }
     },
     ({ id }) => guarded(async () => {
@@ -48078,12 +48352,14 @@ function createServer(deps) {
       inputSchema: {
         query: external_exports.string().optional().describe("Words that must all appear in title, why, body or labels"),
         labels: external_exports.array(external_exports.string()).optional().describe("Labels that must all be present"),
-        includeInactive: external_exports.boolean().default(false).describe("Also return expired, replaced and overridden memories")
+        includeInactive: external_exports.boolean().default(false).describe("Also return expired, replaced and overridden memories; a memory that is not here is found either way, marked notHere")
       }
     },
     (args2) => guarded(async () => {
-      const { stored, memories, problems, resolution } = await load();
-      const pool = args2.includeInactive ? [...resolution.byId.values()].sort(compareForContext) : resolution.active;
+      const { stored, memories, problems, resolution, here } = await load();
+      const elsewhere = new Set(resolution.elsewhere.map((memory) => memory.id));
+      const notHere = (memory) => elsewhere.has(memory.id);
+      const pool = args2.includeInactive ? [...resolution.byId.values()].sort(compareForContext) : [...resolution.active, ...resolution.elsewhere].sort(compareForContext);
       const words = (args2.query ?? "").toLowerCase().split(/\s+/).filter((word) => word !== "");
       const wanted = normalizeLabels(args2.labels ?? []);
       const results = pool.filter((memory) => {
@@ -48091,7 +48367,11 @@ function createServer(deps) {
         return words.every((word) => text.includes(word)) && wanted.every((label) => carriesLabel(memory, label));
       });
       const unreadable = unreadablePart(memories, problems, words, wanted);
-      const shown2 = results.slice(0, SEARCH_LIMIT).map((memory) => ({ ...entryOf(memory), revision: baseOf(stored, memory).revision }));
+      const shown2 = results.slice(0, SEARCH_LIMIT).map((memory) => ({
+        ...entryOf(memory),
+        ...notHere(memory) ? { notHere: notHereWords(memory.appliesWhen ?? {}, here) } : {},
+        revision: baseOf(stored, memory).revision
+      }));
       return ok({ total: results.length, results: shown2, ...unreadable === void 0 ? {} : { unreadable } });
     })
   );
@@ -48143,8 +48423,8 @@ function createServer(deps) {
     { title: "Report how optimized NeoCortex is for this place", description: DREAM_DESCRIPTION },
     () => guarded(async () => {
       const at = now();
-      const input2 = await loadDelivery(reader, deps.session, at);
       const place = await loadPlace(deps.places, deps.session);
+      const input2 = await loadDelivery(reader, deps.session, at, CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
       const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
       const plans = indexPlans(input2, place);
@@ -48255,12 +48535,11 @@ function createServer(deps) {
           kind: one.kind,
           shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
           ...one.others > 0 ? { others: one.others } : {},
-          // A promote carries no format-2.0 condition TODAY, so the memory loads in EVERY place (src/policy.ts:76),
-          // including the owner's folder places the cluster's evidence never covered. The answer says it where the user
-          // agrees (decided 2026-11-05, #401): a cost this size must not be discoverable only in the design.
-          // `carriesCondition: false` is a statement about this format, not an invariant: whoever gives a promote a
-          // condition at format 2.0 must change this field with it, or it reports a cost that no longer applies.
-          ...proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent?.act === "promote" ? { carriesCondition: false, loadsEverywhere: true } : {}
+          // A promote moves the record as it is stored, its condition included (src/dream/apply.ts), so without one the
+          // memory loads in EVERY place, including the owner's folder places the cluster's evidence never covered. The
+          // answer says it where the user agrees (decided 2026-11-05, #401), from the promoted record's own condition
+          // (#445 S45), which its shown entry also carries.
+          ...promoteCost(one.shown, proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent)
         })),
         ...unfinished.length > 0 ? { unfinished } : {},
         ...anyClosed ? { closed } : {},
@@ -48357,8 +48636,8 @@ function createServer(deps) {
     },
     async ({ moment, event, part, prompt }) => {
       try {
-        const { view, delivery } = await delivered();
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
+        const { view, delivery } = await delivered(place === null ? UNKNOWN_HERE : hereFrom(place.read));
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         dreamOnce(event);
@@ -48483,8 +48762,9 @@ function createServer(deps) {
     async () => {
       let text;
       try {
-        const { view, delivery } = await delivered();
-        text = refreshContext(delivery, await loadPlace(deps.places, deps.session), await waitingNotice(view));
+        const place = await loadPlace(deps.places, deps.session);
+        const { view, delivery } = await delivered(hereFrom(place.read));
+        text = refreshContext(delivery, place, await waitingNotice(view));
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
       }
@@ -48501,8 +48781,9 @@ function createServer(deps) {
       const about = { version: package_default.version, session: deps.session, location: reader.location };
       let text;
       try {
-        const input2 = await loadDelivery(reader, deps.session, now());
-        text = statusReport(input2, await visitPlace(deps.places, deps.session, now()), about);
+        const place = await visitPlace(deps.places, deps.session, now());
+        const input2 = await loadDelivery(reader, deps.session, now(), CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
+        text = statusReport(input2, place, about);
       } catch (error62) {
         text = statusUnread(about, error62);
       }
@@ -48751,7 +49032,7 @@ function stale(error62, base, resolution) {
   return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };
 }
 function shownMemory({ memory, revision }, resolution) {
-  const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : "replaced or overridden";
+  const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : resolution.elsewhere.includes(memory) ? "not here" : "replaced or overridden";
   return {
     ...entryOf(memory),
     fullId: memory.id,
@@ -48890,7 +49171,7 @@ function relatedTo(memory, resolution) {
   for (const m of resolution.active) {
     for (const label of m.labels) counts.set(label, (counts.get(label) ?? 0) + 1);
   }
-  const ranked = resolution.active.flatMap((m) => {
+  const ranked = [...resolution.active, ...resolution.elsewhere].flatMap((m) => {
     if (m.id === memory.id || linked.has(m.id)) return [];
     const shared = m.labels.filter((label) => !KIND_LABELS.has(label) && carriesLabel(memory, label));
     if (shared.length === 0) return [];
@@ -48902,7 +49183,7 @@ function relatedTo(memory, resolution) {
 }
 function nearDuplicatesOf(memory, resolution) {
   const linked = /* @__PURE__ */ new Set([...memory.supersedes, ...memory.overrides]);
-  return resolution.active.filter((m) => !linked.has(m.id)).map((m) => ({ memory: m, score: Math.round(similarity(memory, m) * 100) / 100 })).filter((near) => near.score >= NEAR_DUPLICATE_MIN).sort((a, b) => b.score - a.score || (a.memory.id < b.memory.id ? -1 : 1)).slice(0, NEAR_LIMIT);
+  return [...resolution.active, ...resolution.elsewhere].filter((m) => !linked.has(m.id)).map((m) => ({ memory: m, score: Math.round(similarity(memory, m) * 100) / 100 })).filter((near) => near.score >= NEAR_DUPLICATE_MIN).sort((a, b) => b.score - a.score || (a.memory.id < b.memory.id ? -1 : 1)).slice(0, NEAR_LIMIT);
 }
 function nearNext(id, memory, matches) {
   const same = matches.filter((match) => linkProblem("supersedes", memory, match) === null);
@@ -48919,7 +49200,25 @@ function nearNext(id, memory, matches) {
   return NEAR_TEXT.next(ways);
 }
 function relatedEntryOf(memory) {
-  return { id: shortId(memory.id), scope: memory.scope.kind, title: shownCut(memory.title, RELATED_TITLE_MAX) };
+  return { id: shortId(memory.id), scope: memory.scope.kind, title: shownCut(memory.title, RELATED_TITLE_MAX), ...shownCondition(memory) };
+}
+function shownCondition(memory) {
+  const condition = canonicalCondition(memory.appliesWhen);
+  if (condition === void 0) return {};
+  const { inRepo, labels, files } = condition;
+  return {
+    appliesWhen: {
+      ...inRepo === true ? { inRepo } : {},
+      ...labels === void 0 ? {} : { labels: labels.map(shownText) },
+      ...files === void 0 ? {} : { files: files.map(shownText) }
+    }
+  };
+}
+function promoteCost(shown2, intent) {
+  if (intent?.act !== "promote") return {};
+  const record2 = shown2.find((one) => one.memory.id === intent.record)?.memory;
+  const carries = canonicalCondition(record2?.appliesWhen) !== void 0;
+  return { carriesCondition: carries, loadsEverywhere: !carries };
 }
 function planOf(plan) {
   return {
@@ -48941,7 +49240,8 @@ function entryOf(memory) {
     summary: shownText(memory.summary),
     delivery: memory.delivery,
     labels: memory.labels,
-    why: memory.why
+    why: memory.why,
+    ...shownCondition(memory)
   };
 }
 function blankToNull(value) {
@@ -50083,7 +50383,7 @@ if (move) {
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
   const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
   const runs = new FileRunStore(root, (run) => store.dreamLock(run));
-  await createServer({ store, places: store, session, autoMemory, proposals, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }

@@ -2,6 +2,26 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.0 - 2026-11-07
+
+- Added: a memory can say where it applies. Ask Claude to keep a memory to places with a given context label, such as
+  "only for places labelled contoso", or to sessions inside a git repository, and it stores that as the memory's
+  condition. The memory then loads at a session start, a subagent's start and a refresh only where its condition holds,
+  with the condition on its index line. `search_memories` still finds it everywhere and says what it would need, such as
+  "not here: needs label contoso". A place whose labels nobody has set yet hides nothing, so such a memory shows there
+  until the place is labelled. Every later change keeps the condition unless you ask Claude to remove it, and a label
+  change made in another session counts at the next answer here.
+- A condition is refused, with the reason and with nothing written, on a rule, on a memory that overrides another, and
+  as a file condition, none of which is possible yet, and on a project memory, which already applies only in its own
+  project. `save_memory`, `save_rule`, `update_memory` and `update_rule` now also refuse a field they do not know,
+  instead of dropping it while the answer read as a success.
+- Changed: any memory may now override another, not only a project memory a user one, and the memory it overrides stops
+  loading only where both apply. An override is still refused for an enforced memory, and now also for one that is more
+  specific than the override: there, change that memory itself.
+- Changed: memories are now written in format 2.0. NeoCortex 0.4.32 and older cannot read a memory this version saved
+  or changed: they say it was written by a newer NeoCortex and leave it alone, and their session start leaves it out.
+  Update every machine that shares your memory folder.
+
 ## 0.4.32 - 2026-11-05
 
 - Fixed: a shared memory proposed for all your projects could show a second copy from the project you were in, as though
