@@ -45372,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.2",
+  version: "0.5.3",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45641,11 +45641,10 @@ var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slic
 var CONDITION_TEXT = {
   /**
    * T1 since #441: a rule takes inRepo and labels, and files wait for #434. A save of a rule with files meets T3 below,
-   * as every memory does; only a hand-written files part that an update leaves as it is reaches this text.
+   * as every memory does; this text is for a hand-written files part an update keeps while it makes the memory a rule,
+   * also when the update changes the condition's other parts (#439, finding F3).
    */
   becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, and a file condition is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
-  /** AC5: the condition of a memory that is a rule before or after the change. Its way out is S6 of #440. */
-  ruleChanged: () => `appliesWhen: the condition of ${RULE_WORDS()} cannot be set, changed or removed yet; leave appliesWhen out of this call. To change it, make the memory no rule first, change appliesWhen in a call of its own, then make it a rule again`,
   /** T2 on a save. */
   override: "appliesWhen: a memory with overrides cannot carry a condition yet; save it without appliesWhen",
   /** T2 on an update that sets, changes or removes the condition of a memory with overrides before or after. */
@@ -45673,8 +45672,7 @@ function conditionProblems(written, stored, current) {
   }
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
-  if (changed && (isRule(stored) || isRule(written))) problems.push(CONDITION_TEXT.ruleChanged());
-  if (!changed && filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
+  if (filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
   if (changed && (stored.overrides.length > 0 || written.overrides.length > 0)) problems.push(CONDITION_TEXT.overrideChanged);
   if (!changed && after !== void 0 && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride);
   if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
@@ -45737,15 +45735,25 @@ function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE,
   const ends = [...new Set([...before, ...after].flatMap((m) => m.expires !== null && m.expires >= today ? [m.expires] : []))].sort();
   const days = [{ kind: "today" }, ...ends.map((date5) => ({ kind: "after", date: date5 }))];
   const samples = days.map((day) => sampleDate(day, today));
-  const was = loadingOf(before, session, samples, here);
-  const will = loadingOf(after, session, samples, hereAfter);
+  const classes = otherPlaces(before, after);
+  const was = loadingOf(before, session, samples, here, classes);
+  const will = loadingOf(after, session, samples, hereAfter, classes);
   const none = samples.map(() => null);
   const changes = [.../* @__PURE__ */ new Set([...was.keys(), ...will.keys()])].map((key) => {
-    const [id, place] = key.split(" ");
-    const [from, to] = [was.get(key) ?? none, will.get(key) ?? none];
+    const { id, place, where } = was.get(key) ?? will.get(key);
+    const [from, to] = [was.get(key)?.row ?? none, will.get(key)?.row ?? none];
     const swap = id !== written && from.some((scope, day) => scope !== null && to[day] !== null && scope !== to[day]);
-    return { id, place, before: from.map((scope) => scope !== null), after: to.map((scope) => scope !== null), ...swap ? { swap: true } : {} };
-  }).filter((change) => change.swap === true || change.before.some((loads, day) => loads !== change.after[day])).sort((a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place]);
+    return {
+      id,
+      place,
+      before: from.map((scope) => scope !== null),
+      after: to.map((scope) => scope !== null),
+      ...swap ? { swap: true } : {},
+      ...where === void 0 ? {} : { where }
+    };
+  }).filter((change) => change.swap === true || change.before.some((loads, day) => loads !== change.after[day])).sort(
+    (a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place] || compareText(conditionWords(a.where), conditionWords(b.where)) || compareText(classKey(a.where), classKey(b.where))
+  );
   const ruleIn = (memories) => memories.some((m) => m.id === written && isRule(m));
   return { days, changes, writtenRule: written !== null && (ruleIn(before) || ruleIn(after)) ? written : null };
 }
@@ -45755,21 +45763,54 @@ function sampleDate(day, today) {
 function changesRules(effect) {
   return effect.changes.length > 0 || effect.writtenRule !== null;
 }
-function loadingOf(memories, session, samples, here) {
+function classKey(where) {
+  return JSON.stringify([where?.inRepo === true, where?.labels ?? []]);
+}
+function classOf(labels, inRepo) {
+  return canonicalCondition({ ...inRepo ? { inRepo: true } : {}, labels: [...labels] });
+}
+function placeOf(where) {
+  return { inRepo: where?.inRepo === true, labels: where?.labels ?? [] };
+}
+function otherPlaces(before, after) {
+  const user = [...before, ...after].filter((m) => m.scope.kind === "user");
+  const parts = (m) => canonicalCondition(m.appliesWhen) ?? {};
+  const places = /* @__PURE__ */ new Map();
+  for (const id of new Set(user.filter(isRule).map((m) => m.id))) {
+    const classes = /* @__PURE__ */ new Map([[classKey(void 0), void 0]]);
+    const add = (where) => classes.set(classKey(where), where);
+    const overrides = user.filter((m) => m.overrides.includes(id));
+    for (const version2 of user.filter((m) => m.id === id)) {
+      const own2 = parts(version2);
+      add(classOf(own2.labels ?? [], own2.inRepo === true));
+      for (const override of overrides) {
+        const theirs = parts(override);
+        add(classOf([...own2.labels ?? [], ...theirs.labels ?? []], own2.inRepo === true || theirs.inRepo === true));
+      }
+    }
+    places.set(id, [...classes.values()]);
+  }
+  return places;
+}
+function loadingOf(memories, session, samples, here, classes) {
   const user = memories.filter((m) => m.scope.kind === "user");
   const loading = /* @__PURE__ */ new Map();
-  const mark = (memory, place, day) => {
-    const key = `${memory.id} ${place}`;
-    const row = loading.get(key) ?? samples.map(() => null);
-    row[day] = scopeId(memory.scope);
-    loading.set(key, row);
+  const mark = (memory, place, where, day) => {
+    const key = `${memory.id} ${place} ${classKey(where)}`;
+    const entry = loading.get(key) ?? { id: memory.id, place, where, row: samples.map(() => null) };
+    entry.row[day] = scopeId(memory.scope);
+    loading.set(key, entry);
   };
+  const distinct = /* @__PURE__ */ new Map();
+  for (const list of classes.values()) for (const where of list) distinct.set(classKey(where), where);
   samples.forEach((sample, day) => {
-    for (const memory of resolve4(memories, session, sample, here).active) if (isRule(memory)) mark(memory, "here", day);
-    for (const memory of resolve4(user, session, sample, UNKNOWN_HERE).active) {
-      if (!isRule(memory)) continue;
-      mark(memory, "elsewhere", day);
-      if (memory.enforced) mark(memory, "overriding", day);
+    for (const memory of resolve4(memories, session, sample, here).active) if (isRule(memory)) mark(memory, "here", void 0, day);
+    for (const [key, where] of distinct) {
+      for (const memory of resolve4(user, session, sample, placeOf(where)).active) {
+        if (!isRule(memory) || !(classes.get(memory.id) ?? []).some((own2) => classKey(own2) === key)) continue;
+        mark(memory, "elsewhere", where, day);
+        if (memory.enforced) mark(memory, "overriding", where, day);
+      }
     }
   });
   return loading;
@@ -47821,14 +47862,24 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
   const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.swap === true ? SWAP_MARK : ""}${change.after.some(Boolean) ? size(change.id) : ""}`;
   const lines = [];
   for (const id of new Set(effect.changes.map((change) => change.id))) {
-    const at = (place) => effect.changes.find((change) => change.id === id && change.place === place);
-    const [here, there, overriding] = [at("here"), at("elsewhere"), at("overriding")];
+    const mine = effect.changes.filter((change) => change.id === id);
+    const here = mine.find((change) => change.place === "here");
+    const classes = /* @__PURE__ */ new Map([[classKey(void 0), void 0]]);
+    for (const change of mine) if (change.place !== "here") classes.set(classKey(change.where), change.where);
     const parts = [];
-    if (here !== void 0) parts.push([titled(here), PLACE_WORDS.here, shift(here)]);
-    if (there !== void 0) parts.push([titled(there), PLACE_WORDS.elsewhere, shift(there)]);
-    const folded = overriding !== void 0 && there !== void 0 && marked(id) && shift(there) === shift(overriding);
-    if (overriding !== void 0 && !folded) parts.push([titled(overriding), PLACE_WORDS.overriding, shift(overriding)]);
-    if (here !== void 0 && there !== void 0 && parts[0][2] === parts[1][2]) parts.splice(0, 2, [parts[0][0], "here and in other places", parts[0][2]]);
+    for (const [key, where] of classes) {
+      const at = (place) => mine.find((change) => change.place === place && classKey(change.where) === key);
+      const [there, overriding] = [at("elsewhere"), at("overriding")];
+      const words = where === void 0 ? "" : ` (${conditionWords(where)})`;
+      if (where === void 0 && here !== void 0 && there !== void 0 && shift(here) === shift(there)) {
+        parts.push([titled(here), "here and in other places", shift(here)]);
+      } else {
+        if (where === void 0 && here !== void 0) parts.push([titled(here), PLACE_WORDS.here, shift(here)]);
+        if (there !== void 0) parts.push([titled(there), `${PLACE_WORDS.elsewhere}${words}`, shift(there)]);
+      }
+      const folded = overriding !== void 0 && there !== void 0 && marked(id) && shift(there) === shift(overriding);
+      if (overriding !== void 0 && !folded) parts.push([titled(overriding), `${PLACE_WORDS.overriding}${words}`, shift(overriding)]);
+    }
     for (const [title, place, text] of parts) lines.push(`${title} ${place}: ${text}`);
   }
   const written = effect.writtenRule;

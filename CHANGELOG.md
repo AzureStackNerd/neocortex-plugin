@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.3 - 2026-11-07
+
+- Changed: the condition of an existing rule can be narrowed, widened or removed in one change you confirm, such as
+  moving one customer's rule to another customer's label, or letting it apply everywhere again; the rule keeps its
+  id, so the exceptions that name it keep holding. Before, that took three confirmed steps. A rule that is itself an
+  exception to another memory still cannot have its condition changed.
+- Changed: every question about a rule names, by their labels, the places where it starts or stops loading, such as
+  `in other places (labels contoso)`. When none of your memories has a condition, the questions read as before.
+- Using one memory folder from several machines? Update NeoCortex on each: a machine still on 0.5.2 refuses a change
+  of a rule's condition and asks its questions without labels.
+
 ## 0.5.2 - 2026-11-07
 
 - Added: a rule can apply only in places with a context label, such as one customer's rules in the places labelled for

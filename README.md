@@ -173,12 +173,16 @@ repo (`inRepo`), such as a definition of done, or only in places with a label, s
 arrives at its own moment, a prompt, an edit or a subagent's start, only where that holds; you confirm it like any rule
 change, and Claude proposes such a label itself for a rule that belongs to one kind of place. A place's first labels
 take effect at once; a later label change that would make a rule start or stop loading there asks you first, naming
-those rules, through `set_context_labels_rule`. Not possible yet: a condition on a memory with `overrides`, file globs
-(`files`), and changing an existing rule's condition in one call (make it no rule, change the condition, make it a rule
-again); a project memory never takes one, because its project already fixes where it applies. Such a call is refused
-with the reason, and nothing is written; so is a call that names a field the tool does not know. Using one store from
-several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers a rule that applies only inside a repo in
-folders too, and one still at 0.5.1 changes a place's labels without asking, also when that starts or stops a rule.
+those rules, through `set_context_labels_rule`. An existing rule's condition is narrowed, widened or removed in one
+change through `update_rule`, which you confirm; the rule keeps its id and the exceptions that name it. Every rule
+question names, by their labels, the places where the rule starts or stops loading, such as
+`in other places (labels contoso)`. Not possible yet: a condition on a memory with `overrides`, a rule that is itself
+an exception included, and file globs (`files`); a project memory never takes one, because its project already fixes
+where it applies. Such a call is refused with the reason, and nothing is written; so is a call that names a field the
+tool does not know. Using one store from several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers
+a rule that applies only inside a repo in folders too, one still at 0.5.1 changes a place's labels without asking, also
+when that starts or stops a rule, and one still at 0.5.2 refuses a change of a rule's condition and asks its rule
+questions without labels.
 
 ### What a memory holds
 
