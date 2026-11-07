@@ -45372,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.0",
+  version: "0.5.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45639,12 +45639,12 @@ function validateLinks(memory, existing) {
 }
 var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)})`;
 var CONDITION_TEXT = {
-  /** T1 on a save. */
-  rule: () => `appliesWhen: ${RULE_WORDS()} cannot carry a condition yet; save it without appliesWhen`,
-  /** T1 on an update that makes a memory with a condition a rule and leaves the condition as it is. */
-  becomesRule: () => `appliesWhen: this change makes a memory with a condition ${RULE_WORDS()}, which cannot carry a condition yet; remove the condition first with appliesWhen null, then make it a rule`,
-  /** AC5: the condition of a memory that is a rule before or after the change. */
-  ruleChanged: () => `appliesWhen: the condition of ${RULE_WORDS()} cannot be set, changed or removed yet; leave appliesWhen out of this call, and change a condition only in a call of its own while the memory is no rule`,
+  /** T1 on a save: a rule takes inRepo alone since #440; labels wait for S3 (#441) and files for #434. */
+  rule: () => `appliesWhen: ${RULE_WORDS()} takes only inRepo yet, no labels or files; leave them out`,
+  /** T1 on an update that makes a memory with labels or files a rule and leaves the condition as it is. */
+  becomesRule: () => `appliesWhen: this change makes a memory with labels or files ${RULE_WORDS()}, which takes only inRepo yet; first change its condition to inRepo alone, or remove it with appliesWhen null, then make it a rule`,
+  /** AC5: the condition of a memory that is a rule before or after the change. Its way out is S6 of #440. */
+  ruleChanged: () => `appliesWhen: the condition of ${RULE_WORDS()} cannot be set, changed or removed yet; leave appliesWhen out of this call. To change it, make the memory no rule first, change appliesWhen in a call of its own, then make it a rule again`,
   /** T2 on a save. */
   override: "appliesWhen: a memory with overrides cannot carry a condition yet; save it without appliesWhen",
   /** T2 on an update that sets, changes or removes the condition of a memory with overrides before or after. */
@@ -45661,10 +45661,11 @@ var CONDITION_TEXT = {
 function conditionProblems(written, stored, current) {
   const after = canonicalCondition(written.appliesWhen);
   const placed = after?.inRepo === true || after?.labels !== void 0;
+  const ruleTakes = after === void 0 || after.labels === void 0 && after.files === void 0;
   const problems = [];
   if (stored === void 0) {
     if (after === void 0) return problems;
-    if (isRule(written)) problems.push(CONDITION_TEXT.rule());
+    if (isRule(written) && !ruleTakes) problems.push(CONDITION_TEXT.rule());
     if (written.overrides.length > 0) problems.push(CONDITION_TEXT.override);
     if (after.files !== void 0) problems.push(CONDITION_TEXT.files);
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
@@ -45673,7 +45674,7 @@ function conditionProblems(written, stored, current) {
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
   if (changed && (isRule(stored) || isRule(written))) problems.push(CONDITION_TEXT.ruleChanged());
-  if (!changed && after !== void 0 && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
+  if (!changed && !ruleTakes && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
   if (changed && (stored.overrides.length > 0 || written.overrides.length > 0)) problems.push(CONDITION_TEXT.overrideChanged);
   if (!changed && after !== void 0 && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride);
   if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
@@ -47494,12 +47495,12 @@ How to save:
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
 5. Use scope project when it only applies in this repository, scope user when everywhere.
-6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory, so it is out of sight at a start, never lost. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
+6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change or delete that makes a rule start or stop loading, goes only through save_rule, update_rule or delete_rule, which the user confirms: call one only for a change the user asked for, after save_memory, update_memory or delete_memory refused it, with its affects.
 7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared non-rule memory, propose its condition and show it in your answer.
+When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer; for a rule only inRepo, when it fits code work alone.
 
 At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
 
@@ -47840,7 +47841,7 @@ var CONDITION = external_exports.strictObject({
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
   files: external_exports.array(external_exports.string()).optional().describe("File globs; not possible yet")
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet on a rule (enforced, or delivered at a moment other than index or on-demand), on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. A rule (enforced, or delivered at a moment other than index or on-demand) takes only inRepo yet, no labels or files; not possible yet on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -48176,7 +48177,7 @@ function createServer(deps) {
       return { failed: true };
     }
   };
-  const delivered = async (here = UNKNOWN_HERE) => {
+  const delivered = async (here) => {
     const view = await seen();
     return { view, delivery: deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here) };
   };
@@ -48637,7 +48638,7 @@ function createServer(deps) {
     async ({ moment, event, part, prompt }) => {
       try {
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
-        const { view, delivery } = await delivered(place === null ? UNKNOWN_HERE : hereFrom(place.read));
+        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read));
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         dreamOnce(event);

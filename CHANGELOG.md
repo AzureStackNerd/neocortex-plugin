@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.1 - 2026-11-07
+
+- Added: a rule can apply only inside a git repository. Ask Claude to keep a rule, such as a definition of done, to
+  sessions inside a repo, and it arrives at the session start, at every prompt, at a short question, at every edit and
+  in every subagent only there, never in a folder outside one. Claude proposes this condition itself for a rule that
+  only makes sense in code work, and you confirm it as any rule change. A rule still takes no labels and no file
+  condition. An existing rule gets the condition in three steps, each confirmed: make it a note, give the note the
+  condition, and make it a rule again; it keeps its id.
+- Using one memory folder from several machines? Update NeoCortex on each: a machine still on 0.5.0 delivers a rule
+  that applies only inside a repo in folders too, at its prompts, edits and subagents.
+
 ## 0.5.0 - 2026-11-07
 
 - Added: a memory can say where it applies. Ask Claude to keep a memory to places with a given context label, such as

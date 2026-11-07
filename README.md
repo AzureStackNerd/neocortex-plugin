@@ -168,10 +168,14 @@ session start, a subagent's start or a refresh; where it holds, its index line s
 `set_context_labels`. A place nobody has labelled yet hides no memory, so a labelled memory shows there until you label
 the place.
 
-An update that leaves `appliesWhen` out keeps the condition; `null` or `{}` removes it. A condition is not possible yet
-on a rule, on a memory with `overrides`, or as file globs (`files`), and a project memory never takes one, because its
-project already fixes where it applies. Such a call is refused with the reason, and nothing is written; so is a call
-that names a field the tool does not know.
+An update that leaves `appliesWhen` out keeps the condition; `null` or `{}` removes it. A rule can apply only inside a
+repo (`inRepo`), such as a definition of done, and then arrives at its own moment, a prompt, an edit or a subagent's
+start, only in sessions inside a repo; you confirm it like any rule change. Not possible yet: labels on a rule, a
+condition on a memory with `overrides`, file globs (`files`), and changing an existing rule's condition in one call
+(make it no rule, change the condition, make it a rule again); a project memory never takes one, because its project
+already fixes where it applies. Such a call is refused with the reason, and nothing is written; so is a call that
+names a field the tool does not know. Using one store from several machines? Update NeoCortex on each: a machine still
+at 0.5.0 delivers a rule that applies only inside a repo in folders too.
 
 ### What a memory holds
 
