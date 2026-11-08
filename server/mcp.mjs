@@ -45372,7 +45372,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.4",
+  version: "0.5.5",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46999,13 +46999,16 @@ function judgeAll(load, seen) {
 function waitingCount(judgement) {
   return judgement.judged.filter((one) => one.state === "waiting").length;
 }
-function sameShown(a, b) {
+function replacedAtAnyRevision(proposal, load) {
+  return load.proposals.some((other) => other.kind === proposal.kind && sameShown(other, proposal, true) && isLater(other, proposal));
+}
+function sameShown(a, b, anyRevision = false) {
   const left = a.rests.filter((rest) => rest.shown);
   const right = b.rests.filter((rest) => rest.shown);
-  return left.length === right.length && left.every((rest) => right.some((other) => sameMemory(rest, other)));
+  return left.length === right.length && left.every((rest) => right.some((other) => sameMemory(rest, other, anyRevision)));
 }
-function sameMemory(a, b) {
-  return a.id === b.id && sameScope(a.scope, b.scope) && a.revision === b.revision;
+function sameMemory(a, b, anyRevision) {
+  return a.id === b.id && sameScope(a.scope, b.scope) && (anyRevision || a.revision === b.revision);
 }
 function isLater(a, b) {
   return a.created > b.created || a.created === b.created && a.id > b.id;
@@ -47015,29 +47018,39 @@ function isLater(a, b) {
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
   if (intent === void 0) return { refusal: { reason: "no-intent" } };
-  const { visible, stamp, userScope } = context;
   for (const id of idsOf2(proposal)) {
     if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
   }
   const recordOf2 = (id) => records.find((one) => recordId(one) === id);
   const restOf = (id) => proposal.rests.find((rest) => rest.id === id);
-  const written = new Set(proposal.intent === void 0 ? [] : writtenIds(proposal));
+  const survivor = intent.act === "supersede" ? recordOf2(intent.survivor) : void 0;
+  const landed = intent.act === "supersede" && survivor !== void 0 && "stored" in survivor && survivor.stored.memory.supersedes.includes(intent.retired) ? intent.survivor : void 0;
+  const refuse = (refusal2) => landed === void 0 ? { refusal: refusal2 } : { refusal: refusal2, landed };
+  const planned = planOfIntent(intent, recordOf2, restOf, context);
+  if (planned.refusal === void 0 && planned.steps.length === 0) return planned;
+  const written = new Set(writtenIds(proposal));
   for (const rest of proposal.rests) {
     if (written.has(rest.id)) continue;
     const record2 = recordOf2(rest.id);
-    if (record2 === void 0) return { refusal: { reason: "moved", id: rest.id } };
-    if ("problem" in record2) return { refusal: { reason: "unreadable", id: rest.id } };
-    if (record2.stored.revision !== rest.revision) return { refusal: { reason: "moved", id: rest.id } };
+    if (record2 === void 0) return refuse({ reason: "moved", id: rest.id, how: "deleted" });
+    if ("problem" in record2) return refuse({ reason: "unreadable", id: rest.id });
+    if (rest.shown && !sameScope(record2.scope, rest.scope)) return refuse({ reason: "moved", id: rest.id, how: "scope" });
+    if (record2.stored.revision !== rest.revision) return refuse({ reason: "moved", id: rest.id, how: "changed" });
   }
+  return planned.refusal === void 0 ? planned : refuse(planned.refusal);
+}
+function planOfIntent(intent, recordOf2, restOf, context) {
+  const { visible, stamp, userScope } = context;
   const stepOf = (id, done, write, retire = false) => {
     const record2 = recordOf2(id);
-    if (record2 === void 0) return retire ? null : { reason: "moved", id };
+    if (record2 === void 0) return retire ? null : { reason: "moved", id, how: "deleted" };
     if ("problem" in record2) return { reason: "unreadable", id };
     if (done(record2.stored.memory)) return null;
     if (!visible.some((scope) => sameScope(scope, record2.scope))) return { reason: "elsewhere", id };
     const rest = restOf(id);
     if (rest === void 0) return { reason: "unchecked", id };
-    return record2.stored.revision === rest.revision ? write(record2.stored) : { reason: "moved", id };
+    if (rest.shown && !sameScope(record2.scope, rest.scope)) return { reason: "moved", id, how: "scope" };
+    return record2.stored.revision === rest.revision ? write(record2.stored) : { reason: "moved", id, how: "changed" };
   };
   const stillHere = () => false;
   if (intent.act === "supersede") {
@@ -47047,6 +47060,7 @@ function planApply(proposal, records, context) {
       base
     }));
     if (survivor !== null && "reason" in survivor) return { refusal: survivor };
+    if (survivor !== null && recordOf2(intent.retired) === void 0) return { refusal: { reason: "moved", id: intent.retired, how: "deleted" } };
     const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
     if (retired !== null && "reason" in retired) return { refusal: retired };
     return { steps: [survivor, retired].flatMap((one) => one === null ? [] : [one]) };
@@ -47117,6 +47131,17 @@ function idsOf2(proposal) {
 }
 function unique(ids) {
   return [...new Set(ids)];
+}
+function closureOf(proposal, plan) {
+  const refusal2 = plan.refusal;
+  if (refusal2 === void 0) return void 0;
+  const { reason } = refusal2;
+  if (reason !== "moved" && reason !== "elsewhere" || !("id" in refusal2)) return void 0;
+  const how = "how" in refusal2 ? refusal2.how : "scope";
+  const rest = proposal.rests.find((one) => one.id === refusal2.id && one.shown);
+  const intent = proposal.intent;
+  const landed = plan.landed !== void 0 && intent?.act === "supersede" ? { survivor: plan.landed, retired: intent.retired } : void 0;
+  return { how, ...rest === void 0 ? {} : { shown: { id: rest.id, scope: rest.scope } }, ...landed === void 0 ? {} : { landed } };
 }
 function writtenIds(proposal) {
   const intent = proposal.intent;
@@ -48066,7 +48091,7 @@ var NEAR_TEXT = {
 };
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
-var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
 var TWIN_ANSWER = external_exports.literal("accept").describe("only accept writes; reject and keep-both change no memory, so call dream_decide for them");
@@ -48099,6 +48124,24 @@ var PROPOSAL_TEXT = {
   },
   /** What dream_proposals adds to its next step while a proposal is accepted and its writes have not all run (#397). */
   unfinished: (count2) => `${count2} ${count2 === 1 ? "proposal is" : "proposals are"} accepted and not applied: its writes were refused or did not all run. Call dream_decide again with accept and the id, for each id under unfinished: it finishes what is left and changes nothing already done. Tell the user which one is unfinished and why, when the refusal said so.`,
+  /**
+   * Why an accepted proposal is closed (#449, refinement point 1 (a)): the same words under closedAccepts and in the
+   * answer to its retry. They say what holds now, never which writes ran earlier, so they read alike in every place and
+   * hold when a write was undone by hand; a memory the proposal only counts is never named (2.4), and where a memory
+   * moved is worded from the scope the proposal showed it in, never from this session's place.
+   */
+  closedAccept: (closure, link2) => {
+    const { how, shown: shown2, landed } = closure;
+    const what = shown2 === void 0 ? "a memory it counts in another place" : landed?.retired === shown2.id ? "it" : `memory ${shortId(shown2.id)}`;
+    const cause = how === "deleted" ? `${what} was deleted after the accept` : how === "changed" ? `${what} changed after the accept` : shown2 === void 0 ? `${what} moved after the accept` : `${what} is no longer in ${shown2.scope.kind === "user" ? "user scope" : "this project"}`;
+    const end = "it is closed and nothing more is written for it; a later Dreamer run may propose it again on the memories as they are now";
+    if (landed === void 0) return `your accept of this proposal is not applied: ${cause}; ${end}`;
+    const [survivor, retired] = [shortId(landed.survivor), shortId(landed.retired)];
+    const linked = link2 === "hidden" ? `memory ${survivor} carries the link that replaces memory ${retired}, which no longer loads, but` : link2 === "loads" ? `memory ${survivor} carries a supersedes link to memory ${retired}, which does not hide it, and` : `memory ${survivor} carries a supersedes link to memory ${retired}, but`;
+    return `your accept of this proposal is applied only in part: ${linked} memory ${retired} is not deleted, because ${cause}; ${end}`;
+  },
+  /** What dream_proposals adds to its next step while an accepted proposal is closed (#449). */
+  closedAccepts: (count2) => `${count2} accepted ${count2 === 1 ? "proposal is" : "proposals are"} closed: a memory ${count2 === 1 ? "it rests" : "they rest"} on changed, moved or was deleted after the accept. Tell the user, for each id under closedAccepts, that the accept was not applied, or not fully, and its reason; do not call dream_decide for it, since nothing more is written for it; a later Dreamer run may propose it again.`,
   /** A write of an accept that met a record another session holds: the design's busy answer (C6, #387). */
   stepBusy: (id) => `memory ${id} is being written by another session, so this write was not made; try again, and call dream_decide with accept and the same id to finish it`,
   /** What the second write of a supersede leaves behind when it is refused: the first one stands. */
@@ -48298,7 +48341,13 @@ function createServer(deps) {
     const proposal = loaded.proposals.find((one) => one.id === found.id);
     if (proposal === void 0) return fail(PROPOSAL_TEXT.none);
     if (found.state === "applied") return fail(PROPOSAL_TEXT.decided);
-    const plan = args2.decision === "accept" ? await planOfAccept(proposal) : void 0;
+    let plan;
+    if (found.state === "accepted") {
+      const verdict = await acceptedVerdict(proposal, loaded);
+      if (verdict.verdict === "replaced") return fail(PROPOSAL_TEXT.closed.replaced);
+      if (verdict.verdict === "closed") return fail(verdict.text);
+      plan = verdict.plan;
+    } else plan = args2.decision === "accept" ? await planOfAccept(proposal) : void 0;
     if (plan?.stop !== void 0) return fail(plan.stop);
     if (plan?.refusal !== void 0) return fail(refusalText(plan.refusal));
     const carried = confirmation?.carried ?? [];
@@ -48322,10 +48371,10 @@ function createServer(deps) {
     const { reason } = stop;
     return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "", reason === "twin" ? stop.held : void 0);
   };
-  const planOfAccept = async (proposal) => {
+  const planOfAccept = async (proposal, given) => {
     const ids = idsOf2(proposal);
     const records = (await Promise.all(ids.map((id) => reader.recordsOf(id)))).flat();
-    const loaded = await reader.load(visibleScopes(deps.session));
+    const loaded = given ?? await reader.load(visibleScopes(deps.session));
     const existing = loaded.memories.map((stored) => stored.memory);
     const userScope = resolve4(
       existing.filter((memory) => memory.scope.kind === "user"),
@@ -48337,6 +48386,21 @@ function createServer(deps) {
     const steps = plan.steps ?? [];
     const errors = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
     return errors.length === 0 ? { steps } : { stop: errors.join("; ") };
+  };
+  const acceptedVerdict = async (proposal, load2, given) => {
+    const memories = given ?? await reader.load(visibleScopes(deps.session));
+    const plan = await planOfAccept(proposal, memories);
+    const closure = closureOf(proposal, plan);
+    if (closure === void 0) return { verdict: "open", plan };
+    if (replacedAtAnyRevision(proposal, load2)) return { verdict: "replaced" };
+    return { verdict: "closed", text: PROPOSAL_TEXT.closedAccept(closure, closure.landed === void 0 ? "other" : linkStanding(memories, closure.landed.survivor, closure.landed.retired)) };
+  };
+  const linkStanding = (loaded, survivor, id) => {
+    const memories = loaded.memories.map((stored) => stored.memory);
+    const loads = (list) => resolve4(list, deps.session, toLocalDate(now())).current.some((one) => one.id === id);
+    if (loads(memories)) return "loads";
+    const unlinked = memories.map((memory) => memory.id === survivor ? { ...memory, supersedes: memory.supersedes.filter((target) => target !== id) } : memory);
+    return loads(unlinked) ? "hidden" : "other";
   };
   const waitingNotice = async (view) => {
     try {
@@ -48684,7 +48748,8 @@ function createServer(deps) {
     { title: "List the Dreamer's proposals that wait here", description: PROPOSALS_DESCRIPTION },
     () => guarded(async () => {
       const proposalsLoaded = await listed3();
-      const { judged, notRead } = judgeAll(proposalsLoaded, await seen());
+      const view = await seen();
+      const { judged, notRead } = judgeAll(proposalsLoaded, view);
       const closedFor = (...closures) => judged.filter((one) => one.state === "closed" && closures.includes(one.closure)).length;
       const appliedUnreadable = closedFor("appliedUnreadable");
       const appliedNewer = closedFor("appliedNewer");
@@ -48697,7 +48762,24 @@ function createServer(deps) {
       const anyClosed = closed.unreadable + closed.newerFormat + appliedUnreadable + appliedNewer > 0;
       const anyNotRead = notRead.unreadable + notRead.newerFormat > 0;
       const waiting = judged.flatMap((one) => one.state === "waiting" ? [one] : []);
-      const unfinished = judged.flatMap((one) => one.state === "accepted" ? [one.id] : []);
+      const verdicts = await Promise.all(
+        judged.flatMap((one) => {
+          const proposal = one.state === "accepted" ? proposalsLoaded.proposals.find((candidate) => candidate.id === one.id) : void 0;
+          if (proposal === void 0) return one.state === "accepted" ? [Promise.resolve({ id: one.id, closed: void 0, replaced: false })] : [];
+          return [
+            acceptedVerdict(proposal, proposalsLoaded, view.loaded).then(
+              (verdict) => ({
+                id: proposal.id,
+                closed: verdict.verdict === "closed" ? { id: proposal.id, kind: proposal.kind, reason: verdict.text } : void 0,
+                replaced: verdict.verdict === "replaced"
+              }),
+              () => ({ id: proposal.id, closed: void 0, replaced: false })
+            )
+          ];
+        })
+      );
+      const unfinished = verdicts.flatMap((one) => one.closed === void 0 && !one.replaced ? [one.id] : []);
+      const closedAccepts = verdicts.flatMap((one) => one.closed === void 0 ? [] : [one.closed]);
       return ok({
         waiting: waiting.map((one) => ({
           id: one.id,
@@ -48711,9 +48793,10 @@ function createServer(deps) {
           ...promoteCost(one.shown, proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent)
         })),
         ...unfinished.length > 0 ? { unfinished } : {},
+        ...closedAccepts.length > 0 ? { closedAccepts } : {},
         ...anyClosed ? { closed } : {},
         ...anyNotRead ? { notRead } : {},
-        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead, appliedUnreadable + appliedNewer > 0) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`)
+        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead, appliedUnreadable + appliedNewer > 0) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`) + (closedAccepts.length === 0 ? "" : ` ${PROPOSAL_TEXT.closedAccepts(closedAccepts.length)}`)
       });
     })
   );

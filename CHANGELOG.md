@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.5 - 2026-11-08
+
+- Fixed: a Dreamer proposal you accepted no longer stays unfinished for good when one of its memories changed, moved
+  or was deleted before the accept could be applied. The list of proposals now shows it as closed, with its reason:
+  what changed, and what of the accept was written and what was not. Accepting it again gives the same reason and
+  writes nothing, and a later proposal over the same memories takes its place. An accept refused for something you
+  can clear, such as the rule confirmation or a record to repair, still finishes with the same accept, and one whose
+  changes have all landed is marked applied.
+- Using one memory folder from several machines? Update NeoCortex on each: a machine still on 0.5.4 keeps listing
+  such a proposal as unfinished.
+
 ## 0.5.4 - 2026-11-07
 
 - Fixed: accepting the Dreamer's proposal to share one of your project rules with your other places no longer loops on
