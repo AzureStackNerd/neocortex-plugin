@@ -45399,7 +45399,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.7",
+  version: "0.5.8",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45672,12 +45672,19 @@ var CONDITION_TEXT = {
    * also when the update changes the condition's other parts (#439, finding F3).
    */
   becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, and a file condition is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
-  /** T2 on a save. */
-  override: "appliesWhen: a memory with overrides cannot carry a condition yet; save it without appliesWhen",
-  /** T2 on an update that sets, changes or removes the condition of a memory with overrides before or after. */
-  overrideChanged: "appliesWhen: the condition of a memory with overrides cannot be set, changed or removed yet; leave appliesWhen out of this call, and change a condition only in a call of its own while the memory has no overrides",
-  /** T2 on an update that gives a memory with a condition overrides. */
-  becomesOverride: "overrides: a memory with a condition cannot override another yet; remove the condition first with appliesWhen null, then set overrides",
+  /**
+   * T2 on a save: an exception takes inRepo since #443, and labels and files wait (exceptionPlaced). inRepo alone is
+   * named as a way out only where it would pass (repoWayOut; #443 review finding F1). existing: the loaded memories,
+   * as validateLinks takes them; left out, no way out is named, which is never false.
+   */
+  override: (written, existing = []) => `appliesWhen: labels or files are not possible yet on a memory with overrides; leave them out${repoWayOut(written, existing) ? ", inRepo alone is possible" : ""}`,
+  /**
+   * T2 on an update that sets, changes or removes the condition of a memory with overrides before or after, where that
+   * condition, before or after, has labels or files (#443 point 3).
+   */
+  overrideChanged: "appliesWhen: on a memory with overrides, labels or files cannot be set, changed or removed yet; leave appliesWhen out of this call, and change such a condition only in a call of its own while the memory has no overrides",
+  /** T2 on an update that gives a memory whose condition has labels or files overrides; inRepo as in override (F1). */
+  becomesOverride: (written, existing = []) => `overrides: a memory with labels or files in its condition cannot override another yet; first change its appliesWhen to null${repoWayOut(written, existing) ? " or to inRepo alone" : ""}, then set overrides`,
   /** T3. */
   files: "appliesWhen: a file condition (files) is not possible yet; leave files out",
   /** The project reason (design-scopes 2.4). */
@@ -45685,14 +45692,26 @@ var CONDITION_TEXT = {
   /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
   overridden: (by) => `appliesWhen: ${shortId(by.id)} "${shownCut(by.title, 80)}" overrides this memory, and with this condition that override would no longer hold; take this memory out of its overrides first, or leave its condition as it is`
 };
-function conditionProblems(written, stored, current) {
+function repoWayOut(written, existing) {
+  if (written.scope.kind !== "user" || written.overrides.length === 0) return false;
+  const byId = new Map(existing.map((memory) => [memory.id, memory]));
+  const repoOnly = { ...written, appliesWhen: { inRepo: true } };
+  return written.overrides.every((id) => {
+    const target = byId.get(id);
+    return target !== void 0 && linkProblem("overrides", repoOnly, target) === null;
+  });
+}
+function exceptionPlaced(condition) {
+  return condition === void 0 || condition.labels === void 0 && condition.files === void 0;
+}
+function conditionProblems(written, stored, current, existing) {
   const after = canonicalCondition(written.appliesWhen);
   const placed = after?.inRepo === true || after?.labels !== void 0;
   const filed = after?.files !== void 0;
   const problems = [];
   if (stored === void 0) {
     if (after === void 0) return problems;
-    if (written.overrides.length > 0) problems.push(CONDITION_TEXT.override);
+    if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, existing));
     if (after.files !== void 0) problems.push(CONDITION_TEXT.files);
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
     return problems;
@@ -45700,8 +45719,9 @@ function conditionProblems(written, stored, current) {
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
   if (filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
-  if (changed && (stored.overrides.length > 0 || written.overrides.length > 0)) problems.push(CONDITION_TEXT.overrideChanged);
-  if (!changed && after !== void 0 && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride);
+  const overriding = stored.overrides.length > 0 || written.overrides.length > 0;
+  if (changed && overriding && !(exceptionPlaced(before) && exceptionPlaced(after))) problems.push(CONDITION_TEXT.overrideChanged);
+  if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing));
   if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
   if (written.scope.kind === "project" && placed && (changed || stored.scope.kind !== "project")) problems.push(CONDITION_TEXT.project);
   if (changed) {
@@ -45818,6 +45838,16 @@ function otherPlaces(before, after) {
     places.set(id, [...classes.values()]);
   }
   return places;
+}
+function hiderPlaces(before, after, id) {
+  const places = /* @__PURE__ */ new Map([[classKey(void 0), placeOf(void 0)]]);
+  for (const memory of [...before, ...after]) {
+    if (memory.scope.kind !== "user" || !memory.overrides.includes(id)) continue;
+    const own2 = canonicalCondition(memory.appliesWhen) ?? {};
+    const where = classOf(own2.labels ?? [], own2.inRepo === true);
+    places.set(classKey(where), placeOf(where));
+  }
+  return [...places.values()];
 }
 function loadingOf(memories, session, samples, here, classes) {
   const user = memories.filter((m) => m.scope.kind === "user");
@@ -47596,7 +47626,7 @@ When to save:
 Do not save: what the repository records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters in this conversation.
 
 How to save:
-1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision, set supersedes.
+1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision everywhere, set supersedes.
 2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
@@ -48028,14 +48058,16 @@ function takeoverOf(base, others, session) {
   return here;
 }
 function hidersCheck(kind, problems, before, after, days, session, today, here = UNKNOWN_HERE) {
+  const user = (memories) => memories.filter((memory) => memory.scope.kind === "user");
+  const [userBefore, userAfter] = [user(before), user(after)];
   for (const problem of problems) {
     if (!isOwnRecord(problem)) continue;
     const id = problem.id;
+    const places = hiderPlaces(before, after, id);
     for (const day of days) {
       const date5 = sampleDate(day, today);
-      if (hidersOf(before, id, session, date5, here).join("\n") !== hidersOf(after, id, session, date5, here).join("\n")) {
-        throw new UnknownRecordError(kind, id, problem);
-      }
+      const differ = (from, to, at) => hidersOf(from, id, session, date5, at).join("\n") !== hidersOf(to, id, session, date5, at).join("\n");
+      if (differ(before, after, here) || places.some((at) => differ(userBefore, userAfter, at))) throw new UnknownRecordError(kind, id, problem);
     }
   }
 }
@@ -48058,7 +48090,7 @@ var CONDITION = external_exports.strictObject({
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
   files: external_exports.array(external_exports.string()).optional().describe("File globs; not possible yet")
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet on a memory with overrides, or as files; a project memory takes none, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet: labels on a memory with overrides, and files; a project memory takes none, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -48071,8 +48103,11 @@ var SAVE_INPUT = {
     "When the full text reaches Claude: index (only the summary at the start; the field's default, for a memory that must fire on its own), startup, prompt, question, subagent, edit or on-demand (on-demand for reference memories and for any memory whose summary alone is not actionable; search_memories and get_memory still reach it)"
   ),
   enforced: external_exports.boolean().default(false).describe("Enforced memories can never be overridden by another scope"),
-  supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces"),
-  overrides: LINK_IDS.default([]).describe("User memories this project memory deviates from; needs overrideReason"),
+  supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces everywhere"),
+  // #443 S1 and S12: the exception's routes in words, since the instructions have no room for them.
+  overrides: LINK_IDS.default([]).describe(
+    "Memories this one is an exception to; each stops loading where this one applies: in its project for a project memory, or where its appliesWhen holds (inRepo true: only inside repos). Needs overrideReason"
+  ),
   overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
   appliesWhen: CONDITION.optional().describe(CONDITION_WORDS)
@@ -48111,7 +48146,7 @@ var LABELS_INPUT = {
 var LABEL_AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of set_context_labels listed, exactly: each rule this label change makes start or stop loading here. The user reads them in the prompt");
 var LABELS_DESCRIPTION = "Replace the context labels of the repository or folder this session works in. Context labels say what kind of place it is, such as a customer or a technology; they are not topic labels. Pass the complete list; [] means no labels. Set confirmed true only for a label the user confirmed; a label you propose is confirmed false and shows as proposed. A place's first labels take effect at once; a later change that makes a rule start or stop loading here is refused with the rules it affects, for set_context_labels_rule. Call list_labels first and reuse an existing name.";
 var LABELS_RULE_DESCRIPTION = "Replace the context labels of this repository or folder when the change makes a rule start or stop loading here, after set_context_labels refused it. The user confirms every call in a prompt. Pass the labels of that set_context_labels call and affects exactly as its refusal listed; call it only for a change the user asked for or confirmed.";
-var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. It also returns as nearDuplicates the active memories whose title, summary and body use much the same words as the new one; it compares plain word sets, so it misses a rewording in other words and counts test and tests as two words. The memory is saved either way. If the new memory replaces some of them, set supersedes with update_memory; if it deviates from a user memory for this project, set overrides and overrideReason with update_memory. Each link list you pass replaces the one the memory has, so pass in one list every id it should keep. Never move a memory to another scope to link it. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
+var SAVE_DESCRIPTION = `Store a new memory in NeoCortex, which keeps memories across sessions, projects and machines. Call search_memories first and update an existing memory instead of saving a duplicate. Returns the saved memory and the related memories that share a topic label. It also returns as nearDuplicates the active memories whose title, summary and body use much the same words as the new one; it compares plain word sets, so it misses a rewording in other words and counts test and tests as two words. The memory is saved either way. If the new memory replaces some of them everywhere, set supersedes with update_memory; if it is an exception to another memory, for this project or where its appliesWhen holds, set overrides and overrideReason with update_memory. Each link list you pass replaces the one the memory has, so pass in one list every id it should keep. Never move a memory to another scope to link it. Refused, with the rules it affects, when the memory is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}) or the save makes a rule start or stop loading; then use save_rule.`;
 var UPDATE_DESCRIPTION = "Change fields of a memory, including its links and its scope. Fields you leave out keep their value; null clears overrideReason, expires or appliesWhen. Refused, with the rules it affects, when the change touches a rule or makes one start or stop loading; then use update_rule.";
 var DELETE_DESCRIPTION = "Delete a memory. NeoCortex keeps the deleted memory, so it can be restored by hand. Only on the user's request. Refused, with the rules it affects, when the delete makes a rule start or stop loading; then use delete_rule.";
 var SAVE_RULE_DESCRIPTION = `Save a memory that is a rule (enforced, or delivered at ${RULE_DELIVERY_WORDS}), or whose save makes a rule start or stop loading, after save_memory refused it. The user confirms every call in a prompt. Pass the arguments of that save_memory call and affects exactly as its refusal listed; call it only for a change the user asked for.`;
@@ -48516,7 +48551,7 @@ function createServer(deps) {
       updated: stamp,
       ...condition === void 0 ? {} : { appliesWhen: condition }
     };
-    const errors = [...conditionProblems(memory, void 0, resolution.current), ...validateLinks(memory, memories)];
+    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -48531,15 +48566,16 @@ function createServer(deps) {
     const id = shortId(memory.id);
     const next = [
       ...related.length > 0 ? [
-        `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one, call update_memory with id ${id} and supersedes set to the related id; if it deviates from a user memory for this project, call update_memory with id ${id}, overrides and overrideReason.`
+        `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one everywhere, call update_memory with id ${id} and supersedes set to the related id; if it is an exception to one, for this project or where its appliesWhen holds, call update_memory with id ${id}, overrides and overrideReason.`
       ] : [],
       ...near.length > 0 ? [nearNext(id, memory, near.map((n) => n.memory))] : []
     ];
     const elsewhere = new Set(resolution.elsewhere.map((m) => m.id));
     const entryHere = (m) => ({ ...relatedEntryOf(m), ...elsewhere.has(m.id) ? { notHere: notHereWords(m.appliesWhen ?? {}, here) } : {} });
     return ok({
-      // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none.
-      saved: { ...entryOf(memory), revision },
+      // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none. The
+      // memories it is an exception to, so Claude can show the rule it hides (#443 S1, S12).
+      saved: { ...entryOf(memory), ...overridesOf(memory), revision },
       related: related.map(entryHere),
       nearDuplicates: near.map(({ memory: match, score }) => ({ ...entryHere(match), score })),
       next: next.length > 0 ? next.join(" ") : void 0,
@@ -48596,7 +48632,7 @@ function createServer(deps) {
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
     const errors = [
-      ...conditionProblems(memory, previous, resolution.current),
+      ...conditionProblems(memory, previous, resolution.current, memories),
       ...validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories)
     ];
     if (errors.length > 0) return fail(errors.join("; "));
@@ -48622,7 +48658,7 @@ function createServer(deps) {
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
       ...kept.map((link2) => link2.line)
     ];
-    return ok({ updated: { ...entryOf(memory), revision }, warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
+    return ok({ updated: { ...entryOf(memory), ...overridesOf(memory), revision }, warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
   };
   server.registerTool(
     "update_memory",
@@ -48647,10 +48683,10 @@ function createServer(deps) {
       inputSchema: { id: ID }
     },
     ({ id }) => guarded(async () => {
-      const { stored, memories, problems, resolution } = await load();
+      const { stored, memories, problems, resolution, here } = await load();
       const found = lookup(memories, problems, id);
       if ("error" in found) return fail(found.error);
-      return ok(shownMemory(baseOf(stored, found.memory), resolution));
+      return ok(shownMemory(baseOf(stored, found.memory), resolution, here));
     })
   );
   server.registerTool(
@@ -49377,13 +49413,14 @@ var CHANGE_TEXT = {
 function stale(error62, base, resolution) {
   return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };
 }
-function shownMemory({ memory, revision }, resolution) {
+function shownMemory({ memory, revision }, resolution, here) {
   const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : resolution.elsewhere.includes(memory) ? "not here" : "replaced or overridden";
   return {
     ...entryOf(memory),
     fullId: memory.id,
     revision,
     status,
+    ...status === "not here" && here !== void 0 ? { notHere: notHereWords(memory.appliesWhen ?? {}, here) } : {},
     body: memory.body,
     supersedes: memory.supersedes.map(shortId),
     overrides: memory.overrides.map(shortId),
@@ -49593,6 +49630,9 @@ function entryOf(memory) {
     why: memory.why,
     ...shownCondition(memory)
   };
+}
+function overridesOf(memory) {
+  return memory.overrides.length > 0 ? { overrides: memory.overrides.map(shortId) } : {};
 }
 function blankToNull(value) {
   return value === void 0 || value === null || value.trim() === "" ? null : value.trim();

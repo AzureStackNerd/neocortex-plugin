@@ -2,6 +2,21 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.8 - 2026-11-08
+
+- New: you can have Claude record that inside repos a memory replaces a general rule, as an exception that applies
+  only inside a repo. Saving or changing one asks you first, as any change to which rules load does; once confirmed,
+  the rule no longer arrives in any repo, at any moment, and still arrives in folders outside one. A label or a file
+  pattern on such an exception is still refused, with the reason.
+- New: reading a memory that does not apply where you are says why, for example "not here: needs a repo", and the
+  answer to saving or changing an exception names the memories it replaces.
+- Changed: when a memory cannot be read, such as a broken file or one written by a newer NeoCortex, a change to an
+  exception of it is refused, with the reason, whenever it would change where that memory is hidden: here, in a repo
+  or folder elsewhere, or in another project. Before, some of those changes went through without a word.
+- If several machines share your memory folder, update each one: a machine still on 0.5.7 cannot save or change such
+  an exception and lets through the changes above that 0.5.8 refuses, and one on 0.4.x reads no memory of the current
+  format, so it still delivers the rule in repos.
+
 ## 0.5.7 - 2026-11-08
 
 - Changed: a change to a memory that is not yet on the current format now first keeps a copy of the file exactly as it

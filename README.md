@@ -164,7 +164,7 @@ carry, every one of them, and `inRepo: true` means only in a session inside a gi
 "remember that, but only for places labelled contoso". Where the condition does not hold, the memory is not in the
 session start, a subagent's start or a refresh; where it holds, its index line shows the condition, such as
 `[user · labels contoso]`. `search_memories` still finds it everywhere and says what it would need there, such as
-`not here: needs label contoso`. The index header shows this place's context labels, and Claude changes them with
+`not here: needs label contoso`, and so does `get_memory`. The index header shows this place's context labels, and Claude changes them with
 `set_context_labels`. A place nobody has labelled yet hides no memory, so a labelled memory shows there until you label
 the place.
 
@@ -176,13 +176,16 @@ take effect at once; a later label change that would make a rule start or stop l
 those rules, through `set_context_labels_rule`. An existing rule's condition is narrowed, widened or removed in one
 change through `update_rule`, which you confirm; the rule keeps its id and the exceptions that name it. Every rule
 question names, by their labels, the places where the rule starts or stops loading, such as
-`in other places (labels contoso)`. Not possible yet: a condition on a memory with `overrides`, a rule that is itself
-an exception included, and file globs (`files`); a project memory never takes one, because its project already fixes
-where it applies. Such a call is refused with the reason, and nothing is written; so is a call that names a field the
-tool does not know. Using one store from several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers
-a rule that applies only inside a repo in folders too, one still at 0.5.1 changes a place's labels without asking, also
-when that starts or stops a rule, and one still at 0.5.2 refuses a change of a rule's condition and asks its rule
-questions without labels.
+`in other places (labels contoso)`. A memory with `overrides` takes `inRepo` alone, a rule that is itself an exception
+included: inside repos it hides what it overrides and in folders it does not, so a repo's own definition of done can
+replace the general one in repos only; you confirm it like any rule change. Not possible yet: labels on a memory with
+`overrides`, and file globs (`files`); a project memory never takes one, because its project already fixes where it
+applies. Such a call is refused with the reason, and nothing is written; so is a call that names a field the tool does
+not know, and a change that would alter what hides a memory NeoCortex cannot read, at this place or another. Using one
+store from several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers a rule that applies only
+inside a repo in folders too, one still at 0.5.1 changes a place's labels without asking, also when that starts or
+stops a rule, one still at 0.5.2 refuses a change of a rule's condition and asks its rule questions without labels,
+and one still at 0.5.7 refuses an exception that applies only inside a repo.
 
 ### What a memory holds
 
@@ -203,7 +206,7 @@ the rest are optional.
 | `expires` | `YYYY-MM-DD`: after that date the memory no longer loads, and it becomes a candidate for `dream_report` to retire |
 | `appliesWhen` | Where it applies, beyond its scope: `labels` a place must all carry, `inRepo: true` for inside a git repository; see [Where a memory applies](#where-a-memory-applies) |
 | `supersedes` | Ids of memories this one replaces. A live memory they name stops loading, here and everywhere it would |
-| `overrides` | Ids of memories this one departs from. Any memory may override another, and the target stops loading where both apply; an `enforced` memory cannot be overridden, and neither can one that is more specific than the override |
+| `overrides` | Ids of memories this one departs from. Any memory may override another, and the target stops loading where both apply: in its project for a project memory, or where its `appliesWhen` holds, such as only inside repos; an `enforced` memory cannot be overridden, and neither can one that is more specific than the override |
 | `overrideReason` | Required with `overrides`: why this memory departs from the one it names |
 
 `supersedes` and `overrides` both take ids, not titles, and both are links you can also read back with `get_memory`
