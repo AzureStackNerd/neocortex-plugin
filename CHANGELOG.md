@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.7 - 2026-11-08
+
+- Changed: a change to a memory that is not yet on the current format now first keeps a copy of the file exactly as it
+  was, under `previous/` in your memory folder, as the upgrade of 0.5.6 does. That covers a memory the upgrade has not
+  reached yet, one it left behind, and one that came back on the old format later, such as a memory restored by hand
+  or saved on a machine that was not updated. It holds for a change by Claude, a move to another scope, an accepted
+  Dreamer proposal, the auto memory import and `move-folder-memories`, and one copy per memory is kept: a later change
+  keeps no second one. When that copy cannot be written, the change is refused with the reason and the memory stays
+  as it was.
+- New: while memories still wait to be brought up to date, the session start says how many, in Claude's context and
+  as one line on screen; a subagent's start and the refresh prompt say it too, until none wait. A memory the upgrade
+  could not bring up to date, such as a file you need to repair by hand, counts there in any project until you repair
+  or remove it.
+
 ## 0.5.6 - 2026-11-08
 
 - Changed: NeoCortex now brings every memory saved by an earlier version up to the current format by itself, once, in

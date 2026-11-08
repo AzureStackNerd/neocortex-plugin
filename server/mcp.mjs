@@ -45399,7 +45399,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.6",
+  version: "0.5.7",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46071,10 +46071,10 @@ ${line}`}`;
   const noticeSection = sectionOf(noticeLines(input2, options));
   const longestSection = (crowd) => sectionOf(noticeLines(input2, options.proposals === void 0 ? options : { ...options, proposals: LONGEST_PROPOSALS }, crowd));
   const roomNotices = longestSection(void 0);
-  const left = leftBehindNotice(input2.leftBehind ?? []);
+  const left = [awaitingNotice(input2.awaiting ?? 0), leftBehindNotice(input2.leftBehind ?? [])].filter((line2) => line2 !== "").map((line2) => `- ${line2}`).join("\n");
   const withLeft = (notices) => left === "" ? notices : notices === "" ? `## Notices
-- ${left}` : `${notices}
-- ${left}`;
+${left}` : `${notices}
+${left}`;
   if (resolution.byId.size === 0 && problems.length === 0) {
     return { parts: [[header, `No memories yet in ${location}.`, withLeft(noticeSection)].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
   }
@@ -46340,6 +46340,18 @@ function leftBehindNotice(left) {
   const rest = left.length > LEFT_NAMED ? ` and ${left.length - LEFT_NAMED} more` : "";
   return `${left.length} ${one ? "memory" : "memories"} in other projects could not be brought up to date by this NeoCortex and ${one ? "stays as it was" : "stay as they were"} until repaired or removed by hand: ${records.join(", ")}${rest}.`;
 }
+function awaitingWords(count2) {
+  if (count2 === 0) return "";
+  return `${count2} ${count2 === 1 ? "memory still awaits" : "memories still await"} the upgrade to format ${CURRENT_FORMAT}`;
+}
+function awaitingNotice(count2) {
+  const words = awaitingWords(count2);
+  return words === "" ? "" : `${words}.`;
+}
+function awaitingWarning(count2) {
+  const words = awaitingWords(count2);
+  return words === "" ? "" : `NeoCortex: ${words}.`;
+}
 function noticeLines(input2, options, crowd) {
   const { resolution, problems, newer, recentRules: recent } = input2;
   const lines = [];
@@ -46538,7 +46550,7 @@ function hookOutput(event, text, systemMessage = "") {
 function systemMessageFor(command, event, input2, part, place) {
   const firstPart = command === "index" && part === 1 || command === "startup";
   if (event !== "SessionStart" || !firstPart) return "";
-  return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), recentRulesWarning(input2.recentRules)].filter((text) => text !== "").join(" ");
+  return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), awaitingWarning(input2.awaiting ?? 0), recentRulesWarning(input2.recentRules)].filter((text) => text !== "").join(" ");
 }
 
 // src/dream/finder.ts
@@ -48289,19 +48301,35 @@ function createServer(deps) {
     }));
     dream.onStart?.(work);
   };
-  const leftElsewhere = async () => {
+  const passNotices = async (loaded) => {
+    let state;
     try {
-      const visible = visibleScopes(deps.session);
-      const { left } = await reader.sweepState();
-      const others = left.filter((entry) => !visible.some((scope) => sameScope(scope, entry.scope)));
-      if (others.length === 0) return [];
-      const reads = await reader.recordsAt(others);
-      return reads.flatMap(
+      state = await reader.sweepState();
+    } catch {
+      return { leftBehind: [], awaiting: 0 };
+    }
+    if (compareFormats(state.marker, CURRENT_FORMAT) >= 0) return { leftBehind: [], awaiting: 0 };
+    const waiting = new Set(loaded.memories.filter((stored) => compareFormats(stored.format, CURRENT_FORMAT) < 0).map((stored) => stored.memory.id));
+    const visible = visibleScopes(deps.session);
+    const seenHere = (scope) => visible.some((one) => sameScope(one, scope));
+    const unreadable = (problem) => problem.copy !== true && problem.newerFormat === void 0;
+    for (const entry of state.left) {
+      if (seenHere(entry.scope) && loaded.problems.some((problem) => problem.id === entry.id && unreadable(problem))) waiting.add(entry.id);
+    }
+    const others = state.left.filter((entry) => !seenHere(entry.scope));
+    let leftBehind = [];
+    try {
+      const reads = others.length === 0 ? [] : await reader.recordsAt(others);
+      for (const [n, read] of reads.entries()) {
+        if (read === void 0) continue;
+        if ("stored" in read ? compareFormats(read.stored.format, CURRENT_FORMAT) < 0 : unreadable(read.problem)) waiting.add(others[n].id);
+      }
+      leftBehind = reads.flatMap(
         (read) => read !== void 0 && "problem" in read && read.problem.text !== void 0 && read.problem.newerFormat === void 0 ? [read.problem] : []
       );
     } catch {
-      return [];
     }
+    return { leftBehind, awaiting: waiting.size };
   };
   const load = async () => {
     const { memories: stored, problems } = await reader.load(visibleScopes(deps.session));
@@ -48456,9 +48484,10 @@ function createServer(deps) {
       return { failed: true };
     }
   };
-  const delivered = async (here, leftBehind = []) => {
+  const delivered = async (here, notices = false) => {
     const view = await seen();
-    return { view, delivery: { ...deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here), leftBehind } };
+    const pass = notices ? await passNotices(view.loaded) : { leftBehind: [], awaiting: 0 };
+    return { view, delivery: { ...deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here), ...pass } };
   };
   const saveCall = async (args2, confirmation) => {
     const { memories, problems, resolution, here } = await load();
@@ -48955,8 +48984,7 @@ function createServer(deps) {
     async ({ moment, event, part, prompt }) => {
       try {
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
-        const leftBehind = PLACE_MOMENTS.includes(moment) && part === 1 ? await leftElsewhere() : [];
-        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), leftBehind);
+        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), PLACE_MOMENTS.includes(moment) && part === 1);
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         dreamOnce(event);
@@ -49082,7 +49110,7 @@ function createServer(deps) {
       let text;
       try {
         const place = await loadPlace(deps.places, deps.session);
-        const { view, delivery } = await delivered(hereFrom(place.read), await leftElsewhere());
+        const { view, delivery } = await delivered(hereFrom(place.read), true);
         text = refreshContext(delivery, place, await waitingNotice(view));
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
@@ -49655,6 +49683,7 @@ var FileStore = class {
   readListed;
   lookUp;
   readStored;
+  copySeams;
   locks;
   constructor(root2, options = {}) {
     this.root = root2;
@@ -49667,6 +49696,7 @@ var FileStore = class {
     this.readListed = options.readListed ?? ((path) => readFile2(path, "utf8"));
     this.lookUp = options.lookUp ?? ((path) => stat2(path));
     this.readStored = options.readStored ?? ((path) => readFile2(path));
+    this.copySeams = { linkFile: options.linkFile, renameFile: options.renameFile };
   }
   get location() {
     return this.root;
@@ -49797,11 +49827,10 @@ var FileStore = class {
       } catch (error62) {
         return { left: messageOf2(error62) };
       }
-      const copy = join3(this.root, PREVIOUS, `format-${read.format}`, ...foldersOf(scope), `${id}.md`);
       try {
-        await writeCreateOnly(copy, bytes, { busyBudgetMs: this.busyBudgetMs });
+        await this.keepCopy(read.format, scope, id, bytes);
       } catch (error62) {
-        if (!(error62 instanceof RecordExistsError)) return { left: systemErrorCode(error62) ?? messageOf2(error62) };
+        return { left: systemErrorCode(error62) ?? messageOf2(error62) };
       }
       await this.writeAtomically(path, serializeMemoryFile(read.memory, { format: current, unknown: {} }), id);
       return "upgraded";
@@ -49839,6 +49868,12 @@ var FileStore = class {
       return revisionOf(text);
     });
   }
+  /**
+   * Under the id's lock: the revision and the refusals of checkBase, then a scope move's C8 check, then -- for a stored
+   * record of an older format -- its copy as it was under the scope it leaves (rule V9, design 8.1 row 16, #452), and
+   * only then the write. So a refused change keeps no copy, a copy that cannot be kept writes nothing, and a write that
+   * fails after the copy leaves it for the next change or the pass, which then keep none (S16, S18).
+   */
   async update(next, base) {
     assertLoadable(next);
     if (next.id !== base.memory.id) throw new StoreError(`an update cannot change the id of memory ${shortId(base.memory.id)}`);
@@ -49846,7 +49881,7 @@ var FileStore = class {
     const source = this.pathFor(base.memory);
     const target = this.pathFor(next);
     return this.withLock(next.id, async () => {
-      const carry = await this.checkBase(source, base);
+      const { carry, older } = await this.checkBase(source, base);
       if (target !== source) {
         const held = (await this.holdersOf(next.id)).filter((holder) => !sameScope(holder.scope, base.memory.scope));
         const there = held.find((holder) => sameScope(holder.scope, next.scope)) ?? held[0];
@@ -49856,6 +49891,7 @@ var FileStore = class {
           throw new AlreadyExistsError(next.id, this.relative(there.path), there.scope);
         }
       }
+      if (older !== void 0) await this.keepCopy(older.format, base.memory.scope, next.id, older.bytes);
       const text = serializeMemoryFile(next, carry);
       await this.writeAtomically(target, text, next.id);
       if (target !== source) await this.finishMove(source, target, next.id);
@@ -50229,14 +50265,35 @@ var FileStore = class {
   /**
    * Under the lock: the stored file at base's path must still be the state base was read from. Gone is a conflict
    * (moved or deleted); a higher major is refused before the revision is compared, so it names the update (design 5.6).
-   * Returns what the write carries through from that same text.
+   * Returns what the write carries through from that same text and, for a record of an older format, its format and
+   * the very bytes whose revision passed, so the copy as it was is of this file and byte for byte (#452, S1): the text
+   * is their utf8 decoding, as a read of text gives it, so no revision moves.
    */
   async checkBase(path, base) {
-    const text = await this.readIfPresent(path);
-    if (text === void 0) throw new ConflictError(base.memory.id, true);
+    const bytes = await this.readBytesIfPresent(path);
+    if (bytes === void 0) throw new ConflictError(base.memory.id, true);
+    const text = bytes.toString("utf8");
     const carry = this.carryOf(text, base.memory.id);
     if (revisionOf(text) !== base.revision) throw new ConflictError(base.memory.id, false);
-    return carry;
+    const format = carryThroughOf(text, this.registry)?.format;
+    return format !== void 0 && compareFormats(format, currentOf(this.registry)) < 0 ? { carry, older: { format, bytes } } : { carry };
+  }
+  /**
+   * Keeps a memory as it was before it is first written in the current format (design 4.4, rule V9): its stored bytes,
+   * once per memory and format, create-only under the scope it is read from, for the pass and for a change alike. A
+   * copy already there is never changed or written again (#375 S13, #452 S16); any other failure throws, and the
+   * caller writes nothing (#375 S47, #452 S17). A rename that stays busy throws the OS error it last met, never the
+   * busy error of its path, whose text would name the store's folders (#388).
+   */
+  async keepCopy(format, scope, id, bytes) {
+    const copy = join3(this.root, PREVIOUS, `format-${format}`, ...foldersOf(scope), `${id}.md`);
+    try {
+      await writeCreateOnly(copy, bytes, { ...this.copySeams, busyBudgetMs: this.busyBudgetMs });
+    } catch (error62) {
+      if (error62 instanceof RecordExistsError) return;
+      if (error62 instanceof StoreBusyError && systemErrorCode(error62.cause) !== void 0) throw error62.cause;
+      throw error62;
+    }
   }
   /**
    * Holds <lock folder>/<id>.lock while run runs; waits for another holder within the budget, then StoreBusyError.
@@ -50326,6 +50383,15 @@ var FileStore = class {
   async readIfPresent(path) {
     try {
       return await readFile2(path, "utf8");
+    } catch (error62) {
+      if (isNotFound(error62)) return void 0;
+      throw error62;
+    }
+  }
+  /** readIfPresent as bytes: what a copy as it was keeps, which a utf8 round trip would change (#452, S1). */
+  async readBytesIfPresent(path) {
+    try {
+      return await readFile2(path);
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
@@ -50689,7 +50755,7 @@ async function retryWhileBusy(id, op, budgetMs) {
       return;
     } catch (error62) {
       if (!isBusy(codeOf2(error62))) throw error62;
-      if (Date.now() >= deadline) throw new StoreBusyError(id);
+      if (Date.now() >= deadline) throw Object.defineProperty(new StoreBusyError(id), "cause", { value: error62 });
     }
     await pause();
   }

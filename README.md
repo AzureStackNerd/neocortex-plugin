@@ -378,11 +378,15 @@ From 0.5.0 on, a memory is written in format 2.0, which NeoCortex 0.4.32 and old
 that shares your memory folder.
 
 The first session after an update brings every memory still on an older format up to date, once, in the background,
-and keeps a copy of each as it was in the folder `previous` inside your memory folder. To put a memory back, copy its
-copy over it by hand; NeoCortex never changes or removes a copy. A memory it cannot read stays as it was and is named
-at every session start until you repair or remove it. After that, a machine still on 0.4.32 or older that shares the
-folder reads none of your memories and says at its start that NeoCortex must be updated: update one machine first, let
-its first session finish and the folder sync, then the others.
+and keeps a copy of each as it was in the folder `previous` inside your memory folder. A memory that is changed before
+that, by Claude, by a Dreamer proposal you accept or by a move to another scope, keeps its copy first; when that copy
+cannot be written, the change is refused with the reason and the memory stays as it was. To put a memory back, copy its
+copy over it by hand; for a memory that was moved, copy it into the scope it left and remove the moved one. NeoCortex
+never changes or removes a copy. Until every memory is up to date, each session start says how many still wait, on
+screen and to Claude. A memory it cannot read stays as it was and is named at every session start until you repair or
+remove it. After that, a machine still on 0.4.32 or older that shares the folder reads none of your memories and says
+at its start that NeoCortex must be updated: update one machine first, let its first session finish (the start no
+longer says that memories wait) and the folder sync, then the others.
 
 ## Remove
 
