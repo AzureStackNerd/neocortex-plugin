@@ -37331,6 +37331,33 @@ function messageOf(error62) {
   return error62 instanceof Error ? error62.message : String(error62);
 }
 
+// src/moments.ts
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
+var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
+var FULL_PART_BUDGETS = [1e4, 1e4];
+var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
+var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
+var MISSING = {
+  index: "the memory index is",
+  full: "the startup memories are",
+  startup: "the memory index and the startup memories are",
+  prompt: "the prompt rules are",
+  edit: "the write-time standards are",
+  subagent: "the subagent rules are"
+};
+function hookJson(value) {
+  return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
+}
+function hookFailure(moment, event, reason) {
+  return hookJson({
+    systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
+    hookSpecificOutput: {
+      hookEventName: event,
+      additionalContext: `NeoCortex is unavailable (${reason}): ${MISSING[moment]} NOT in context. Say so before answering.`
+    }
+  });
+}
+
 // src/server.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 
@@ -45372,7 +45399,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.5",
+  version: "0.5.6",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45920,32 +45947,6 @@ ${memory.body}`;
   return words;
 }
 
-// src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
-var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
-var FULL_PART_BUDGETS = [1e4, 1e4];
-var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
-var MISSING = {
-  index: "the memory index is",
-  full: "the startup memories are",
-  startup: "the memory index and the startup memories are",
-  prompt: "the prompt rules are",
-  edit: "the write-time standards are",
-  subagent: "the subagent rules are"
-};
-function hookJson(value) {
-  return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
-}
-function hookFailure(moment, event, reason) {
-  return hookJson({
-    systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
-    hookSpecificOutput: {
-      hookEventName: event,
-      additionalContext: `NeoCortex is unavailable (${reason}): ${MISSING[moment]} NOT in context. Say so before answering.`
-    }
-  });
-}
-
 // src/deliver.ts
 var HOOK_CAP = 1e4;
 var WARNING_RESERVE = 600;
@@ -46070,8 +46071,12 @@ ${line}`}`;
   const noticeSection = sectionOf(noticeLines(input2, options));
   const longestSection = (crowd) => sectionOf(noticeLines(input2, options.proposals === void 0 ? options : { ...options, proposals: LONGEST_PROPOSALS }, crowd));
   const roomNotices = longestSection(void 0);
+  const left = leftBehindNotice(input2.leftBehind ?? []);
+  const withLeft = (notices) => left === "" ? notices : notices === "" ? `## Notices
+- ${left}` : `${notices}
+- ${left}`;
   if (resolution.byId.size === 0 && problems.length === 0) {
-    return { parts: [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
+    return { parts: [[header, `No memories yet in ${location}.`, withLeft(noticeSection)].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
   const partCount = Math.min(options.parts ?? INDEX_PART_BUDGETS.length, INDEX_PART_BUDGETS.length);
@@ -46119,16 +46124,30 @@ ${line}`}`;
     }
     return result;
   };
+  const textOf = (parts, i, unshown, notices, madeRoom = 0) => {
+    const lines = parts[i];
+    const sections = [headerOf(i + 1)];
+    const later = parts.slice(i + 1).reduce((count2, part) => count2 + part.length, 0);
+    const moved = madeRoom > 0 ? [`${madeRoom} index ${madeRoom === 1 ? "memory" : "memories"} made room for the notice below; use search_memories.`] : [];
+    const last = later > 0 ? [`${later} more in index part ${i + 2}; use search_memories if that part is missing.`] : i === parts.length - 1 && unshown > 0 ? [`${unshown} index memories are not in the start context; use search_memories.`] : [];
+    if (lines.length > 0 || moved.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...moved, ...last].join("\n"));
+    if (i === 0 && notices !== "") sections.push(notices);
+    return sections.join("\n\n");
+  };
   const render = ({ parts, unshown, shortened }, notices) => {
-    const texts = parts.map((lines, i) => {
-      const sections = [headerOf(i + 1)];
-      const later = parts.slice(i + 1).reduce((count2, part) => count2 + part.length, 0);
-      const last = later > 0 ? [`${later} more in index part ${i + 2}; use search_memories if that part is missing.`] : i === parts.length - 1 && unshown > 0 ? [`${unshown} index memories are not in the start context; use search_memories.`] : [];
-      if (lines.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...last].join("\n"));
-      if (i === 0 && notices !== "") sections.push(notices);
-      return sections.join("\n\n");
-    });
-    return { parts: texts, shortened, unshown };
+    const texts = parts.map((_, i) => textOf(parts, i, unshown, notices));
+    if (left === "") return { parts: texts, shortened, unshown };
+    const cap = Math.min(INDEX_PART_BUDGETS[0], budget);
+    const first2 = [...parts[0]];
+    for (let moved = 0; ; moved += 1) {
+      const text = textOf([first2, ...parts.slice(1)], 0, unshown, withLeft(notices), moved);
+      if (text.length <= cap) {
+        texts[0] = text;
+        return { parts: texts, shortened, unshown: unshown + moved };
+      }
+      if (first2.length === 0) return { parts: texts, shortened, unshown };
+      first2.pop();
+    }
   };
   const first = fillWith(roomNotices);
   if (options.crowded !== true || partCount === 1 || first.shortened === 0 && first.unshown === 0) {
@@ -46313,7 +46332,16 @@ function brokenWarning(kinds, problems) {
   const records = ours.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
-function noticeLines({ resolution, problems, newer, recentRules: recent }, options, crowd) {
+var LEFT_NAMED = 3;
+function leftBehindNotice(left) {
+  if (left.length === 0) return "";
+  const one = left.length === 1;
+  const records = left.slice(0, LEFT_NAMED).map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
+  const rest = left.length > LEFT_NAMED ? ` and ${left.length - LEFT_NAMED} more` : "";
+  return `${left.length} ${one ? "memory" : "memories"} in other projects could not be brought up to date by this NeoCortex and ${one ? "stays as it was" : "stay as they were"} until repaired or removed by hand: ${records.join(", ")}${rest}.`;
+}
+function noticeLines(input2, options, crowd) {
+  const { resolution, problems, newer, recentRules: recent } = input2;
   const lines = [];
   const warning = updateWarning(problems);
   if (warning !== "") lines.push(`- ${warning}`);
@@ -47677,7 +47705,8 @@ function readerOf(store2) {
     load: (scopes) => store2.load(scopes),
     scopes: () => store2.scopes(),
     recordsOf: (id) => store2.recordsOf(id),
-    recordsAt: (requests) => store2.recordsAt(requests)
+    recordsAt: (requests) => store2.recordsAt(requests),
+    sweepState: () => store2.sweepState()
   };
 }
 var RuleGuard = class {
@@ -48239,12 +48268,16 @@ function createServer(deps) {
   const server = new McpServer({ name: "neocortex", version: package_default.version }, { instructions: INSTRUCTIONS });
   const reader = readerOf(deps.store);
   const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()), () => hereNow());
+  const upgraded = deps.upgrade === void 0 ? Promise.resolve() : Promise.resolve().then(deps.upgrade).then(
+    () => void 0,
+    () => void 0
+  );
   let dreamStarted = false;
   const dreamOnce = (event) => {
     if (dreamStarted || deps.dream === void 0 || event === "SessionStart") return;
     dreamStarted = true;
     const dream = deps.dream;
-    const work = dreamRun({
+    const work = upgraded.then(() => dreamRun({
       runs: dream.runs,
       proposals,
       load: (scopes) => reader.load(scopes),
@@ -48253,8 +48286,22 @@ function createServer(deps) {
       ...dream.scopes === void 0 ? {} : { scopes: dream.scopes },
       ...dream.places === void 0 ? {} : { places: dream.places },
       ...dream.budgetMs === void 0 ? {} : { budgetMs: dream.budgetMs }
-    });
+    }));
     dream.onStart?.(work);
+  };
+  const leftElsewhere = async () => {
+    try {
+      const visible = visibleScopes(deps.session);
+      const { left } = await reader.sweepState();
+      const others = left.filter((entry) => !visible.some((scope) => sameScope(scope, entry.scope)));
+      if (others.length === 0) return [];
+      const reads = await reader.recordsAt(others);
+      return reads.flatMap(
+        (read) => read !== void 0 && "problem" in read && read.problem.text !== void 0 && read.problem.newerFormat === void 0 ? [read.problem] : []
+      );
+    } catch {
+      return [];
+    }
   };
   const load = async () => {
     const { memories: stored, problems } = await reader.load(visibleScopes(deps.session));
@@ -48409,9 +48456,9 @@ function createServer(deps) {
       return { failed: true };
     }
   };
-  const delivered = async (here) => {
+  const delivered = async (here, leftBehind = []) => {
     const view = await seen();
-    return { view, delivery: deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here) };
+    return { view, delivery: { ...deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here), leftBehind } };
   };
   const saveCall = async (args2, confirmation) => {
     const { memories, problems, resolution, here } = await load();
@@ -48908,7 +48955,8 @@ function createServer(deps) {
     async ({ moment, event, part, prompt }) => {
       try {
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
-        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read));
+        const leftBehind = PLACE_MOMENTS.includes(moment) && part === 1 ? await leftElsewhere() : [];
+        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), leftBehind);
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
         dreamOnce(event);
@@ -49034,7 +49082,7 @@ function createServer(deps) {
       let text;
       try {
         const place = await loadPlace(deps.places, deps.session);
-        const { view, delivery } = await delivered(hereFrom(place.read));
+        const { view, delivery } = await delivered(hereFrom(place.read), await leftElsewhere());
         text = refreshContext(delivery, place, await waitingNotice(view));
       } catch (error62) {
         text = `NeoCortex refresh failed: ${message(error62)}`;
@@ -49553,6 +49601,29 @@ var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var SETTLE_MS = 250;
 var TEMP_RE = /^(.+)\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
 var BYTE_ORDER_MARK3 = String.fromCharCode(65279);
+var MARKER_FILE = "format.json";
+var PREVIOUS = "previous";
+function markerOf(text) {
+  const none = { marker: "1.0", left: [] };
+  if (text === void 0) return none;
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return none;
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return none;
+  const { format, left } = data;
+  if (!isFormatVersion(format)) return none;
+  const entries = (Array.isArray(left) ? left : []).flatMap((entry) => {
+    const { scope, id } = typeof entry === "object" && entry !== null ? entry : {};
+    if (typeof id !== "string" || !UUID_RE.test(id) || typeof scope !== "string") return [];
+    if (scope === "user") return [{ scope: USER, id }];
+    const key = /^projects\/(.+)$/.exec(scope)?.[1];
+    return key !== void 0 && PROJECT_KEY_RE.test(key) ? [{ scope: projectScope(parseProjectKey(key)), id }] : [];
+  });
+  return { marker: format, left: entries };
+}
 function userLockBase(warn = () => {
 }, account = userInfo, home = homedir) {
   try {
@@ -49583,6 +49654,7 @@ var FileStore = class {
   lockBase;
   readListed;
   lookUp;
+  readStored;
   locks;
   constructor(root2, options = {}) {
     this.root = root2;
@@ -49594,6 +49666,7 @@ var FileStore = class {
     this.maxLockMs = options.maxLockMs ?? 6e4;
     this.readListed = options.readListed ?? ((path) => readFile2(path, "utf8"));
     this.lookUp = options.lookUp ?? ((path) => stat2(path));
+    this.readStored = options.readStored ?? ((path) => readFile2(path));
   }
   get location() {
     return this.root;
@@ -49649,6 +49722,106 @@ var FileStore = class {
       throw error62;
     }
     return names.some((name) => name.toLowerCase().endsWith(".md"));
+  }
+  /**
+   * The one-time pass (MemoryStore.sweep; design 4.6, #375). The record of a finished pass is <root>/format.json; one
+   * at the current format or newer starts nothing and no memory is read (S33, S46). Otherwise the user folder and every
+   * project folder are visited, one memory at a time; a folder that cannot be listed is skipped and keeps the pass open
+   * (W3). The deleted area, the copies and the other areas are never visited.
+   */
+  async sweep() {
+    await this.assertRoot();
+    const current = currentOf(this.registry);
+    const markerBefore = markerOf(await this.readIfPresent(join3(this.root, MARKER_FILE)).catch(() => void 0)).marker;
+    if (compareFormats(markerBefore, current) >= 0) return { markerBefore, upgraded: 0, left: [], complete: true };
+    const left = [];
+    let upgraded = 0;
+    let complete = true;
+    let keys = [];
+    try {
+      keys = await this.projectKeys();
+    } catch {
+      complete = false;
+    }
+    for (const scope of [USER, ...keys.map((key) => projectScope(parseProjectKey(key)))]) {
+      const folder = join3(this.root, ...foldersOf(scope));
+      let names;
+      try {
+        names = await readdir2(folder);
+      } catch (error62) {
+        if (!isNotFound(error62)) complete = false;
+        continue;
+      }
+      for (const name of names.sort()) {
+        const id = name.slice(0, -".md".length);
+        if (!name.toLowerCase().endsWith(".md") || !UUID_RE.test(id)) continue;
+        try {
+          const outcome = await this.upgradeOne(join3(folder, name), scope, id, current);
+          if (outcome === "upgraded") upgraded += 1;
+          else if (outcome !== "skipped") left.push({ scope, id, reason: outcome.left });
+        } catch (error62) {
+          left.push({ scope, id, reason: systemErrorCode(error62) ?? messageOf2(error62) });
+        }
+      }
+    }
+    await this.recordSweep(current, left, complete).catch(() => {
+    });
+    return { markerBefore, upgraded, left, complete };
+  }
+  /** The record of the pass, read only (MemoryStore.sweepState); its left entries only while it is behind. */
+  async sweepState() {
+    await this.assertRoot();
+    const state = markerOf(await this.readIfPresent(join3(this.root, MARKER_FILE)));
+    return compareFormats(state.marker, currentOf(this.registry)) >= 0 ? { marker: state.marker, left: [] } : state;
+  }
+  /**
+   * One memory of the pass, under its lock (design 4.4, 4.6): read as bytes, skipped at the current format or newer
+   * (W2), left as it is with the reason a load gives when it cannot be read or upgraded (S6, S7, S8, S28), else kept as
+   * it was in previous/ (once, create-only; V9) and written in the current format with the encoder update uses.
+   */
+  async upgradeOne(path, scope, id, current) {
+    return this.withLock(id, async () => {
+      let bytes;
+      try {
+        bytes = await this.readSettled(path, this.readStored);
+      } catch (error62) {
+        if (isNotFound(error62)) return "skipped";
+        return { left: systemErrorCode(error62) ?? messageOf2(error62) };
+      }
+      const text = bytes.toString("utf8");
+      const stored = carryThroughOf(text, this.registry);
+      if (stored !== null && stored !== void 0 && compareFormats(stored.format, current) >= 0) return "skipped";
+      let read;
+      try {
+        read = readMemoryFile(text, { scope, id }, this.registry);
+      } catch (error62) {
+        return { left: messageOf2(error62) };
+      }
+      const copy = join3(this.root, PREVIOUS, `format-${read.format}`, ...foldersOf(scope), `${id}.md`);
+      try {
+        await writeCreateOnly(copy, bytes, { busyBudgetMs: this.busyBudgetMs });
+      } catch (error62) {
+        if (!(error62 instanceof RecordExistsError)) return { left: systemErrorCode(error62) ?? messageOf2(error62) };
+      }
+      await this.writeAtomically(path, serializeMemoryFile(read.memory, { format: current, unknown: {} }), id);
+      return "upgraded";
+    });
+  }
+  /**
+   * The record of a finished pass, under its own lock and after reading it again (S46): the current format once a
+   * complete run left nothing, else the left list beside the marker as it was; never over a record that names the
+   * current format or a newer one, nor over one the OS will not let this read.
+   */
+  async recordSweep(current, left, complete) {
+    const path = join3(this.root, MARKER_FILE);
+    await this.withLock("format-marker", async () => {
+      const now = markerOf(await this.readIfPresent(path));
+      if (compareFormats(now.marker, current) >= 0) return;
+      const done = complete && left.length === 0;
+      const record2 = done ? { format: current } : { format: now.marker, left: left.map(({ scope, id }) => ({ scope: foldersOf(scope).join("/"), id })) };
+      await this.writeAtomically(path, `${JSON.stringify(record2, null, 2)}
+`, "format-marker");
+    });
   }
   /**
    * Refuses a memory that would not load again (design B14), and an id that already has a file in any scope (C4, C8).
@@ -49996,17 +50169,12 @@ var FileStore = class {
     }
     return this.decode(text, file2, scope, id);
   }
-  /**
-   * A listed record's text (#387). A not-found while its name is gone, and a busy code, are read again after a pause
-   * until SETTLE_MS has passed; a not-found while its name is still there is read once more, since a link to a missing
-   * target stays one (C7). Any other failure is the record's at once.
-   */
-  async readSettled(path) {
+  async readSettled(path, read = this.readListed) {
     const deadline = Date.now() + SETTLE_MS;
     let named = 0;
     for (; ; ) {
       try {
-        return await this.readListed(path);
+        return await read(path);
       } catch (error62) {
         const code = codeOf2(error62);
         if (code !== "ENOENT" && !isBusy(code)) throw error62;
@@ -50349,69 +50517,50 @@ var FileProposalStore = class {
   pathOf(id, record2) {
     return join3(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
   }
-  /**
-   * Writes a new record file, create-only and atomically. The text goes to a temp file first and is then hard-linked to
-   * its real name: the link is atomic, so a reader never sees a half-written record, and the filesystem refuses it when
-   * the name is taken (measured: the second link gives EEXIST). A rename would replace silently and the machine-local
-   * lock only orders this machine's writers, so on a synced folder two machines could both write one answer and the
-   * second would replace the first with no record of it; a plain exclusive write would close that gap but leave a
-   * truncated file behind if the writer died mid-write, which then reads as an answer for ever (review findings 3 and
-   * its re-review). Then the temp name is dropped, leaving the record's own link.
-   *
-   * A link refused with any other code than EEXIST -- every link on a medium with no hard links (FAT, exFAT, some network
-   * shares), and one that fails for any other reason on any medium -- takes a rename instead, made only while the name is
-   * still free (#427). That keeps the record atomic and refuses a name already there, but a writer on another machine
-   * that writes the same name between the lookup and the rename is replaced: on that path only this machine's lock
-   * orders the writers.
-   */
+  /** Writes a new record file, create-only and atomically (writeCreateOnly), through this store's seams. */
   async write(path, text) {
-    await mkdir(dirname2(path), { recursive: true });
-    const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(temp, text, "utf8");
-    try {
-      await this.linkFile(temp, path);
-    } catch (error62) {
-      if (codeOf2(error62) === "EEXIST") {
-        await this.dropTemp(temp);
-        throw new RecordExistsError();
-      }
-      await this.renameIfFree(temp, path);
-      return;
-    }
-    await this.dropTemp(temp);
-  }
-  /**
-   * The write where a hard link is refused (#427): the temp file becomes the record by a rename, once the name is seen
-   * free. The lookup is made again before every try: on Windows a rename over a name another process holds open is
-   * expected to be refused with a busy code (not measured here), so a busy rename can mean the name was taken meanwhile,
-   * and a retry must never rename over it. A
-   * lookup that fails other than "not there" fails the write rather than reading as taken or as free (C8).
-   */
-  async renameIfFree(temp, path) {
-    try {
-      await retryWhileBusy(
-        path,
-        async () => {
-          if (!await isFree(path, this.lookUp)) throw new RecordExistsError();
-          await this.renameFile(temp, path);
-        },
-        this.busyBudgetMs
-      );
-    } catch (error62) {
-      await this.dropTemp(temp);
-      throw error62;
-    }
-  }
-  /**
-   * Removes a temp file, again while another process has it open, and never fails the write it served: the record is
-   * in place or refused by then, and a temp file left behind is never read, since the area lists record names only
-   * (#427).
-   */
-  async dropTemp(temp) {
-    await retryWhileBusy(temp, () => this.removeFile(temp), this.busyBudgetMs).catch(() => {
-    });
+    const { linkFile, removeFile, lookUp, renameFile, busyBudgetMs } = this;
+    await writeCreateOnly(path, text, { linkFile, removeFile, lookUp, renameFile, busyBudgetMs });
   }
 };
+async function writeCreateOnly(path, content, options) {
+  const { linkFile = link } = options;
+  await mkdir(dirname2(path), { recursive: true });
+  const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(temp, content);
+  try {
+    await linkFile(temp, path);
+  } catch (error62) {
+    if (codeOf2(error62) === "EEXIST") {
+      await dropTemp(temp, options);
+      throw new RecordExistsError();
+    }
+    await renameIfFree(temp, path, options);
+    return;
+  }
+  await dropTemp(temp, options);
+}
+async function renameIfFree(temp, path, options) {
+  const { lookUp = lstat, renameFile = rename } = options;
+  try {
+    await retryWhileBusy(
+      path,
+      async () => {
+        if (!await isFree(path, lookUp)) throw new RecordExistsError();
+        await renameFile(temp, path);
+      },
+      options.busyBudgetMs
+    );
+  } catch (error62) {
+    await dropTemp(temp, options);
+    throw error62;
+  }
+}
+async function dropTemp(temp, options) {
+  const { removeFile = (path) => rm(path, { force: true }) } = options;
+  await retryWhileBusy(temp, () => removeFile(temp), options.busyBudgetMs).catch(() => {
+  });
+}
 var DREAM_AREA = "dream";
 var DREAM_RUN_FILE = "run.yaml";
 var DEFAULT_BUSY_BUDGET_MS = 2e3;
@@ -50657,7 +50806,10 @@ if (move) {
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
   const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
   const runs = new FileRunStore(root, (run) => store.dreamLock(run));
-  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  const upgrade2 = process.env[START_HOOK_ENV] === "1" ? void 0 : () => store.sweep().catch((error62) => {
+    console.error(`NeoCortex: the upgrade of stored memories stopped (${error62 instanceof Error ? error62.message : String(error62)}); the next session tries again.`);
+  });
+  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }

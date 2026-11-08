@@ -2,6 +2,25 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.6 - 2026-11-08
+
+- Changed: NeoCortex now brings every memory saved by an earlier version up to the current format by itself, once, in
+  the background of the first session after you update: your user memories and those of every project, not only the
+  one you are in. Before it rewrites a memory it keeps a copy of the file exactly as it was, under `previous/` in your
+  memory folder, which you can copy back by hand; NeoCortex never changes or removes those copies. A memory reads,
+  shows and loads exactly as before: its text, dates, labels, links, end date and condition are kept, and no rule asks
+  for a confirmation or shows as changed. A `format.json` in your memory folder records that the upgrade finished.
+- A memory NeoCortex cannot bring up to date, such as a file with a typo in its frontmatter, stays exactly as it is.
+  Session starts name it with the reason until you repair or remove it by hand; the next session then brings it up to
+  date.
+- Update every machine that shares your memory folder, one at a time: update one, let its first session finish the
+  upgrade and the folder sync, then update the others. After the upgrade, a machine on NeoCortex 0.4.32 or older can
+  read none of your memories: it says they were written by a newer NeoCortex. Update it.
+- Once, at this upgrade, the Dreamer asks again about clean-ups you already answered for the memories it brought up to
+  date: a proposal still waiting is withdrawn and proposed again at its next run, one you rejected or kept both on is
+  asked once more, and one you accepted that was not yet applied is closed with its reason and writes nothing. Accept
+  it again if you still want it.
+
 ## 0.5.5 - 2026-11-08
 
 - Fixed: a Dreamer proposal you accepted no longer stays unfinished for good when one of its memories changed, moved

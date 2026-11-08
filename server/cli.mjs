@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.5",
+  version: "0.5.6",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18410,6 +18410,7 @@ var package_default = {
 
 // src/moments.ts
 var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
+var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
 var DEFAULT_EVENT = {
   index: "SessionStart",
@@ -18485,6 +18486,7 @@ async function run(moment, part2) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== void 0) env[key] = value;
   env.CLAUDE_PROJECT_DIR = projectDir;
+  env[START_HOOK_ENV] = "1";
   let stderr = "";
   let closed = Promise.resolve();
   let client;

@@ -377,6 +377,13 @@ the plugin. What each version changed is in [CHANGELOG.md](CHANGELOG.md).
 From 0.5.0 on, a memory is written in format 2.0, which NeoCortex 0.4.32 and older cannot read. Update every machine
 that shares your memory folder.
 
+The first session after an update brings every memory still on an older format up to date, once, in the background,
+and keeps a copy of each as it was in the folder `previous` inside your memory folder. To put a memory back, copy its
+copy over it by hand; NeoCortex never changes or removes a copy. A memory it cannot read stays as it was and is named
+at every session start until you repair or remove it. After that, a machine still on 0.4.32 or older that shares the
+folder reads none of your memories and says at its start that NeoCortex must be updated: update one machine first, let
+its first session finish and the folder sync, then the others.
+
 ## Remove
 
 ```shell
