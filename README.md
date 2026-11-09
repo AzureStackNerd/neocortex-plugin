@@ -135,69 +135,98 @@ example after another machine changed them.
 
 ### When a memory loads
 
-Every memory has a `delivery`, and it decides when NeoCortex puts that memory in front of Claude. It is one of these
-seven; `save_memory` and `update_memory` take it, and the field's default is `index`.
+Every memory has a `delivery` that decides when Claude gets it. `save_memory` and `update_memory` take it, and the
+default is `index`.
 
 | `delivery` | When Claude gets it | What Claude gets |
 | --- | --- | --- |
-| `index` | At every session start | One line: scope, title, summary, id. The default: a memory that must fire on its own |
-| `startup` | At every session start | The whole memory, in full |
+| `index` | At every session start | One line: scope, title, summary and id. The default, for a memory that must fire on its own |
+| `startup` | At every session start | The whole memory |
 | `prompt` | At every prompt you send | The whole body |
 | `question` | At a short question you send | The whole body, first; the `prompt` memories follow if both fit |
-| `subagent` | When a subagent starts | The whole body, and only in the subagent |
-| `edit` | Before every edit of a file; with a file pattern, only before a write or edit of a matching file, and once in each agent's context at the first read of such a file or search for one | The whole body |
-| `on-demand` | Only when Claude asks for it by id or search | Nothing until then; never lost, since `get_memory` and `search_memories` reach it |
+| `subagent` | When a subagent starts | The whole body, in the subagent only |
+| `edit` | Before every edit of a file. With a file pattern: at a write or edit of a matching file, and once at the first read or search of one; see [Rules for one kind of file](#rules-for-one-kind-of-file) | The whole body |
+| `on-demand` | Only when Claude asks for it by id or search | Nothing until then; `get_memory` and `search_memories` always reach it |
 
-`startup`, `prompt`, `question`, `subagent` and `edit` are the ones that load on their own at a moment, so a memory
-set to one of them is a **rule**: Claude changes a rule only through `save_rule`, `update_rule` or `delete_rule`, and
-Claude Code asks you before every one of those calls. A rule that loads at every prompt is paid on every prompt, so
-keep that for what must fire that often; `startup` costs once a session, and `index` is free until Claude fetches it.
+**Rules.** A memory that loads on its own at a moment (`startup`, `prompt`, `question`, `subagent` or `edit`), or that
+is enforced, is a rule. Claude changes a rule only with `save_rule`, `update_rule` or `delete_rule`, and Claude Code
+asks you before every one of those calls; see [Permissions](#permissions).
 
-A rule is a memory that loads on its own, at session start, with every prompt or short question, before every edit or
-when a subagent starts, or that is enforced. Claude changes a rule only with `save_rule`, `update_rule` or
-`delete_rule`, and Claude Code asks you before every call of them; see [Permissions](#permissions).
+**Cost.** A `prompt` rule is paid at every prompt you send, so keep that for what must fire that often. A `startup`
+memory costs once a session, and an `index` memory costs its one line until Claude fetches the rest.
 
 ### Where a memory applies
 
-A memory can also say where it applies, beyond its scope, in `appliesWhen`: `labels` names context labels a place must
-carry, every one of them, and `inRepo: true` means only in a session inside a git repository. Ask Claude, for example
-"remember that, but only for places labelled contoso". Where the condition does not hold, the memory is not in the
-session start, a subagent's start or a refresh; where it holds, its index line shows the condition, such as
-`[user · labels contoso]`. `search_memories` still finds it everywhere and says what it would need there, such as
-`not here: needs label contoso`, and so does `get_memory`. The index header shows this place's context labels, and Claude changes them with
-`set_context_labels`. A place nobody has labelled yet hides no memory, so a labelled memory shows there until you label
-the place.
+A memory can say where it applies, beyond its scope, in `appliesWhen`. Every part you give must hold:
 
-An update that leaves `appliesWhen` out keeps the condition; `null` or `{}` removes it. A rule can apply only inside a
-repo (`inRepo`), such as a definition of done, or only in places with a label, such as one customer's rules, and then
-arrives at its own moment, a prompt, an edit or a subagent's start, only where that holds; you confirm it like any rule
-change, and Claude proposes such a label itself for a rule that belongs to one kind of place. A place's first labels
-take effect at once; a later label change that would make a rule start or stop loading there asks you first, naming
-those rules, through `set_context_labels_rule`. An existing rule's condition is narrowed, widened or removed in one
-change through `update_rule`, which you confirm; the rule keeps its id and the exceptions that name it. Every rule
-question names, by their labels, the places where the rule starts or stops loading, such as
-`in other places (labels contoso)`. A memory with `overrides` takes `inRepo` alone, a rule that is itself an exception
-included: inside repos it hides what it overrides and in folders it does not, so a repo's own definition of done can
-replace the general one in repos only; you confirm it like any rule change.
+- `labels`: only in places that carry every one of these context labels. Ask Claude, for example, "remember that, but
+  only for places labelled contoso".
+- `inRepo: true`: only in a session inside a git repository, such as a definition of done.
+- `files`: only for one kind of file; see [Rules for one kind of file](#rules-for-one-kind-of-file).
 
-A rule about one kind of file arrives only when Claude writes or edits such a file: ask Claude, for example, "remember
-how we write Bicep files", and it proposes `appliesWhen.files` with a pattern such as `**/*.bicep` and delivery `edit`,
-which you confirm like any rule. A pattern names a kind of file: no slash, such as `*.md`, or starting with `**/`, such
-as `**/infra/*.bicep`. It matches such a file wherever it lies, in a subfolder, a worktree, another repository or a temp
-folder, in any letter case, and the rule arrives at a subagent's edits too. The rule questions name its files, such as
-`(files **/*.bicep)`, and a new rule that would leave another without room at the edit of some file names that one. When
-an edit passes no file, as at a clone whose `settings.json` still has the older edit entry, every such rule arrives at
-every edit, and the first line says so. Not possible yet: labels or files on a memory with `overrides`, a pattern that
-names a folder (`infra/*.bicep`, `/*.bicep`), files on a project memory, and a change of a saved rule's patterns (delete
-it and save a new one); a project memory takes neither labels nor `inRepo`, because its project already fixes where it
-applies. A pattern no file can match, such as `infra/` or one with an open `[`, is refused, and one written by hand is
-named at every edit. Each refusal names a way out only where that call would pass. Such a call is refused with the
-reason, and nothing is written; so is a call that names a field the tool does
-not know, and a change that would alter what hides a memory NeoCortex cannot read, at this place or another. Using one
-store from several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers a rule that applies only
-inside a repo in folders too, one still at 0.5.1 changes a place's labels without asking, also when that starts or
-stops a rule, one still at 0.5.2 refuses a change of a rule's condition and asks its rule questions without labels,
-and one still at 0.5.7 refuses an exception that applies only inside a repo.
+A project memory takes neither `labels` nor `inRepo`: its project already fixes where it applies.
+
+Where the condition holds, the memory's index line shows it, such as `[user · labels contoso]`. Where it does not, the
+memory stays out of the session start, a subagent's start and a refresh. `search_memories` and `get_memory` still find
+it everywhere and say what it would need, such as `not here: needs label contoso`.
+
+**Places and their labels.** The index header shows the context labels of the place you work in, and Claude changes
+them with `set_context_labels`. A place nobody has labelled yet hides no memory, so a labelled memory shows there until
+the place gets labels. A place's first labels take effect at once. A later change that would make a rule start or stop
+loading there asks you first and names those rules, through `set_context_labels_rule`.
+
+**Conditions on rules.** A rule with `labels` or `inRepo` arrives at its own moment, such as a prompt, an edit or a
+subagent's start, only where its condition holds. Claude proposes such a label itself for a rule that belongs to one
+kind of place, and you confirm it like any rule change. Every rule question names the places where the rule starts or
+stops loading, such as `in other places (labels contoso)`. `update_rule` narrows, widens or removes a rule's condition
+in one change, which you confirm; the rule keeps its id and the exceptions that name it. An update that leaves
+`appliesWhen` out keeps the condition, and `null` or `{}` removes it.
+
+**Exceptions inside repos.** A memory with `overrides` can take `inRepo`, and no other condition. Inside repos it then
+hides what it overrides, and in folders outside one it does not, so a repository's own definition of done can replace
+the general one in repos only. You confirm it like any rule change.
+
+### Rules for one kind of file
+
+Ask Claude, for example, "remember how we write Bicep files". Claude proposes `appliesWhen.files` with a pattern such as
+`**/*.bicep` and delivery `edit`, and you confirm it like any rule. The question names the rule's files, such as
+`(files **/*.bicep)`.
+
+Such a rule arrives:
+
+- before every write or edit of a matching file, and at no other edit;
+- once in each agent's context at the first read of such a file or search for one: a Read, a Grep in that file, a
+  Glob or a Grep file filter that names that kind of file, such as `**/*.bicep`, or a Grep by a language type that is
+  the file's extension, such as `ts` or `py`. For a type such as `ps`, `csharp` or `rust` it arrives at the first read of such a file instead. Later
+  reads in that context bring nothing; after a compaction or `/clear` it comes once more;
+- in the main conversation and in every subagent, each in its own context.
+
+A pattern names one kind of file: it has no slash, such as `*.md`, or starts with `**/`, such as `**/infra/*.bicep`. It
+matches such a file wherever it lies, in a subfolder, a worktree, another repository or a temp folder, in any letter
+case. A new rule that would leave another one without room at the edit of some file names that one in its question.
+
+Not possible yet, and refused with the reason: a pattern that names a folder (`infra/*.bicep`, `/*.bicep`), files on a
+project memory or on a memory with `overrides`, and a change of a saved rule's patterns (delete it and save a new one).
+A pattern no file can match, such as `infra/` or one with an open `[`, is refused too, and one written by hand is named
+at every edit. At a clone whose `settings.json` still has the older edit entry, an edit passes no file, so every such
+rule arrives at every edit and the first line says so.
+
+### When a change is refused
+
+A refused call writes nothing and says why. When it names a way out, that call would pass. NeoCortex also refuses a call
+with a field the tool does not know, and a change to an exception of a memory it cannot read, such as a broken file or
+one written by a newer NeoCortex, when that would change where that memory is hidden, here or in another place.
+
+### Using one store from several machines
+
+Update NeoCortex on each machine. A machine that is still on an older version does not know the newer conditions:
+
+- 0.5.0 delivers a rule that applies only inside a repo in folders too;
+- 0.5.1 changes a place's labels without asking, also when that starts or stops a rule;
+- 0.5.2 refuses a change of a rule's condition and asks its rule questions without labels;
+- 0.5.7 refuses an exception that applies only inside a repo;
+- 0.5.8 refuses a rule for a kind of file, and delivers one saved elsewhere at every edit, with a warning, and at no
+  read.
 
 ### What a memory holds
 

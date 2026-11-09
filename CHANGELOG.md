@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.10 - 2026-11-09
+
+- Changed: the README's sections on when and where a memory loads are rewritten as short paragraphs and lists, with
+  rules for one kind of file, refused changes and using one store from several machines each in a section of their
+  own. They now also say that a rule for a kind of file arrives once at the first read or search of such a file, as
+  it does since 0.5.9. NeoCortex itself does not change.
+
 ## 0.5.9 - 2026-11-09
 
 - New: a rule about one kind of file, such as how you write Bicep files, arrives when Claude writes, edits, reads or
