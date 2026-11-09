@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.8",
+  version: "0.5.9",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18409,7 +18409,7 @@ var package_default = {
 };
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent"];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
 var DEFAULT_EVENT = {
@@ -18418,6 +18418,8 @@ var DEFAULT_EVENT = {
   startup: "SessionStart",
   prompt: "UserPromptSubmit",
   edit: "PreToolUse",
+  read: "PreToolUse",
+  search: "PreToolUse",
   subagent: "SubagentStart"
 };
 var MISSING = {
@@ -18426,6 +18428,8 @@ var MISSING = {
   startup: "the memory index and the startup memories are",
   prompt: "the prompt rules are",
   edit: "the write-time standards are",
+  read: "the read rules are",
+  search: "the search rules are",
   subagent: "the subagent rules are"
 };
 function hookJson(value) {
@@ -18445,6 +18449,13 @@ function hookFailure(moment, event, reason) {
 var SERVER = fileURLToPath(new URL(`./mcp${import.meta.url.slice(import.meta.url.lastIndexOf("."))}`, import.meta.url));
 var configured = Number(process.env.NEOCORTEX_HOOK_TIMEOUT_MS);
 var TIMEOUT_MS = Number.isFinite(configured) && configured > 0 ? configured : 1e4;
+function fieldsOf(moment, input) {
+  const tool = typeof input.tool_input === "object" && input.tool_input !== null ? input.tool_input : {};
+  const named = { session: input.session_id, agent: input.agent_id };
+  if (moment === "read") named["file"] = tool.file_path;
+  if (moment === "search") Object.assign(named, { path: tool.path, glob: tool.glob, type: tool.type, ...input.tool_name === "Glob" ? { pattern: tool.pattern } : {} });
+  return Object.fromEntries(Object.entries(named).filter((entry) => typeof entry[1] === "string"));
+}
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
@@ -18506,7 +18517,7 @@ async function run(moment, part2) {
       (async () => {
         await connected.connect(transport);
         const prompt = typeof input.prompt === "string" ? input.prompt : "";
-        return connected.callTool({ name: "hook_context", arguments: { moment, part: part2, event, prompt } });
+        return connected.callTool({ name: "hook_context", arguments: { moment, part: part2, event, prompt, ...fieldsOf(moment, input) } });
       })(),
       TIMEOUT_MS
     );

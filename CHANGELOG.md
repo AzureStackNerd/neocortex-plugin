@@ -2,6 +2,29 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.9 - 2026-11-09
+
+- New: a rule about one kind of file, such as how you write Bicep files, arrives when Claude writes, edits, reads or
+  searches such a file, wherever it lies, also in a subagent, and at no other edit, read or search. At a write or an
+  edit it arrives every time; at a read or a search once per conversation and once in each subagent, and again after a
+  compaction or `/clear`. Ask Claude to remember it: Claude proposes the pattern, such as `**/*.bicep`, and you confirm
+  it like any rule. The confirmation names the rule's files, and a new rule that would leave another one without room
+  at the edit of some file names that one.
+- A search filtered only by a language type brings the rule when the type is the file's extension, such as `ts` or
+  `py`; for a type such as `ps`, `csharp` or `rust` the rule arrives at the first read of such a file instead.
+- For now, a pattern that names a folder, a file pattern on a project memory or on an exception, and a change of a
+  saved rule's pattern are refused, with the reason.
+- Changed: Read, Grep and Glob now call NeoCortex's hook as well; each call takes about as long as the edit hook
+  already does.
+- If you run NeoCortex from a clone, the plugin needs nothing, but your `settings.json` does. Run
+  `node "<clone>/scripts/update-clone-hooks.ts"` and then again with `--apply`: it gives the edit entry its new inputs,
+  the file, the session and the agent. It never adds a hook, so it lists the three new `PreToolUse` groups for `Read`,
+  `Grep` and `Glob` with the JSON to paste, which README.md shows as well. Until the edit entry is changed, every rule
+  for a kind of file arrives at every edit with a warning that names them; until the read groups are added, such a
+  rule arrives at writes and edits only.
+- If several machines share your memory folder, update each one: a machine still on 0.5.8 refuses to save a rule for a
+  kind of file, and delivers one saved elsewhere at every edit, with a warning, and at no read.
+
 ## 0.5.8 - 2026-11-08
 
 - New: you can have Claude record that inside repos a memory replaces a general rule, as an exception that applies

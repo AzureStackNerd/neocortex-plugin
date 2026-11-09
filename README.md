@@ -145,7 +145,7 @@ seven; `save_memory` and `update_memory` take it, and the field's default is `in
 | `prompt` | At every prompt you send | The whole body |
 | `question` | At a short question you send | The whole body, first; the `prompt` memories follow if both fit |
 | `subagent` | When a subagent starts | The whole body, and only in the subagent |
-| `edit` | Before every edit of a file | The whole body |
+| `edit` | Before every edit of a file; with a file pattern, only before a write or edit of a matching file, and once in each agent's context at the first read of such a file or search for one | The whole body |
 | `on-demand` | Only when Claude asks for it by id or search | Nothing until then; never lost, since `get_memory` and `search_memories` reach it |
 
 `startup`, `prompt`, `question`, `subagent` and `edit` are the ones that load on their own at a moment, so a memory
@@ -178,9 +178,21 @@ change through `update_rule`, which you confirm; the rule keeps its id and the e
 question names, by their labels, the places where the rule starts or stops loading, such as
 `in other places (labels contoso)`. A memory with `overrides` takes `inRepo` alone, a rule that is itself an exception
 included: inside repos it hides what it overrides and in folders it does not, so a repo's own definition of done can
-replace the general one in repos only; you confirm it like any rule change. Not possible yet: labels on a memory with
-`overrides`, and file globs (`files`); a project memory never takes one, because its project already fixes where it
-applies. Such a call is refused with the reason, and nothing is written; so is a call that names a field the tool does
+replace the general one in repos only; you confirm it like any rule change.
+
+A rule about one kind of file arrives only when Claude writes or edits such a file: ask Claude, for example, "remember
+how we write Bicep files", and it proposes `appliesWhen.files` with a pattern such as `**/*.bicep` and delivery `edit`,
+which you confirm like any rule. A pattern names a kind of file: no slash, such as `*.md`, or starting with `**/`, such
+as `**/infra/*.bicep`. It matches such a file wherever it lies, in a subfolder, a worktree, another repository or a temp
+folder, in any letter case, and the rule arrives at a subagent's edits too. The rule questions name its files, such as
+`(files **/*.bicep)`, and a new rule that would leave another without room at the edit of some file names that one. When
+an edit passes no file, as at a clone whose `settings.json` still has the older edit entry, every such rule arrives at
+every edit, and the first line says so. Not possible yet: labels or files on a memory with `overrides`, a pattern that
+names a folder (`infra/*.bicep`, `/*.bicep`), files on a project memory, and a change of a saved rule's patterns (delete
+it and save a new one); a project memory takes neither labels nor `inRepo`, because its project already fixes where it
+applies. A pattern no file can match, such as `infra/` or one with an open `[`, is refused, and one written by hand is
+named at every edit. Each refusal names a way out only where that call would pass. Such a call is refused with the
+reason, and nothing is written; so is a call that names a field the tool does
 not know, and a change that would alter what hides a memory NeoCortex cannot read, at this place or another. Using one
 store from several machines? Update NeoCortex on each: a machine still at 0.5.0 delivers a rule that applies only
 inside a repo in folders too, one still at 0.5.1 changes a place's labels without asking, also when that starts or

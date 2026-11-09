@@ -36074,14 +36074,258 @@ function notHereWords(condition, here) {
         if (missing !== void 0) return `not here: needs label ${shownText(missing)}`;
         break;
       }
-      case "files": {
-        const files = canonical.files;
-        if (files !== void 0 && files.length > 0) return `not here: needs a file ${shownText(files[0])}`;
+      case "files":
         break;
-      }
     }
   }
   return "";
+}
+var BRACE_MAX = 1e3;
+var READ_MAX = 2e3;
+var read = /* @__PURE__ */ new Map();
+function classEnd(text, open4) {
+  let at = open4 + 1;
+  if (text[at] === "!" || text[at] === "^") at += 1;
+  if (text[at] === "]") at += 1;
+  for (; at < text.length; at += 1) {
+    if (text[at] === "\\") at += 1;
+    else if (text[at] === "]") return at;
+  }
+  return -1;
+}
+function expandBraces(text) {
+  let open4 = -1;
+  for (let at = 0; at < text.length; at += 1) {
+    if (text[at] === "\\") at += 1;
+    else if (text[at] === "[") {
+      const end = classEnd(text, at);
+      if (end !== -1) at = end;
+    } else if (text[at] === "{") {
+      open4 = at;
+      break;
+    }
+  }
+  if (open4 === -1) return [[...text]];
+  const parts = [[]];
+  let depth = 0;
+  let close = -1;
+  for (let at = open4 + 1; at < text.length && close === -1; at += 1) {
+    const char = text[at];
+    if (char === "\\") {
+      parts.at(-1).push(...text.slice(at, at + 2));
+      at += 1;
+    } else if (char === "{") {
+      depth += 1;
+      parts.at(-1).push(char);
+    } else if (char === "}" && depth > 0) {
+      depth -= 1;
+      parts.at(-1).push(char);
+    } else if (char === "}") close = at;
+    else if (char === "," && depth === 0) parts.push([]);
+    else parts.at(-1).push(char);
+  }
+  if (close === -1) return null;
+  const all = [];
+  for (const part of parts) {
+    const expanded = expandBraces([...text.slice(0, open4), ...part, ...text.slice(close + 1)]);
+    if (expanded === null) return null;
+    all.push(...expanded);
+    if (all.length > BRACE_MAX) return null;
+  }
+  return all;
+}
+function segmentTokens(text) {
+  const tokens = [];
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\\") {
+      if (at + 1 >= text.length) return null;
+      tokens.push({ kind: "char", char: text[at + 1] });
+      at += 1;
+    } else if (char === "*") {
+      if (tokens.at(-1)?.kind !== "star") tokens.push({ kind: "star" });
+    } else if (char === "?") tokens.push({ kind: "any" });
+    else if (char === "[") {
+      const end = classEnd(text, at);
+      if (end === -1) return null;
+      let from = at + 1;
+      const negated = text[from] === "!" || text[from] === "^";
+      if (negated) from += 1;
+      const items = [];
+      for (let k = from; k < end; k += 1) {
+        const low = text[k] === "\\" ? text[++k] : text[k];
+        if (text[k + 1] === "-" && k + 2 < end) {
+          const high = text[k + 2] === "\\" ? text[k + 3] : text[k + 2];
+          items.push([low, high]);
+          k += text[k + 2] === "\\" ? 3 : 2;
+        } else items.push([low, low]);
+      }
+      tokens.push({ kind: "class", negated, items });
+      at = end;
+    } else tokens.push({ kind: "char", char });
+  }
+  return tokens;
+}
+function readPattern(pattern) {
+  const known = read.get(pattern);
+  if (known !== void 0) return known;
+  if (read.size >= READ_MAX) read.clear();
+  const unusable = { kind: "unusable", alternatives: [] };
+  const expanded = expandBraces([...pattern.toLowerCase()]);
+  let result = unusable;
+  if (expanded !== null) {
+    const alternatives = [];
+    let kind = "kind";
+    for (const alternative of expanded) {
+      const segments = [];
+      let current = [];
+      const texts = [];
+      for (let at = 0; at < alternative.length; at += 1) {
+        if (alternative[at] === "\\") {
+          current.push(...alternative.slice(at, at + 2));
+          at += 1;
+        } else if (alternative[at] === "/") {
+          texts.push(current);
+          current = [];
+        } else current.push(alternative[at]);
+      }
+      texts.push(current);
+      const dead = (text, at) => text.length === 0 && at > 0 || text.join("") === "." || text.join("") === "..";
+      if (texts.some(dead)) {
+        kind = "unusable";
+        break;
+      }
+      for (const text of texts) {
+        if (text.length === 2 && text[0] === "*" && text[1] === "*") {
+          segments.push("**");
+          continue;
+        }
+        const tokens = segmentTokens(text);
+        if (tokens === null) {
+          segments.length = 0;
+          break;
+        }
+        segments.push(tokens);
+      }
+      if (segments.length === 0) {
+        kind = "unusable";
+        break;
+      }
+      if (texts.length > 1 && segments[0] !== "**") kind = "folder";
+      alternatives.push(segments);
+    }
+    if (kind !== "unusable") result = { kind, alternatives };
+  }
+  read.set(pattern, result);
+  return result;
+}
+function patternKind(pattern) {
+  return readPattern(pattern).kind;
+}
+function takes(token, char) {
+  switch (token.kind) {
+    case "char":
+      return token.char === char;
+    case "any":
+      return true;
+    case "star":
+      return false;
+    case "class":
+      return token.items.some(([low, high]) => char >= low && char <= high) !== token.negated;
+  }
+}
+function segmentMatches(tokens, name) {
+  let token = 0;
+  let at = 0;
+  let star = -1;
+  let starAt = 0;
+  while (at < name.length) {
+    if (token < tokens.length && tokens[token].kind === "star") {
+      star = token;
+      starAt = at;
+      token += 1;
+    } else if (token < tokens.length && takes(tokens[token], name[at])) {
+      token += 1;
+      at += 1;
+    } else if (star !== -1) {
+      token = star + 1;
+      starAt += 1;
+      at = starAt;
+    } else return false;
+  }
+  while (token < tokens.length && tokens[token].kind === "star") token += 1;
+  return token === tokens.length;
+}
+function segmentsMatch(pattern, path) {
+  const done = Array.from({ length: pattern.length + 1 }, () => new Array(path.length + 1).fill(false));
+  done[pattern.length][path.length] = true;
+  for (let i = pattern.length - 1; i >= 0; i -= 1) {
+    const segment = pattern[i];
+    for (let j = path.length; j >= 0; j -= 1) {
+      done[i][j] = segment === "**" ? done[i + 1][j] || j < path.length && done[i][j + 1] : j < path.length && done[i + 1][j + 1] && segmentMatches(segment, path[j]);
+    }
+  }
+  return done[0][0];
+}
+function patternMatches(pattern, file2) {
+  const { kind, alternatives } = readPattern(pattern);
+  if (kind !== "kind") return false;
+  const path = file2.toLowerCase().replaceAll("\\", "/").split("/").map((segment) => [...segment]);
+  return alternatives.some((segments) => segmentsMatch(segments.length === 1 ? ["**", ...segments] : segments, path));
+}
+var TAILS_MAX = 64;
+function tails(pattern) {
+  const { kind, alternatives } = readPattern(pattern);
+  if (kind === "unusable") return [];
+  if (alternatives.length > TAILS_MAX) return [""];
+  return alternatives.map((segments) => {
+    const last = segments.at(-1);
+    if (last === void 0 || last === "**") return "";
+    let tail = "";
+    for (let at = last.length - 1; at >= 0; at -= 1) {
+      const token = last[at];
+      if (token.kind !== "char") break;
+      tail = token.char + tail;
+    }
+    return tail;
+  });
+}
+function searchTails(search) {
+  const expanded = expandBraces([...search.toLowerCase()]);
+  if (expanded === null) return null;
+  let readable = false;
+  const ends = expanded.map((alternative) => {
+    let start = 0;
+    for (let at = 0; at < alternative.length; at += 1) {
+      if (alternative[at] === "\\") at += 1;
+      else if (alternative[at] === "/") start = at + 1;
+    }
+    const tokens = segmentTokens(alternative.slice(start));
+    if (tokens === null) return "";
+    readable = true;
+    let tail = "";
+    for (let at = tokens.length - 1; at >= 0; at -= 1) {
+      const token = tokens[at];
+      if (token.kind !== "char") break;
+      tail = token.char + tail;
+    }
+    return tail;
+  });
+  return readable ? ends : null;
+}
+function searchNamesAKind(search) {
+  return (searchTails(search) ?? []).some((tail) => tail !== "");
+}
+function searchReadable(search) {
+  return searchTails(search) !== null;
+}
+function searchMeets(search, rules) {
+  const ends = (searchTails(search) ?? []).filter((tail) => tail !== "");
+  if (ends.length === 0) return false;
+  return rules.some((rule) => tails(rule).some((ruleTail) => ruleTail === "" || ends.some((tail) => tail.endsWith(ruleTail) || ruleTail.endsWith(tail))));
+}
+function patternsMayMeet(a, b) {
+  return a.some((p) => b.some((q) => tails(p).some((x) => tails(q).some((y) => x.endsWith(y) || y.endsWith(x)))));
 }
 
 // src/memory.ts
@@ -36728,7 +36972,7 @@ function keyLines(text) {
   const metadata = /* @__PURE__ */ new Map();
   let inMetadata = false;
   let metadataIndent = 0;
-  let open3 = null;
+  let open4 = null;
   const take = (into, key, value) => {
     if (BLOCK_VALUE_RE.test(value)) return "block";
     const parts = [value];
@@ -36744,22 +36988,22 @@ function keyLines(text) {
       if (pair === null) return null;
       inMetadata = pair[2] === "metadata" && value === "";
       metadataIndent = 0;
-      open3 = inMetadata ? null : take(front, pair[2], value);
+      open4 = inMetadata ? null : take(front, pair[2], value);
     } else if (inMetadata && (metadataIndent === 0 || indent <= metadataIndent)) {
       if (pair === null || indent < metadataIndent) return null;
       metadataIndent = indent;
-      open3 = take(metadata, pair[2], value);
-    } else if (open3 === null) {
+      open4 = take(metadata, pair[2], value);
+    } else if (open4 === null) {
       return null;
-    } else if (open3 !== "block") {
-      open3.push(line.trim());
+    } else if (open4 !== "block") {
+      open4.push(line.trim());
     }
   }
   const values = (parts) => Object.fromEntries([...parts].map(([key, value]) => [key, unquoted(value.join(" ").trim())]));
   const meta3 = values(metadata);
   const result = { ...values(front), metadata: meta3 };
-  const read = [result.name, result.description, result.type, result.modified, meta3.type, meta3.modified].some((value) => stringOf(value) !== "");
-  return read ? result : null;
+  const read2 = [result.name, result.description, result.type, result.modified, meta3.type, meta3.modified].some((value) => stringOf(value) !== "");
+  return read2 ? result : null;
 }
 function unquoted(value) {
   return value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.endsWith(value[0]) ? value.slice(1, -1) : value;
@@ -36811,26 +37055,26 @@ function readIndex(file2, topics, folder) {
     });
   };
   let heading = null;
-  let open3 = null;
+  let open4 = null;
   for (const [index, line] of decoded.text.split("\n").entries()) {
-    if (open3 !== null && INDENTED_RE.test(line) && line.trim() !== "") {
-      open3.lines.push(line);
+    if (open4 !== null && INDENTED_RE.test(line) && line.trim() !== "") {
+      open4.lines.push(line);
       continue;
     }
-    if (open3 !== null) take(open3);
-    open3 = null;
+    if (open4 !== null) take(open4);
+    open4 = null;
     const head = HEADING_RE.exec(line);
     if (head !== null) {
       const shape = secretShape(line);
       if (shape !== null) results.push({ source: `${INDEX} line ${index + 1}`, reason: `secret (${shape})` });
       heading = shape === null ? oneLine(head[1] ?? "") || null : null;
     } else if (ITEM_RE.test(line)) {
-      open3 = { line: index + 1, lines: [line], heading };
+      open4 = { line: index + 1, lines: [line], heading };
     } else if (line.trim() !== "") {
       notListItems += 1;
     }
   }
-  if (open3 !== null) take(open3);
+  if (open4 !== null) take(open4);
   return { links, named, results, notListItems };
 }
 function linkOf(line) {
@@ -37016,6 +37260,13 @@ function insideRepo(dir) {
     if (dirname(current) === current) return false;
   }
 }
+function isFile(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
 function isGitEntry(path) {
   let isFolder;
   try {
@@ -37099,10 +37350,10 @@ async function find(options) {
   return { kind: "found", lookedIn, folders, root: { inRepo: root2.inRepo, folderKey: root2.folderKey, root: root2.realRoot }, ...settings, ...pinned };
 }
 async function sharedFolder(settings, managedFolders, options) {
-  const read = await settingIn(settings, options.home);
-  if (read.kind === "absent") return { settings, folder: null };
-  if (read.kind === "unchecked") return { settings, folder: null, unchecked: read.why };
-  const { folder } = read;
+  const read2 = await settingIn(settings, options.home);
+  if (read2.kind === "absent") return { settings, folder: null };
+  if (read2.kind === "unchecked") return { settings, folder: null, unchecked: read2.why };
+  const { folder } = read2;
   const files = await topLevelFiles(folder, "auto memory folder");
   return { settings, folder, files, managedFolder: managedFolders.find((other) => !samePath(other, folder, options.platform)) ?? null };
 }
@@ -37111,11 +37362,11 @@ async function otherSettings(config2, userSettings, root2, options) {
   const managedFolders = [];
   const notChecked = [];
   const report = async (settings, managed) => {
-    const read = await settingIn(settings, options.home);
-    if (read.kind === "unchecked") notChecked.push({ source: settings, reason: `could not be checked (${read.why})` });
-    if (read.kind !== "folder") return;
-    notRead.push({ settings, folder: read.folder });
-    if (managed) managedFolders.push(read.folder);
+    const read2 = await settingIn(settings, options.home);
+    if (read2.kind === "unchecked") notChecked.push({ source: settings, reason: `could not be checked (${read2.why})` });
+    if (read2.kind !== "folder") return;
+    notRead.push({ settings, folder: read2.folder });
+    if (managed) managedFolders.push(read2.folder);
   };
   for (const dir of root2.placeIsRoot ? [options.placeDir] : [options.placeDir, root2.realRoot]) {
     for (const name of ["settings.json", "settings.local.json"]) {
@@ -37332,7 +37583,7 @@ function messageOf(error62) {
 }
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "subagent"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent"];
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
 var FULL_PART_BUDGETS = [1e4, 1e4];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
@@ -37343,6 +37594,8 @@ var MISSING = {
   startup: "the memory index and the startup memories are",
   prompt: "the prompt rules are",
   edit: "the write-time standards are",
+  read: "the read rules are",
+  search: "the search rules are",
   subagent: "the subagent rules are"
 };
 function hookJson(value) {
@@ -37356,6 +37609,212 @@ function hookFailure(moment, event, reason) {
       additionalContext: `NeoCortex is unavailable (${reason}): ${MISSING[moment]} NOT in context. Say so before answering.`
     }
   });
+}
+
+// src/once.ts
+import { mkdir, open as open2, readFile as readFile2, rename, rm, stat as stat2, writeFile } from "node:fs/promises";
+import { join as join3 } from "node:path";
+var ONCE_FORMAT = 1;
+var FILE = `once.v${ONCE_FORMAT}.json`;
+var LOCK = "once.lock";
+var ROW_MS = 24 * 60 * 60 * 1e3;
+var ONCE_BUSY_MS = 2e3;
+var OnceBusyError = class extends Error {
+  constructor(path, budgetMs) {
+    super(`the once record's lock ${path} stayed taken for ${budgetMs} ms`);
+    this.name = "OnceBusyError";
+  }
+};
+function idsOf(value) {
+  return new Set(Array.isArray(value) ? value.filter((one) => typeof one === "string") : []);
+}
+function rowsOf(text) {
+  const rows = /* @__PURE__ */ new Map();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return rows;
+  }
+  const sessions = typeof parsed === "object" && parsed !== null ? parsed.sessions : void 0;
+  if (typeof sessions !== "object" || sessions === null || Array.isArray(sessions)) return rows;
+  for (const [session, agents] of Object.entries(sessions)) {
+    if (typeof agents !== "object" || agents === null || Array.isArray(agents)) continue;
+    const inner = /* @__PURE__ */ new Map();
+    for (const [agent, row] of Object.entries(agents)) if (typeof row === "object" && row !== null && !Array.isArray(row)) inner.set(agent, row);
+    rows.set(session, inner);
+  }
+  return rows;
+}
+var codeOf2 = (error62) => error62?.code;
+var pause = () => new Promise((resolve5) => setTimeout(resolve5, 5));
+var FileOnce = class {
+  folder;
+  busyMs;
+  now;
+  readText;
+  constructor(options) {
+    this.folder = options.folder;
+    this.busyMs = options.busyMs ?? ONCE_BUSY_MS;
+    this.now = options.now ?? (() => Date.now());
+    this.readText = options.readText ?? ((path) => readFile2(path, "utf8"));
+  }
+  /** Marks these ids in the agent's row and returns, of each list, the ones it did not hold before. */
+  async claim(key, ask) {
+    if (ask.seen.length === 0 && ask.named.length === 0) return { seen: /* @__PURE__ */ new Set(), named: /* @__PURE__ */ new Set() };
+    return this.locked(async () => {
+      const rows = await this.read();
+      if (rows === void 0) return { seen: new Set(ask.seen), named: new Set(ask.named) };
+      const row = rows.get(key.session)?.get(key.agent);
+      const seenBefore = idsOf(row?.seen);
+      const namedBefore = idsOf(row?.named);
+      const seen = new Set(ask.seen.filter((id) => !seenBefore.has(id)));
+      const named = new Set(ask.named.filter((id) => !namedBefore.has(id)));
+      if (seen.size === 0 && named.size === 0) return { seen, named };
+      const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
+      agents.set(key.agent, { seen: [...seenBefore, ...seen], named: [...namedBefore, ...named], updated: new Date(this.now()).toISOString() });
+      rows.set(key.session, agents);
+      await this.write(rows, key).catch(() => void 0);
+      return { seen, named };
+    }, () => ({ seen: new Set(ask.seen), named: new Set(ask.named) }));
+  }
+  /**
+   * Drops the main conversation's row of this session, which a start with a rebuilt context does (S10, S11). The server
+   * never asks it for an empty session, which keeps no once (How line 8). Any failure throws; the start says so in one
+   * line and keeps its own text.
+   */
+  async clearMain(session) {
+    if (await this.nothingToClear(session)) return;
+    await this.locked(
+      async () => {
+        const rows = await this.read();
+        if (rows === void 0) throw new Error(`the once record ${this.path(FILE)} cannot be read`);
+        const agents = rows.get(session);
+        if (agents === void 0 || !agents.delete("")) return;
+        if (agents.size === 0) rows.delete(session);
+        await this.write(rows);
+      },
+      (reason) => {
+        throw new Error(`the once record's lock could not be taken (${reason})`);
+      }
+    );
+  }
+  /**
+   * Whether a clear finds nothing to clear before it locks (gate G2): no record, or a record it can read and parse that
+   * holds no main row of this session. A record it cannot read or parse takes the locked path, as before.
+   */
+  async nothingToClear(session) {
+    let text;
+    try {
+      text = await this.readText(this.path(FILE));
+    } catch (error62) {
+      return codeOf2(error62) === "ENOENT" || codeOf2(error62) === "ENOTDIR";
+    }
+    try {
+      const stored = JSON.parse(text)?.sessions;
+      if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return false;
+    } catch {
+      return false;
+    }
+    const rows = rowsOf(text);
+    return rows.get(session)?.has("") !== true;
+  }
+  path(name) {
+    return join3(this.folder, name);
+  }
+  /** The record's rows: none for a missing or damaged file, undefined for one that cannot be read. */
+  async read() {
+    try {
+      return rowsOf(await this.readText(this.path(FILE)));
+    } catch (error62) {
+      return codeOf2(error62) === "ENOENT" ? /* @__PURE__ */ new Map() : void 0;
+    }
+  }
+  /**
+   * Writes the record through a temp file and a rename, dropping every row older than a day except the one this write
+   * changes: a long-lived agent gets one repeated block at most, and a session's row never stays for good.
+   */
+  async write(rows, keep) {
+    const cut = this.now() - ROW_MS;
+    const sessions = {};
+    for (const [session, agents] of rows) {
+      const inner = {};
+      for (const [agent, row] of agents) {
+        const updated = typeof row.updated === "string" ? Date.parse(row.updated) : Number.NaN;
+        const kept = keep !== void 0 && keep.session === session && keep.agent === agent;
+        if (kept || updated >= cut) inner[agent] = row;
+      }
+      if (Object.keys(inner).length > 0) sessions[session] = inner;
+    }
+    const temp = this.path(`${FILE}.${process.pid}.tmp`);
+    try {
+      await writeFile(temp, `${JSON.stringify({ formatVersion: ONCE_FORMAT, sessions }, null, 2)}
+`, "utf8");
+      await rename(temp, this.path(FILE));
+    } finally {
+      await rm(temp, { force: true }).catch(() => void 0);
+    }
+  }
+  /**
+   * Runs run while holding the record's lock, the shape of FileStore's own lock (src/store.ts, withLock) and not imported:
+   * that one is private and keyed to the store root, while this record is shared by every store the user has. Only an
+   * open that created the lock file proceeds; a lock older than twice the budget is removed as left by a writer that
+   * stopped, and one that cannot be removed is waited on like a held one. Only an EEXIST of that open is another
+   * call holding it (FileStore's `contended`): past the budget with one seen, the call throws OnceBusyError (S36). A lock
+   * that cannot be taken with no holder seen (a folder that cannot be made or written) is a failed record: run never
+   * runs and `failed` answers, so a claim delivers and records nothing (How line 14).
+   */
+  async locked(run, failed) {
+    const lock = this.path(LOCK);
+    const deadline = Date.now() + this.busyMs;
+    let contended = false;
+    let last;
+    for (; ; ) {
+      let handle;
+      try {
+        await mkdir(this.folder, { recursive: true });
+        handle = await open2(lock, "wx");
+      } catch (error62) {
+        last = error62;
+        const code = codeOf2(error62);
+        if (code === "EEXIST" && error62.path === lock) {
+          contended = true;
+          if (await this.removedIfStale(lock)) continue;
+        } else if (!["ENOENT", "EPERM", "EACCES", "EBUSY"].includes(code ?? "")) break;
+        if (Date.now() >= deadline) break;
+        await pause();
+        continue;
+      }
+      await handle.close().catch(() => void 0);
+      try {
+        return await run();
+      } finally {
+        await rm(lock, { force: true }).catch(() => void 0);
+      }
+    }
+    if (contended) throw new OnceBusyError(lock, this.busyMs);
+    return failed(last instanceof Error ? last.message : String(last));
+  }
+  /**
+   * Removes a lock older than twice the budget, whose holder stopped without releasing it; true only when it is gone, so
+   * a stale lock the rm cannot remove is waited on like a held one, with the pause and the deadline (E at gate 3).
+   */
+  async removedIfStale(lock) {
+    try {
+      if (Date.now() - (await stat2(lock)).mtimeMs <= 2 * this.busyMs) return false;
+    } catch (error62) {
+      return codeOf2(error62) === "ENOENT";
+    }
+    try {
+      await rm(lock, { force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
+function onceFolder(home) {
+  return join3(home, ".neocortex", "once");
 }
 
 // src/server.ts
@@ -45399,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.8",
+  version: "0.5.9",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -45617,9 +46076,13 @@ function linkProblem(kind, source, target) {
   }
   if (target.enforced) return `overrides: ${shortId(target.id)} "${shownCut(target.title, 80)}" is enforced and cannot be overridden`;
   if (narrower(target, source)) {
-    return `overrides: ${shortId(target.id)} is more specific than this memory; change or delete the more specific one instead`;
+    return `overrides: ${shortId(target.id)} is more specific than this memory; ${changeable(target, source) ? "change or delete" : "delete"} the more specific one instead`;
   }
   return null;
+}
+function changeable(target, source) {
+  const changed = { ...target, appliesWhen: source.appliesWhen };
+  return !narrower(changed, source) && conditionProblems(changed, target, [], []).length === 0;
 }
 function narrower(a, b) {
   if (a.scope.kind !== b.scope.kind) return a.scope.kind === "project";
@@ -45667,26 +46130,57 @@ function validateLinks(memory, existing) {
 var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)})`;
 var CONDITION_TEXT = {
   /**
-   * T1 since #441: a rule takes inRepo and labels, and files wait for #434. A save of a rule with files meets T3 below,
-   * as every memory does; this text is for a hand-written files part an update keeps while it makes the memory a rule,
-   * also when the update changes the condition's other parts (#439, finding F3).
+   * T1 since #441: a rule takes inRepo and labels, and since #434 a new user rule delivered at edit takes files. This text
+   * is for a hand-written files part an update keeps while it makes the memory a rule, also when the update changes the
+   * condition's other parts (#439, finding F3); story B lifts it (S56).
    */
-  becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, and a file condition is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
+  becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, which is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
   /**
-   * T2 on a save: an exception takes inRepo since #443, and labels and files wait (exceptionPlaced). inRepo alone is
-   * named as a way out only where it would pass (repoWayOut; #443 review finding F1). existing: the loaded memories,
-   * as validateLinks takes them; left out, no way out is named, which is never false.
+   * T2 on a save: an exception takes inRepo since #443, and labels and files wait (exceptionPlaced). Each way out is
+   * named only where it would pass (#443 review finding F1; #434 How line 17): leaving them out, or inRepo alone.
+   * existing: the loaded memories, as validateLinks takes them; left out, no way out is named, which is never false.
    */
-  override: (written, existing = []) => `appliesWhen: labels or files are not possible yet on a memory with overrides; leave them out${repoWayOut(written, existing) ? ", inRepo alone is possible" : ""}`,
+  override: (written, existing = []) => {
+    const ways = [leaveOutWayOut(written, existing) ? "leave them out" : "", repoWayOut(written, existing) ? "inRepo alone is possible" : ""].filter((way) => way !== "");
+    return `appliesWhen: labels or files are not possible yet on a memory with overrides${ways.length === 0 ? "" : `; ${ways.join(", ")}`}`;
+  },
   /**
    * T2 on an update that sets, changes or removes the condition of a memory with overrides before or after, where that
    * condition, before or after, has labels or files (#443 point 3).
    */
   overrideChanged: "appliesWhen: on a memory with overrides, labels or files cannot be set, changed or removed yet; leave appliesWhen out of this call, and change such a condition only in a call of its own while the memory has no overrides",
-  /** T2 on an update that gives a memory whose condition has labels or files overrides; inRepo as in override (F1). */
-  becomesOverride: (written, existing = []) => `overrides: a memory with labels or files in its condition cannot override another yet; first change its appliesWhen to null${repoWayOut(written, existing) ? " or to inRepo alone" : ""}, then set overrides`,
-  /** T3. */
-  files: "appliesWhen: a file condition (files) is not possible yet; leave files out",
+  /**
+   * T2 on an update that gives a memory whose condition has labels or files overrides; each way out only where it passes
+   * (#434 How line 17): a rule's file part cannot be dropped until story B, so for it neither is named. stored: the
+   * record the update changes.
+   */
+  becomesOverride: (written, existing = [], stored) => {
+    const twoSteps = (condition) => stored !== void 0 && conditionProblems({ ...stored, appliesWhen: condition }, stored, [], existing).length === 0 && wayPasses({ ...written, appliesWhen: condition }, void 0, existing);
+    const ways = [twoSteps(void 0) ? "null" : "", written.scope.kind === "user" && twoSteps({ inRepo: true }) ? "inRepo alone" : ""].filter((way) => way !== "");
+    return `overrides: a memory with labels or files in its condition cannot override another yet${ways.length === 0 ? "" : `; first change its appliesWhen to ${ways.join(" or to ")}, then set overrides`}`;
+  },
+  // T3 (#434). Every way out a T3 text names is a call conditionProblems and the link check pass with the memory's other
+  // fields as the call gives them (review F2, memory c2390ded); filesProblems and conditionProblems derive each flag by
+  // running that call (wayPasses), and a text with none names no call.
+  /** A file condition comes only with delivery edit, lastingly (design-scopes 2.4): with delivery edit, or without files. */
+  filesDelivery: (ways) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList([ways.edit, "save it with delivery edit"], [ways.without, "leave files out"])}`,
+  /** An update that moves the delivery of a memory with a file condition away from edit (S22). */
+  filesDeliveryKept: (kept) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList([kept, "leave delivery as it is"])}`,
+  /** A project memory's patterns are story B's (S56); the same save in user scope, which applies in every project. */
+  filesProject: (user) => `appliesWhen: file patterns on a project memory are not possible yet${user ? "; a user memory takes them, and applies in every project, so ask the user before saving it in user scope" : ""}`,
+  /** A pattern that names a folder is story B's (S56); kinds: the kind form, named only when the call with it passes. */
+  filesFolder: (patterns, kinds) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "names" : "name"} a folder, which is not possible yet; a pattern for a kind of file is, with no slash or starting with **/` + (kinds === void 0 ? "" : `, such as ${kinds.map(shownText).join(", ")}`),
+  /** A pattern no file can match (S40, review F1); it names how a pattern is written, no call. */
+  filesUnusable: (patterns) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} cannot match a file: close every [ and {, end each with a file name rather than / or a backslash, and name no empty, . or .. folder`,
+  /**
+   * A backslash (#434 How line 14); slashed: the forward-slash form, or its kind form when that names a folder, named
+   * only when the call with it passes.
+   */
+  filesBackslash: (patterns, slashed) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "holds" : "hold"} a backslash, which a file pattern does not take` + (slashed === void 0 ? "" : `; write ${patterns.length === 1 ? "it" : "them"} with forward slashes, such as ${slashed.map(shownText).join(", ")}`),
+  /** An update of a saved memory's patterns (S56, #434 How line 15): they stay as they are until story B. */
+  filesChanged: (ways) => `appliesWhen: the file patterns of a saved memory cannot be set, changed or removed yet${wayList([ways.leave, "leave files as they are"], [ways.renew, "delete the memory and save a new one with the patterns this call gives"])}`,
+  /** A scope move of a memory with a file condition (S56). */
+  filesMoved: (kept) => `appliesWhen: a memory with file patterns cannot move to another scope yet${wayList([kept, "leave scope as it is"])}`,
   /** The project reason (design-scopes 2.4). */
   project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
   /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
@@ -45694,12 +46188,55 @@ var CONDITION_TEXT = {
 };
 function repoWayOut(written, existing) {
   if (written.scope.kind !== "user" || written.overrides.length === 0) return false;
+  return wayPasses({ ...written, appliesWhen: { inRepo: true } }, void 0, existing);
+}
+function leaveOutWayOut(written, existing) {
+  if (written.overrides.length === 0) return false;
+  const repo = canonicalCondition(written.appliesWhen)?.inRepo === true;
+  return wayPasses({ ...written, appliesWhen: repo ? { inRepo: true } : void 0 }, void 0, existing);
+}
+function wayPasses(changed, stored, existing) {
+  if (conditionProblems(changed, stored, [], existing).length > 0) return false;
   const byId = new Map(existing.map((memory) => [memory.id, memory]));
-  const repoOnly = { ...written, appliesWhen: { inRepo: true } };
-  return written.overrides.every((id) => {
+  return changed.overrides.every((id) => {
     const target = byId.get(id);
-    return target !== void 0 && linkProblem("overrides", repoOnly, target) === null;
+    return target !== void 0 && linkProblem("overrides", changed, target) === null;
   });
+}
+function kindOf(pattern) {
+  return `**/${pattern.replace(/^\/+/, "")}`;
+}
+function wayList(...ways) {
+  const named = ways.filter(([passes]) => passes).map(([, way]) => way);
+  return named.length === 0 ? "" : `; ${named.join(", or ")}`;
+}
+function withFiles(memory, patterns) {
+  const { files: _files, ...rest } = canonicalCondition(memory.appliesWhen) ?? {};
+  return { ...memory, appliesWhen: canonicalCondition({ ...rest, ...patterns === void 0 ? {} : { files: [...patterns] } }) };
+}
+function filesProblems(written, files, existing) {
+  const passes = (changed) => wayPasses(changed, void 0, existing);
+  const problems = [];
+  if (written.delivery !== "edit") problems.push(CONDITION_TEXT.filesDelivery({ edit: passes({ ...written, delivery: "edit" }), without: passes(withFiles(written, void 0)) }));
+  if (written.scope.kind === "project") problems.push(CONDITION_TEXT.filesProject(passes({ ...written, scope: USER })));
+  const backslashed = files.filter((pattern) => pattern.includes("\\"));
+  if (backslashed.length > 0) {
+    const slashedOf = (pattern) => {
+      const slashed = pattern.replaceAll("\\", "/");
+      return patternKind(slashed) === "folder" ? kindOf(slashed) : slashed;
+    };
+    const named = files.map((pattern) => pattern.includes("\\") ? slashedOf(pattern) : pattern);
+    problems.push(CONDITION_TEXT.filesBackslash(backslashed, passes(withFiles(written, named)) ? backslashed.map(slashedOf) : void 0));
+  }
+  const rest = files.filter((pattern) => !pattern.includes("\\"));
+  const unusable = rest.filter((pattern) => patternKind(pattern) === "unusable");
+  if (unusable.length > 0) problems.push(CONDITION_TEXT.filesUnusable(unusable));
+  const folders = rest.filter((pattern) => patternKind(pattern) === "folder");
+  if (folders.length > 0) {
+    const kinds = files.map((pattern) => folders.includes(pattern) ? kindOf(pattern) : pattern);
+    problems.push(CONDITION_TEXT.filesFolder(folders, passes(withFiles(written, kinds)) ? folders.map(kindOf) : void 0));
+  }
+  return problems;
 }
 function exceptionPlaced(condition) {
   return condition === void 0 || condition.labels === void 0 && condition.files === void 0;
@@ -45712,7 +46249,7 @@ function conditionProblems(written, stored, current, existing) {
   if (stored === void 0) {
     if (after === void 0) return problems;
     if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, existing));
-    if (after.files !== void 0) problems.push(CONDITION_TEXT.files);
+    if (after.files !== void 0) problems.push(...filesProblems(written, after.files, existing));
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
     return problems;
   }
@@ -45721,8 +46258,18 @@ function conditionProblems(written, stored, current, existing) {
   if (filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
   const overriding = stored.overrides.length > 0 || written.overrides.length > 0;
   if (changed && overriding && !(exceptionPlaced(before) && exceptionPlaced(after))) problems.push(CONDITION_TEXT.overrideChanged);
-  if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing));
-  if (after?.files !== void 0 && !sameCondition({ files: before?.files }, { files: after.files })) problems.push(CONDITION_TEXT.files);
+  if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing, stored));
+  const filesChanged = !sameCondition({ files: before?.files }, { files: after?.files });
+  if (filesChanged && (isRule(stored) || isRule(written) || after?.files !== void 0)) {
+    const leave = wayPasses(withFiles(written, before?.files), stored, existing);
+    problems.push(CONDITION_TEXT.filesChanged({ leave, renew: wayPasses(written, void 0, existing) }));
+  }
+  if (filed && !filesChanged && written.delivery !== stored.delivery && written.delivery !== "edit") {
+    problems.push(CONDITION_TEXT.filesDeliveryKept(wayPasses({ ...written, delivery: stored.delivery }, stored, existing)));
+  }
+  if ((filed || before?.files !== void 0) && written.scope.kind !== stored.scope.kind) {
+    problems.push(CONDITION_TEXT.filesMoved(wayPasses({ ...written, scope: stored.scope }, stored, existing)));
+  }
   if (written.scope.kind === "project" && placed && (changed || stored.scope.kind !== "project")) problems.push(CONDITION_TEXT.project);
   if (changed) {
     for (const by of current) {
@@ -46001,13 +46548,16 @@ var PLACE_TEXT = {
   folderFirstVisit: `First visit: this folder has no context labels yet. Propose at most ${PROPOSED_MAX}, from the folder's path, the file types and any README, reusing names from list_labels. Tell the user what you propose and why, then call set_context_labels with confirmed false; set confirmed true only for a label the user confirms. If this folder was renamed or moved, its earlier labels and memories stayed under the old path and do not load here. Skip this when no user can answer in this session, such as a claude -p run.`,
   updateWarning: (format) => `NeoCortex on this machine cannot read the context labels of this place: they were written by a newer NeoCortex (format ${format}). Update NeoCortex on this machine.`
 };
+function onceResetNotice(reason) {
+  return `WARNING: NeoCortex could not reset which rules for a kind of file this conversation already has (${truncateReason(reason, 120)}), so such a rule may not arrive again at a read or a search in this conversation. Say so before answering.`;
+}
 var NO_PLACE = { firstVisit: false, unsorted: false };
 async function loadPlace(places, session) {
   const place = session.place;
-  const stateOf = (read, problems) => place.kind === "project" ? { kind: "project", place, read, problems } : { kind: "folder", place, read, problems };
+  const stateOf = (read2, problems) => place.kind === "project" ? { kind: "project", place, read: read2, problems } : { kind: "folder", place, read: read2, problems };
   try {
-    const { read, problems } = await places.readPlace(placeRefOf(place));
-    return stateOf(read, problems);
+    const { read: read2, problems } = await places.readPlace(placeRefOf(place));
+    return stateOf(read2, problems);
   } catch (error62) {
     const problem = { file: "the place area", reason: `could not be read (${error62 instanceof Error ? error62.message : String(error62)})` };
     return stateOf({ state: "unreadable", problem, area: true }, [problem]);
@@ -46028,20 +46578,20 @@ async function visitPlace(places, session, now) {
 }
 function placeLine(state) {
   if (state === void 0) return null;
-  const { read } = state;
+  const { read: read2 } = state;
   let labels;
-  switch (read.state) {
+  switch (read2.state) {
     case "none":
       labels = PLACE_TEXT.noRecord;
       break;
     case "stored":
-      labels = labelList(read.stored.record.labels);
+      labels = labelList(read2.stored.record.labels);
       break;
     case "unreadable":
-      labels = read.problem.newerFormat === void 0 ? PLACE_TEXT.unreadable : PLACE_TEXT.newer(read.problem.newerFormat);
+      labels = read2.problem.newerFormat === void 0 ? PLACE_TEXT.unreadable : PLACE_TEXT.newer(read2.problem.newerFormat);
       break;
     default:
-      throw new Error(`unknown place state ${JSON.stringify(read)}`);
+      throw new Error(`unknown place state ${JSON.stringify(read2)}`);
   }
   return state.kind === "project" ? PLACE_TEXT.line(labels) : PLACE_TEXT.folderLine(state.place.key, labels);
 }
@@ -46194,6 +46744,55 @@ function refreshContext(input2, place, proposals) {
   const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true, proposals });
   return [...index, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
 }
+var NO_FILE = { kind: "no-file" };
+var EVERY_EDIT = { kind: "class", matched: /* @__PURE__ */ new Set() };
+function editFiles(memory) {
+  const files = canonicalCondition(memory.appliesWhen)?.files;
+  if (files === void 0) return { state: "none" };
+  const kinds = files.map(patternKind);
+  if (memory.scope.kind === "project" || kinds.includes("folder")) return { state: "unjudged", patterns: files };
+  return { state: "judged", usable: files.filter((_, i) => kinds[i] === "kind"), unusable: files.filter((_, i) => kinds[i] === "unusable") };
+}
+function arrivesAtEdit(memory, edit) {
+  const files = editFiles(memory);
+  if (files.state !== "judged" || edit.kind === "no-file") return true;
+  return edit.kind === "file" ? files.usable.some((pattern) => patternMatches(pattern, edit.path)) : edit.matched.has(memory.id);
+}
+function fileRulesAt(active, edit) {
+  return active.filter((memory) => memory.delivery === "edit" && editFiles(memory).state !== "none" && arrivesAtEdit(memory, edit)).map((memory) => memory.id);
+}
+var NO_TARGET = { kind: "no-target" };
+function claimAll(ask) {
+  return { seen: new Set(ask.seen), named: new Set(ask.named) };
+}
+function judgedBy(target) {
+  if (target.kind === "no-target") return null;
+  if (target.kind === "file") return { by: "file", path: target.path, seenFile: true };
+  const pattern = target.patterns.find(searchReadable);
+  if (pattern !== void 0) return searchNamesAKind(pattern) ? { by: "kind", pattern } : null;
+  return target.path === void 0 ? null : { by: "path", path: target.path, seenFile: target.pathIsFile === true };
+}
+function pathToLookAt(active, target) {
+  const judged = judgedBy(target);
+  if (judged === null || judged.by !== "path") return void 0;
+  const owed = active.some((memory) => memory.delivery === "edit" && (editFiles(memory).state === "unjudged" || hasUnusable(memory)));
+  return owed ? judged.path : void 0;
+}
+function arrivesAtRead(memory, target) {
+  const files = editFiles(memory);
+  const judged = judgedBy(target);
+  if (files.state === "none" || judged === null) return false;
+  if (files.state === "unjudged") return judged.by === "kind" || judged.seenFile;
+  return judged.by === "kind" ? searchMeets(judged.pattern, files.usable) : files.usable.some((pattern) => patternMatches(pattern, judged.path));
+}
+function readAsk(active, target) {
+  const rules = active.filter((memory) => memory.delivery === "edit");
+  const judged = judgedBy(target);
+  return {
+    seen: rules.filter((memory) => arrivesAtRead(memory, target)).map((memory) => memory.id),
+    named: judged === null || judged.by !== "kind" && !judged.seenFile ? [] : rules.filter(hasUnusable).map((memory) => memory.id)
+  };
+}
 function buildFull(kinds, active, byId, budget = HOOK_CAP, options = {}) {
   return fullFit(kinds, active, byId, budget, options).text;
 }
@@ -46202,10 +46801,12 @@ function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
   return { text: parts[0], notFit };
 }
 function fullParts(kinds, active, byId, budgets, options = {}) {
-  const warnings = [filesWarning(kinds, active), brokenWarning(kinds, options.problems ?? [])].filter((warning) => warning !== "");
+  const edit = options.edit ?? NO_FILE;
+  const warnings = [...filesWarnings(kinds, active, edit), brokenWarning(kinds, options.problems ?? [])].filter((warning) => warning !== "");
   const lead = warnings.join("\n\n");
   const rooms = budgets.map((budget, i) => i > 0 || lead === "" ? budget : Math.max(0, budget - lead.length - 2 * warnings.length));
-  const { parts, notFit, kept } = fullText(kinds, active, byId, rooms, options.priority ?? kinds);
+  const brought = kinds.includes("edit") ? active.filter((memory) => memory.delivery !== "edit" || arrivesAtEdit(memory, edit)) : active;
+  const { parts, notFit, kept } = fullText(kinds, brought, byId, rooms, options.priority ?? kinds);
   return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat() };
 }
 var MOMENT_FILLS = {
@@ -46216,17 +46817,65 @@ var MOMENT_FILLS = {
   edit: { kinds: ["edit"], budgets: [HOOK_CAP] }
 };
 var FILL_MOMENTS = Object.keys(MOMENT_FILLS);
-function deliveredAt(moment, active, byId, problems) {
+function deliveredAt(moment, active, byId, problems, edit = NO_FILE) {
   const { kinds, budgets, priority } = MOMENT_FILLS[moment];
-  return fullParts(kinds, active, byId, budgets, { problems, ...priority === void 0 ? {} : { priority } }).placed;
+  return fullParts(kinds, active, byId, budgets, { problems, edit, ...priority === void 0 ? {} : { priority } }).placed;
+}
+var EDIT_CASES_MAX = 1024;
+function editCases(memories) {
+  const patterns = /* @__PURE__ */ new Map();
+  for (const memory of memories) {
+    const files = memory.delivery === "edit" ? editFiles(memory) : void 0;
+    if (files?.state !== "judged" || files.usable.length === 0) continue;
+    patterns.set(memory.id, [.../* @__PURE__ */ new Set([...patterns.get(memory.id) ?? [], ...files.usable])]);
+  }
+  const ids = [...patterns.keys()];
+  const meets = ids.map((a) => ids.map((b) => a === b || patternsMayMeet(patterns.get(a), patterns.get(b))));
+  const cases = [];
+  const grow = (chosen, from) => {
+    cases.push({ kind: "class", matched: new Set(chosen.map((i) => ids[i])) });
+    if (cases.length > EDIT_CASES_MAX) return false;
+    for (let next = from; next < ids.length; next += 1) {
+      if (chosen.every((i) => meets[i][next]) && !grow([...chosen, next], next + 1)) return false;
+    }
+    return true;
+  };
+  return grow([], 0) ? cases : null;
+}
+function maybeNoRoom(memory, active, byId, problems) {
+  const warnings = [...filesWarnings(["edit"], active, EVERY_EDIT), brokenWarning(["edit"], problems)].filter((warning) => warning !== "");
+  const lead = warnings.length === 0 ? 0 : warnings.join("\n\n").length + 2 * warnings.length;
+  const room = HOOK_CAP - lead - WARNING_RESERVE;
+  const brought = (m) => {
+    const files = editFiles(m);
+    return files.state !== "judged" || files.usable.length > 0;
+  };
+  const cost = (one) => loadedText(one, byId).length + 2;
+  let used = 0;
+  for (const other of active) {
+    if (other === memory) break;
+    if (other.delivery === "edit" && brought(other)) used += cost(other);
+  }
+  return used + cost(memory) > room;
 }
 function pushedOut(before, after, problems, skip) {
   const moments = /* @__PURE__ */ new Map();
+  const push = (id, moment) => {
+    if (!skip.has(id) && !(moments.get(id) ?? []).includes(moment)) moments.set(id, [...moments.get(id) ?? [], moment]);
+  };
   for (const moment of FILL_MOMENTS) {
-    const was = deliveredAt(moment, before.active, before.byId, problems).map((m) => m.id);
-    if (was.length === 0) continue;
-    const now = new Set(deliveredAt(moment, after.active, after.byId, problems).map((m) => m.id));
-    for (const id of was) if (!now.has(id) && !skip.has(id)) moments.set(id, [...moments.get(id) ?? [], moment]);
+    const cases = moment === "edit" ? editCases([...before.active, ...after.active]) : [NO_FILE];
+    if (cases === null) {
+      const was = new Set(before.active.map((m) => m.id));
+      for (const memory of after.active) if (memory.delivery === "edit" && was.has(memory.id) && maybeNoRoom(memory, after.active, after.byId, problems)) push(memory.id, moment);
+      continue;
+    }
+    for (const edit of cases) {
+      const was = deliveredAt(moment, before.active, before.byId, problems, edit).map((m) => m.id);
+      if (was.length === 0) continue;
+      const now = new Set(deliveredAt(moment, after.active, after.byId, problems, edit).map((m) => m.id));
+      for (const id of was) if (!now.has(id)) push(id, moment);
+    }
   }
   return after.active.flatMap((memory) => {
     const at = moments.get(memory.id);
@@ -46236,7 +46885,11 @@ function pushedOut(before, after, problems, skip) {
 function standingAt(memory, active, byId, problems = []) {
   if (memory.delivery === "index" || memory.delivery === "on-demand" || !active.includes(memory)) return "loads";
   if (loadedText(memory, byId).length > HOOK_CAP) return "too-long";
-  return deliveredAt(memory.delivery, active, byId, problems).includes(memory) ? "loads" : "no-room";
+  if (memory.delivery !== "edit") return deliveredAt(memory.delivery, active, byId, problems).includes(memory) ? "loads" : "no-room";
+  const cases = editCases(active);
+  if (cases === null) return maybeNoRoom(memory, active, byId, problems) ? "no-room" : "loads";
+  const left = cases.some((edit) => arrivesAtEdit(memory, edit) && !deliveredAt("edit", active, byId, problems, edit).includes(memory));
+  return left ? "no-room" : "loads";
 }
 function fullText(kinds, active, byId, rooms, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
@@ -46343,18 +46996,84 @@ function fullBlock(memory, byId) {
   if (memory.body !== "") lines.push(memory.body);
   return lines.join("\n");
 }
-function filesWarning(kinds, active) {
-  if (!kinds.includes("edit")) return "";
-  const conditioned = active.filter(
-    (memory) => kinds.includes(memory.delivery) && memory.appliesWhen?.files !== void 0 && memory.appliesWhen.files.length > 0
-  );
-  if (conditioned.length === 0) return "";
-  const one = conditioned.length === 1;
-  const named = conditioned.slice(0, FILES_WARNING_NAMED).map((memory) => `"${shownCut(memory.title, 80)}" (${shortId(memory.id)})`);
-  const rest = conditioned.length > FILES_WARNING_NAMED ? ` and ${conditioned.length - FILES_WARNING_NAMED} more` : "";
-  return `WARNING: the edit hook passes no file path, so ${conditioned.length} NeoCortex ${one ? "memory" : "memories"} with a file condition ${one ? "loads" : "load"} at every edit: ${named.join(", ")}${rest}. Say so before answering.`;
+function filesWarnings(kinds, active, edit) {
+  if (!kinds.includes("edit")) return [];
+  const edits = active.filter((memory) => kinds.includes(memory.delivery));
+  const named = namedWithFiles;
+  if (edit.kind === "no-file") {
+    const conditioned = edits.filter((memory) => editFiles(memory).state !== "none");
+    if (conditioned.length === 0) return [];
+    const one = conditioned.length === 1;
+    return [
+      `WARNING: the edit hook passes no file path, so ${conditioned.length} NeoCortex ${one ? "memory" : "memories"} with a file condition ${one ? "loads" : "load"} at every edit: ${named(conditioned)}. Say so before answering.`
+    ];
+  }
+  const warnings = [];
+  const unjudged = edits.filter((memory) => editFiles(memory).state === "unjudged");
+  if (unjudged.length > 0) {
+    const one = unjudged.length === 1;
+    const patterns = (memory) => {
+      const files = editFiles(memory);
+      return files.state === "unjudged" ? files.patterns : [];
+    };
+    warnings.push(
+      `WARNING: ${unjudged.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot judge yet, a folder or a project memory's, so ${one ? "it loads" : "they load"} at every edit: ${named(unjudged, patterns)}. Say so before answering.`
+    );
+  }
+  const broken = edits.filter(hasUnusable);
+  if (broken.length > 0) warnings.push(unusableWarning(broken));
+  return warnings;
 }
 var FILES_WARNING_NAMED = 5;
+function namedWithFiles(memories, patterns = () => []) {
+  return memories.slice(0, FILES_WARNING_NAMED).map((memory) => {
+    const shown2 = patterns(memory);
+    return `"${shownCut(memory.title, 80)}" (${shortId(memory.id)})${shown2.length === 0 ? "" : ` ${shownCut(shown2.join(", "), 80)}`}`;
+  }).join(", ") + (memories.length > FILES_WARNING_NAMED ? ` and ${memories.length - FILES_WARNING_NAMED} more` : "");
+}
+function hasUnusable(memory) {
+  const files = editFiles(memory);
+  return files.state === "judged" && files.unusable.length > 0;
+}
+function unusableWarning(broken) {
+  const one = broken.length === 1;
+  const patterns = (memory) => {
+    const files = editFiles(memory);
+    return files.state === "judged" ? files.unusable : [];
+  };
+  return `WARNING: ${broken.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot use, which matches no file: ${namedWithFiles(broken, patterns)}. Say so before answering; ${one ? "the pattern needs" : "the patterns need"} a repair.`;
+}
+function readText(active, byId, problems, target, claim2 = claimAll(readAsk(active, target))) {
+  const warnings = [...readWarnings(active, target, claim2), brokenWarning(["edit"], problems)].filter((warning) => warning !== "");
+  const lead = warnings.join("\n\n");
+  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+  const brought = active.filter((memory) => memory.delivery === "edit" && claim2.seen.has(memory.id));
+  const { parts } = fullText(["edit"], brought, byId, [room], ["edit"]);
+  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+}
+function readWarnings(active, target, claim2) {
+  const rules = active.filter((memory) => memory.delivery === "edit");
+  if (target.kind === "no-target") {
+    return rules.some((memory) => editFiles(memory).state !== "none") ? [
+      "WARNING: the read hook passes no file path, so NeoCortex judged no rule for a kind of file at this read and none arrived; a later read that passes the file still brings them. Say so before answering."
+    ] : [];
+  }
+  const warnings = [];
+  const unjudged = rules.filter((memory) => claim2.seen.has(memory.id) && editFiles(memory).state === "unjudged");
+  if (unjudged.length > 0) {
+    const one = unjudged.length === 1;
+    const patterns = (memory) => {
+      const files = editFiles(memory);
+      return files.state === "unjudged" ? files.patterns : [];
+    };
+    warnings.push(
+      `WARNING: ${unjudged.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot judge yet, a folder or a project memory's, so ${one ? "it arrived" : "they arrived"} at this read or search without NeoCortex checking whether ${one ? "it is" : "they are"} about this file: ${namedWithFiles(unjudged, patterns)}. Say so before answering.`
+    );
+  }
+  const broken = rules.filter((memory) => claim2.named.has(memory.id) && hasUnusable(memory));
+  if (broken.length > 0) warnings.push(unusableWarning(broken));
+  return warnings;
+}
 function brokenWarning(kinds, problems) {
   const ours = problems.filter((p) => p.delivery !== void 0 && kinds.includes(p.delivery));
   if (ours.length === 0) return "";
@@ -46387,6 +47106,7 @@ function noticeLines(input2, options, crowd) {
   const lines = [];
   const warning = updateWarning(problems);
   if (warning !== "") lines.push(`- ${warning}`);
+  if (options.onceReset !== void 0) lines.push(`- ${onceResetNotice(options.onceReset)}`);
   const notice = newerNotice(newer);
   if (notice !== "") lines.push(`- ${notice}`);
   const visit2 = options.firstVisit && options.place !== void 0 ? firstVisitNotice(options.place) : "";
@@ -46444,10 +47164,10 @@ function statusEntry(problem) {
   const { record: record2, reason } = shownProblem(problem);
   return `- ${truncate(record2, 120)} (${truncateReason(reason, 80)})${problem.delivery === void 0 ? "" : STATUS_TEXT.moment(problem.delivery)}`;
 }
-function placeLabels(read) {
-  if (read.state === "none") return PLACE_TEXT.noRecord;
-  if (read.state === "stored") return labelList(read.stored.record.labels);
-  const { reason } = shownProblem(read.problem);
+function placeLabels(read2) {
+  if (read2.state === "none") return PLACE_TEXT.noRecord;
+  if (read2.state === "stored") return labelList(read2.stored.record.labels);
+  const { reason } = shownProblem(read2.problem);
   return `not read (${reason})`;
 }
 function problemGroup(title, problems) {
@@ -46542,30 +47262,60 @@ function contextFor(command, event, input2, extra) {
   const { problems } = input2;
   switch (command) {
     case "index":
-      return indexMoment(event, input2, extra.place, extra.proposals).parts[extra.part - 1] ?? "";
+      return indexMoment(event, input2, extra.place, extra.proposals, extra.onceReset).parts[extra.part - 1] ?? "";
     case "full":
       return startupFull(input2).parts[extra.part - 1] ?? "";
     case "startup":
-      return sessionContext(input2, indexOptions(command, event, extra.place, extra.proposals));
+      return sessionContext(input2, indexOptions(command, event, extra.place, extra.proposals, extra.onceReset));
     case "subagent":
       return buildFull(["subagent"], active, byId, HOOK_CAP, { problems });
     case "prompt":
       return event === "UserPromptSubmit" && looksLikeShortQuestion(extra.prompt) ? buildFull(["question", "prompt"], active, byId, HOOK_CAP, { problems, priority: ["prompt", "question"] }) : buildFull(["prompt"], active, byId, HOOK_CAP, { problems });
     case "edit":
-      return buildFull(["edit"], active, byId, HOOK_CAP, { problems });
+      return buildFull(["edit"], active, byId, HOOK_CAP, { problems, edit: extra.edit ?? NO_FILE });
+    case "read":
+    case "search":
+      return readText(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
   }
+}
+var NO_SEARCH = { kind: "search", patterns: [] };
+function given(value) {
+  const trimmed = value?.trim() ?? "";
+  return trimmed === "" || trimmed.includes("${") ? void 0 : trimmed;
+}
+function pathOf(path, folder) {
+  const slashed = path.replaceAll("\\", "/");
+  const absolute = /^(?:[A-Za-z]:)?\//.test(slashed);
+  return absolute || folder === void 0 ? slashed : `${folder.replaceAll("\\", "/").replace(/\/+$/, "")}/${slashed}`;
+}
+function readOf(file2, folder) {
+  const path = given(file2);
+  return path === void 0 ? NO_TARGET : { kind: "file", path: pathOf(path, folder) };
+}
+function searchOf(search, folder) {
+  const at = given(search.path);
+  const type = given(search.type);
+  const patterns = [given(search.glob), type === void 0 ? void 0 : `*.${type}`, given(search.pattern)].filter((one) => one !== void 0);
+  return { kind: "search", ...at === void 0 ? {} : { path: pathOf(at, folder) }, patterns };
+}
+function onceKeyOf(session, agent) {
+  return { session: given(session) ?? "", agent: given(agent) ?? "" };
+}
+function editOf(file2, folder) {
+  const path = given(file2);
+  return path === void 0 ? NO_FILE : { kind: "file", path: pathOf(path, folder) };
 }
 function startupFull(input2) {
   return fullParts(["startup"], input2.resolution.active, input2.resolution.byId, FULL_PART_BUDGETS, { problems: input2.problems });
 }
-function indexMoment(event, input2, place, proposals) {
-  return indexFill(input2, HOOK_CAP, indexOptions("index", event, place, proposals));
+function indexMoment(event, input2, place, proposals, onceReset) {
+  return indexFill(input2, HOOK_CAP, indexOptions("index", event, place, proposals, onceReset));
 }
-function indexOptions(command, event, place, proposals) {
+function indexOptions(command, event, place, proposals, onceReset) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
   const main = event === "SessionStart";
   const parts = eventsDelivering(command, event);
-  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts, crowded: main };
+  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts, crowded: main, ...onceReset === void 0 ? {} : { onceReset } };
 }
 function eventsDelivering(command, event) {
   return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
@@ -46589,7 +47339,7 @@ var HANDOFF_LABEL = "handoff";
 var LONG_PROMPT = "";
 var SHORT_QUESTION = "?";
 function placeMeasures(input2, place) {
-  const text = (command, event, prompt = "") => contextFor(command, event, input2, { prompt, part: 1, place });
+  const text = (command, event, prompt = "") => contextFor(command, event, input2, { prompt, part: 1, place, edit: EVERY_EDIT });
   const index = indexMoment("SessionStart", input2, place, { waiting: 0 });
   const full = startupFull(input2);
   return {
@@ -46606,7 +47356,7 @@ function nearPairs(active) {
   return pairsIn(active, wordCache(), () => true);
 }
 function deadDetail(resolution, problems) {
-  const dead = deadOf(resolution, idsOf([...resolution.byId.keys()], problems));
+  const dead = deadOf(resolution, idsOf2([...resolution.byId.keys()], problems));
   const byId = resolution.byId;
   const links = /* @__PURE__ */ new Map();
   for (const key of dead.dangling) {
@@ -46621,7 +47371,7 @@ function deadDetail(resolution, problems) {
   };
 }
 function deadWeight(resolution, problems) {
-  return countsOf(deadOf(resolution, idsOf([...resolution.byId.keys()], problems)));
+  return countsOf(deadOf(resolution, idsOf2([...resolution.byId.keys()], problems)));
 }
 function notLoaded(problems) {
   return Object.fromEntries(PROBLEM_GROUPS.map(({ key, holds }) => [key, problems.filter(holds).length]));
@@ -46631,7 +47381,7 @@ function repeatClusters(memories, labels) {
 }
 function storeFindings(load, scopes, labels, today) {
   const memories = load.memories.map((stored) => stored.memory);
-  const present = idsOf(
+  const present = idsOf2(
     memories.map((m) => m.id),
     load.problems
   );
@@ -46744,7 +47494,7 @@ function handoffKey(memory) {
 function countsOf(dead) {
   return { expired: dead.expired.size, danglingLinks: dead.dangling.size, olderHandoffs: dead.olderHandoffs.size };
 }
-function idsOf(memoryIds, problems) {
+function idsOf2(memoryIds, problems) {
   return /* @__PURE__ */ new Set([...memoryIds, ...problems.flatMap((problem) => problem.id === void 0 ? [] : [problem.id])]);
 }
 function placeSession(projectKey) {
@@ -46761,6 +47511,9 @@ function narrowestCondition(cluster, places, about) {
     if (memory.scope.kind === "project") keys.push(memory.scope.key);
     return new Set(keys);
   };
+  const filed = (memory) => (memory.appliesWhen?.files ?? []).some((pattern) => pattern.trim() !== "");
+  const evidenceMembers = about === void 0 ? cluster.members : cluster.members.filter((other) => other.id === about.id || other.scope.kind === "project" && roundedSimilarity(about, other) >= NEAR_IDENTICAL_MIN);
+  if (evidenceMembers.some(filed)) return { wait: "files" };
   const mine = about === void 0 ? new Set(cluster.projects) : evidenceFor(about);
   const distinct = mine;
   if (distinct.size < REPEAT_MIN_PLACES) return { wait: "few-places", places: distinct.size };
@@ -47088,7 +47841,7 @@ function isLater(a, b) {
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
   if (intent === void 0) return { refusal: { reason: "no-intent" } };
-  for (const id of idsOf2(proposal)) {
+  for (const id of idsOf3(proposal)) {
     if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
   }
   const recordOf2 = (id) => records.find((one) => recordId(one) === id);
@@ -47182,7 +47935,7 @@ function addTarget(targets, target) {
 function withoutTargets(targets, dropped) {
   return targets.filter((one) => !dropped.includes(one));
 }
-function idsOf2(proposal) {
+function idsOf3(proposal) {
   const intent = proposal.intent;
   const rests = proposal.rests.map((rest) => rest.id);
   if (intent === void 0) return rests;
@@ -47203,6 +47956,7 @@ function unique(ids) {
   return [...new Set(ids)];
 }
 function closureOf(proposal, plan) {
+  if (plan.stop !== void 0 && plan.cannot !== void 0) return { how: "cannot", cannot: plan.cannot };
   const refusal2 = plan.refusal;
   if (refusal2 === void 0) return void 0;
   const { reason } = refusal2;
@@ -47377,15 +48131,15 @@ var DREAM_INTERVAL_MS = 7 * 24 * 60 * 60 * 1e3;
 var DREAM_BUDGET_MS = 5e3;
 var DREAM_STALE_MS = 6e4;
 var DREAM_RECORD_FORMAT = "1.0";
-function runDue(read, now) {
-  switch (read.state) {
+function runDue(read2, now) {
+  switch (read2.state) {
     case "none":
     case "unreadable":
       return true;
     case "newerFormat":
       return false;
     case "record": {
-      const { outcome, started } = read.record;
+      const { outcome, started } = read2.record;
       const age = now.getTime() - Date.parse(started);
       if (outcome === "running") return age >= DREAM_STALE_MS;
       if (outcome === "failed") return true;
@@ -47537,10 +48291,10 @@ function applyRecordOf(id, applied2) {
 }
 function proposalLoadOf(records) {
   const load = { proposals: [], decisions: [], applies: [], problems: [] };
-  const read = records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
-  for (const one of read) {
+  const read2 = records.proposals.map((raw) => decode4(proposalSchema, raw, "proposal"));
+  for (const one of read2) {
     if ("problem" in one) load.problems.push(one.problem);
-    else if (read.filter((other) => ("value" in other ? other.value.id : other.problem.proposal) === one.value.id).length > 1) {
+    else if (read2.filter((other) => ("value" in other ? other.value.id : other.problem.proposal) === one.value.id).length > 1) {
       load.problems.push({ record: "proposal", proposal: one.value.id, reason: "two records with one proposal id" });
     } else load.proposals.push(one.value);
   }
@@ -47631,7 +48385,7 @@ How to save:
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
 5. Use scope project when it only applies in this repository, scope user when everywhere.
-6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving an existing memory to on-demand is a rebalance: the user's call, as the last paragraph says. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
+6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving a memory to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
 7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
@@ -47948,6 +48702,13 @@ function differingText(text, memory) {
   });
 }
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
+var FILES_MARK_MAX = 80;
+function filesWords(memory) {
+  const files = editFiles(memory);
+  if (files.state === "none") return "";
+  const words = conditionWords({ files: files.state === "unjudged" ? files.patterns : [...files.usable, ...files.unusable] });
+  return files.state === "unjudged" ? `${words}, not judged yet` : words;
+}
 var SWAP_MARK = " (another record of this memory)";
 var STANDING_TEXT = {
   // True in every place: no part of any moment holds more than one hook's cap.
@@ -47984,7 +48745,15 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
     const versions = [before, after].flatMap((memories) => memories.filter((m) => m.id === id));
     return versions.length > 0 && versions.every((m) => m.enforced);
   };
-  const who = (id, shown2) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(shown2?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}`;
+  const who = (id, shown2) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(shown2?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}${filesMark(id)}`;
+  const filesMark = (id) => {
+    const [was, will] = [beforeById.get(id), afterById.get(id)].map((memory) => memory === void 0 ? void 0 : filesWords(memory));
+    if (was === void 0 || will === void 0 || was === will) {
+      const one = will ?? was ?? "";
+      return one === "" ? "" : ` (${shownCut(one, FILES_MARK_MAX)})`;
+    }
+    return ` (${shownCut(was || "no files", FILES_MARK_MAX)} -> ${shownCut(will || "no files", FILES_MARK_MAX)})`;
+  };
   const titled = (change) => who(change.id, change.after.some(Boolean) ? afterById.get(change.id) : beforeById.get(change.id) ?? afterById.get(change.id));
   const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.swap === true ? SWAP_MARK : ""}${change.after.some(Boolean) ? size(change.id) : ""}`;
   const lines = [];
@@ -48088,9 +48857,11 @@ var LINK_IDS = external_exports.array(external_exports.string()).describe("Memor
 var CONDITION = external_exports.strictObject({
   inRepo: external_exports.literal(true).optional().describe("true: only in a session inside a git repository"),
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
-  files: external_exports.array(external_exports.string()).optional().describe("File globs; not possible yet")
+  files: external_exports.array(external_exports.string()).optional().describe(
+    "Patterns for one kind of file, such as **/*.bicep or *.md (no slash, or starting with **/, forward slashes only): the memory arrives when Claude writes or edits such a file, wherever it lies, and once per agent when it reads or searches for one. Needs delivery edit and user scope"
+  )
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository. Not possible yet: labels on a memory with overrides, and files; a project memory takes none, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: labels or files on a memory with overrides, a file pattern that names a folder, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -48100,7 +48871,7 @@ var SAVE_INPUT = {
   labels: external_exports.array(external_exports.string()).default([]),
   importance: external_exports.enum(IMPORTANCE).default("normal"),
   delivery: external_exports.enum(DELIVERIES).default("index").describe(
-    "When the full text reaches Claude: index (only the summary at the start; the field's default, for a memory that must fire on its own), startup, prompt, question, subagent, edit or on-demand (on-demand for reference memories and for any memory whose summary alone is not actionable; search_memories and get_memory still reach it)"
+    "When the full text reaches Claude: index (only the summary at the start; the field's default, for a memory that must fire on its own), startup, prompt, question, subagent, edit (with appliesWhen.files for a rule about one kind of file) or on-demand (on-demand for reference memories and for any memory whose summary alone is not actionable; search_memories and get_memory still reach it)"
   ),
   enforced: external_exports.boolean().default(false).describe("Enforced memories can never be overridden by another scope"),
   supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces everywhere"),
@@ -48167,7 +48938,7 @@ var NEAR_TEXT = {
 };
 var DREAM_PAIRS_MAX = 20;
 var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
-var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
 var TWIN_ANSWER = external_exports.literal("accept").describe("only accept writes; reject and keep-both change no memory, so call dream_decide for them");
@@ -48211,13 +48982,22 @@ var PROPOSAL_TEXT = {
     const what = shown2 === void 0 ? "a memory it counts in another place" : landed?.retired === shown2.id ? "it" : `memory ${shortId(shown2.id)}`;
     const cause = how === "deleted" ? `${what} was deleted after the accept` : how === "changed" ? `${what} changed after the accept` : shown2 === void 0 ? `${what} moved after the accept` : `${what} is no longer in ${shown2.scope.kind === "user" ? "user scope" : "this project"}`;
     const end = "it is closed and nothing more is written for it; a later Dreamer run may propose it again on the memories as they are now";
+    if (how === "cannot") return `your accept of this proposal is not applied: ${closure.cannot ?? ""}; it is closed and nothing more is written for it`;
     if (landed === void 0) return `your accept of this proposal is not applied: ${cause}; ${end}`;
     const [survivor, retired] = [shortId(landed.survivor), shortId(landed.retired)];
     const linked = link2 === "hidden" ? `memory ${survivor} carries the link that replaces memory ${retired}, which no longer loads, but` : link2 === "loads" ? `memory ${survivor} carries a supersedes link to memory ${retired}, which does not hide it, and` : `memory ${survivor} carries a supersedes link to memory ${retired}, but`;
     return `your accept of this proposal is applied only in part: ${linked} memory ${retired} is not deleted, because ${cause}; ${end}`;
   },
-  /** What dream_proposals adds to its next step while an accepted proposal is closed (#449). */
-  closedAccepts: (count2) => `${count2} accepted ${count2 === 1 ? "proposal is" : "proposals are"} closed: a memory ${count2 === 1 ? "it rests" : "they rest"} on changed, moved or was deleted after the accept. Tell the user, for each id under closedAccepts, that the accept was not applied, or not fully, and its reason; do not call dream_decide for it, since nothing more is written for it; a later Dreamer run may propose it again.`,
+  /**
+   * An accept the condition check refuses on the memories as they are (#434 review F3): its way out is the reject, a
+   * dream_decide call, never the update_memory way out the check's own text names (memory c2390ded).
+   */
+  cannot: (why) => `this proposal cannot be applied in this version: ${why}; nothing was written or recorded. Tell the user why, and if the user rejects it, record that with dream_decide, reject and the same id`,
+  /**
+   * What dream_proposals adds to its next step while an accepted proposal is closed (#449, #434 review F3). cannot: one
+   * listed is closed because this version cannot apply its writes, which no later run proposes again (#434 re-review).
+   */
+  closedAccepts: (count2, cannot) => `${count2} accepted ${count2 === 1 ? "proposal is" : "proposals are"} closed: a memory ${count2 === 1 ? "it rests" : "they rest"} on changed, moved or was deleted after the accept, or this version cannot apply ${count2 === 1 ? "its" : "their"} writes. Tell the user, for each id under closedAccepts, that the accept was not applied, or not fully, and its reason; do not call dream_decide for it, since nothing more is written for it; ` + (cannot ? "a later Dreamer run may propose again only one whose memory changed, moved or was deleted after the accept." : "a later Dreamer run may propose it again."),
   /** A write of an accept that met a record another session holds: the design's busy answer (C6, #387). */
   stepBusy: (id) => `memory ${id} is being written by another session, so this write was not made; try again, and call dream_decide with accept and the same id to finish it`,
   /** What the second write of a supersede leaves behind when it is refused: the first one stands. */
@@ -48299,14 +49079,14 @@ function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   const newId = deps.newId ?? randomUUID2;
   const hereNow = () => deps.here !== void 0 ? Promise.resolve(deps.here) : readHere();
-  const hereFrom = (read) => {
+  const hereFrom = (read2) => {
     const inRepo = deps.placeDir === void 0 ? "unknown" : insideRepo(deps.placeDir);
-    return read.state === "stored" ? { inRepo, labels: read.stored.record.labels.map((label) => label.name) } : { inRepo, labels: "unknown" };
+    return read2.state === "stored" ? { inRepo, labels: read2.stored.record.labels.map((label) => label.name) } : { inRepo, labels: "unknown" };
   };
   const readHere = async () => {
     try {
-      const { read } = await deps.places.readPlace(placeRefOf(deps.session.place));
-      return hereFrom(read);
+      const { read: read2 } = await deps.places.readPlace(placeRefOf(deps.session.place));
+      return hereFrom(read2);
     } catch {
       return { inRepo: deps.placeDir === void 0 ? "unknown" : insideRepo(deps.placeDir), labels: "unknown" };
     }
@@ -48319,6 +49099,7 @@ function createServer(deps) {
     () => void 0,
     () => void 0
   );
+  const claimed = (key, ask) => deps.once === void 0 || key.session === "" ? Promise.resolve(claimAll(ask)) : deps.once.claim(key, ask);
   let dreamStarted = false;
   const dreamOnce = (event) => {
     if (dreamStarted || deps.dream === void 0 || event === "SessionStart") return;
@@ -48355,12 +49136,12 @@ function createServer(deps) {
     let leftBehind = [];
     try {
       const reads = others.length === 0 ? [] : await reader.recordsAt(others);
-      for (const [n, read] of reads.entries()) {
-        if (read === void 0) continue;
-        if ("stored" in read ? compareFormats(read.stored.format, CURRENT_FORMAT) < 0 : unreadable(read.problem)) waiting.add(others[n].id);
+      for (const [n, read2] of reads.entries()) {
+        if (read2 === void 0) continue;
+        if ("stored" in read2 ? compareFormats(read2.stored.format, CURRENT_FORMAT) < 0 : unreadable(read2.problem)) waiting.add(others[n].id);
       }
       leftBehind = reads.flatMap(
-        (read) => read !== void 0 && "problem" in read && read.problem.text !== void 0 && read.problem.newerFormat === void 0 ? [read.problem] : []
+        (read2) => read2 !== void 0 && "problem" in read2 && read2.problem.text !== void 0 && read2.problem.newerFormat === void 0 ? [read2.problem] : []
       );
     } catch {
     }
@@ -48481,10 +49262,10 @@ function createServer(deps) {
     const { reason } = stop;
     return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "", reason === "twin" ? stop.held : void 0);
   };
-  const planOfAccept = async (proposal, given) => {
-    const ids = idsOf2(proposal);
+  const planOfAccept = async (proposal, given2) => {
+    const ids = idsOf3(proposal);
     const records = (await Promise.all(ids.map((id) => reader.recordsOf(id)))).flat();
-    const loaded = given ?? await reader.load(visibleScopes(deps.session));
+    const loaded = given2 ?? await reader.load(visibleScopes(deps.session));
     const existing = loaded.memories.map((stored) => stored.memory);
     const userScope = resolve4(
       existing.filter((memory) => memory.scope.kind === "user"),
@@ -48494,16 +49275,23 @@ function createServer(deps) {
     const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString(), userScope });
     if (plan.refusal !== void 0) return plan;
     const steps = plan.steps ?? [];
-    const errors = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
-    return errors.length === 0 ? { steps } : { stop: errors.join("; ") };
+    const current = resolve4(existing, deps.session, toLocalDate(now())).current;
+    const links = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
+    const conditions = steps.flatMap((step) => step.kind === "update" ? conditionProblems(step.memory, step.base.memory, current, existing) : []).map((one) => one.split("; ")[0]);
+    if (conditions.length > 0) return { stop: PROPOSAL_TEXT.cannot([...links, ...conditions].join("; ")), cannot: conditions.join("; ") };
+    return links.length === 0 ? { steps } : { stop: links.join("; ") };
   };
-  const acceptedVerdict = async (proposal, load2, given) => {
-    const memories = given ?? await reader.load(visibleScopes(deps.session));
+  const acceptedVerdict = async (proposal, load2, given2) => {
+    const memories = given2 ?? await reader.load(visibleScopes(deps.session));
     const plan = await planOfAccept(proposal, memories);
     const closure = closureOf(proposal, plan);
     if (closure === void 0) return { verdict: "open", plan };
     if (replacedAtAnyRevision(proposal, load2)) return { verdict: "replaced" };
-    return { verdict: "closed", text: PROPOSAL_TEXT.closedAccept(closure, closure.landed === void 0 ? "other" : linkStanding(memories, closure.landed.survivor, closure.landed.retired)) };
+    return {
+      verdict: "closed",
+      text: PROPOSAL_TEXT.closedAccept(closure, closure.landed === void 0 ? "other" : linkStanding(memories, closure.landed.survivor, closure.landed.retired)),
+      cannot: closure.how === "cannot"
+    };
   };
   const linkStanding = (loaded, survivor, id) => {
     const memories = loaded.memories.map((stored) => stored.memory);
@@ -48753,14 +49541,14 @@ function createServer(deps) {
   );
   const dreamReading = async () => {
     if (deps.dream === void 0) return void 0;
-    const read = await deps.dream.runs.read();
-    if (read.state === "none") return void 0;
-    if (read.state === "unreadable") {
-      const { reason } = read;
+    const read2 = await deps.dream.runs.read();
+    if (read2.state === "none") return void 0;
+    if (read2.state === "unreadable") {
+      const { reason } = read2;
       return { unreadable: reason };
     }
-    if (read.state === "newerFormat") return { newerFormat: read.format };
-    const { started, finished, outcome, created, stoppedAt } = read.record;
+    if (read2.state === "newerFormat") return { newerFormat: read2.format };
+    const { started, finished, outcome, created, stoppedAt } = read2.record;
     return { started, finished, outcome, created, stoppedAt };
   };
   server.registerTool(
@@ -48787,8 +49575,8 @@ function createServer(deps) {
         let evidence = /* @__PURE__ */ new Map();
         let labels = /* @__PURE__ */ new Map();
         try {
-          const read = deps.places === void 0 ? { places: [], problems: [] } : await deps.places.loadPlaces();
-          for (const record2 of read.places) {
+          const read2 = deps.places === void 0 ? { places: [], problems: [] } : await deps.places.loadPlaces();
+          for (const record2 of read2.places) {
             if (record2.record.place.kind !== "project") continue;
             const key = record2.record.place.key;
             labels = new Map([...labels, [key, record2.record.labels]]);
@@ -48877,21 +49665,23 @@ function createServer(deps) {
       const verdicts = await Promise.all(
         judged.flatMap((one) => {
           const proposal = one.state === "accepted" ? proposalsLoaded.proposals.find((candidate) => candidate.id === one.id) : void 0;
-          if (proposal === void 0) return one.state === "accepted" ? [Promise.resolve({ id: one.id, closed: void 0, replaced: false })] : [];
+          if (proposal === void 0) return one.state === "accepted" ? [Promise.resolve({ id: one.id, closed: void 0, replaced: false, cannot: false })] : [];
           return [
             acceptedVerdict(proposal, proposalsLoaded, view.loaded).then(
               (verdict) => ({
                 id: proposal.id,
                 closed: verdict.verdict === "closed" ? { id: proposal.id, kind: proposal.kind, reason: verdict.text } : void 0,
-                replaced: verdict.verdict === "replaced"
+                replaced: verdict.verdict === "replaced",
+                cannot: verdict.verdict === "closed" && verdict.cannot
               }),
-              () => ({ id: proposal.id, closed: void 0, replaced: false })
+              () => ({ id: proposal.id, closed: void 0, replaced: false, cannot: false })
             )
           ];
         })
       );
       const unfinished = verdicts.flatMap((one) => one.closed === void 0 && !one.replaced ? [one.id] : []);
       const closedAccepts = verdicts.flatMap((one) => one.closed === void 0 ? [] : [one.closed]);
+      const cannot = verdicts.some((one) => one.cannot);
       return ok({
         waiting: waiting.map((one) => ({
           id: one.id,
@@ -48908,7 +49698,7 @@ function createServer(deps) {
         ...closedAccepts.length > 0 ? { closedAccepts } : {},
         ...anyClosed ? { closed } : {},
         ...anyNotRead ? { notRead } : {},
-        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead, appliedUnreadable + appliedNewer > 0) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`) + (closedAccepts.length === 0 ? "" : ` ${PROPOSAL_TEXT.closedAccepts(closedAccepts.length)}`)
+        next: PROPOSAL_TEXT.next(closedFor("unreadable", "newerFormat") > 0, closedFor("answerUnreadable", "answerNewer") > 0, anyNotRead, appliedUnreadable + appliedNewer > 0) + (unfinished.length === 0 ? "" : ` ${PROPOSAL_TEXT.unfinished(unfinished.length)}`) + (closedAccepts.length === 0 ? "" : ` ${PROPOSAL_TEXT.closedAccepts(closedAccepts.length, cannot)}`)
       });
     })
   );
@@ -48943,12 +49733,12 @@ function createServer(deps) {
     const unconfirmable = () => ruleAnswer(new RuleRefusedError({ error: RULE_TEXT.noLabelRule, tool: LABEL_TOOLS.ordinary }));
     try {
       return await guard.labelChange(async (check2) => {
-        const { read } = await deps.places.readPlace(place);
-        if (read.state === "unreadable") {
-          const { problem } = read;
+        const { read: read2 } = await deps.places.readPlace(place);
+        if (read2.state === "unreadable") {
+          const { problem } = read2;
           if (problem.newerFormat !== void 0) return fail(LABEL_TEXT.newer(problem.newerFormat));
           const { record: record2, reason } = shownProblem(problem);
-          return fail(read.area === true ? LABEL_TEXT.area(reason, record2) : LABEL_TEXT.unreadable(reason, record2));
+          return fail(read2.area === true ? LABEL_TEXT.area(reason, record2) : LABEL_TEXT.unreadable(reason, record2));
         }
         const identity = identityOf(deps.session.place);
         const updated = now().toISOString();
@@ -48959,21 +49749,21 @@ function createServer(deps) {
           repo: stored?.repo ?? identity.repo,
           updated
         });
-        const previous = read.state === "stored" ? read.stored.record.labels : null;
+        const previous = read2.state === "stored" ? read2.stored.record.labels : null;
         let affects;
-        if (read.state === "none") {
+        if (read2.state === "none") {
           if (confirmation !== null) return unconfirmable();
-        } else if (sameNames(read.stored.record.labels, normalized.labels)) {
+        } else if (sameNames(read2.stored.record.labels, normalized.labels)) {
           if (confirmation !== null) return unconfirmable();
         } else {
-          const from = hereFrom(read);
+          const from = hereFrom(read2);
           const lines = await check2(from, { inRepo: from.inRepo, labels: normalized.labels.map((label) => label.name) }, confirmation);
           if (confirmation !== null) affects = lines;
         }
         try {
-          if (read.state === "none") await deps.places.createPlace(next(null));
-          else if (!sameLabels(read.stored.record.labels, normalized.labels) || filledFromVisit(read.stored.record, identity, updated) !== null) {
-            await deps.places.updatePlace(next(read.stored.record), read.stored);
+          if (read2.state === "none") await deps.places.createPlace(next(null));
+          else if (!sameLabels(read2.stored.record.labels, normalized.labels) || filledFromVisit(read2.stored.record, identity, updated) !== null) {
+            await deps.places.updatePlace(next(read2.stored.record), read2.stored);
           }
         } catch (error62) {
           const refused = await labelRefusal(error62, deps.places, place);
@@ -49014,15 +49804,49 @@ function createServer(deps) {
         // guessed event would make the hook deliver nothing without a word (#272). Anything else is a tool error.
         event: external_exports.enum(HOOK_EVENTS),
         part: external_exports.coerce.number().int().min(1).default(1),
-        prompt: external_exports.string().default("")
+        prompt: external_exports.string().default(""),
+        // #434: the file a write or edit names (tool_input.file_path), read at the edit moment only (editOf); #454: the
+        // file a Read names, read at the read moment only (readOf).
+        file: external_exports.string().optional(),
+        // #454: what a Grep or a Glob names, read at the search moment only (searchOf): its folder or file, a Grep's
+        // `glob` and `type` (point 13) and a Glob's `pattern`. A Grep's own `pattern` is a regex, which no entry passes.
+        path: external_exports.string().optional(),
+        glob: external_exports.string().optional(),
+        type: external_exports.string().optional(),
+        pattern: external_exports.string().optional(),
+        // #454: whose once a read, a search or an edit reads and writes, and which session a start clears
+        // (session_id and agent_id); they decide delivery, never what a condition sees.
+        session: external_exports.string().optional(),
+        agent: external_exports.string().optional()
       }
     },
-    async ({ moment, event, part, prompt }) => {
+    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent }) => {
       try {
+        const key = onceKeyOf(session, agent);
+        let onceReset;
+        if (event === "SessionStart" && deps.once !== void 0 && key.session !== "") {
+          await deps.once.clearMain(key.session).catch((error62) => {
+            onceReset = message(error62);
+          });
+        }
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
         const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), PLACE_MOMENTS.includes(moment) && part === 1);
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
-        const text = contextFor(moment, event, delivery, { prompt, part, place, proposals: proposalNotice });
+        const edit = moment === "edit" ? editOf(file2, deps.placeDir) : void 0;
+        const named = moment === "read" ? readOf(file2, deps.placeDir) : moment === "search" ? searchOf({ path, glob, type, pattern }, deps.placeDir) : void 0;
+        const look = named?.kind === "search" ? pathToLookAt(delivery.resolution.active, named) : void 0;
+        const target = named?.kind === "search" && look !== void 0 ? { ...named, pathIsFile: isFile(look) } : named;
+        const read2 = target === void 0 ? void 0 : { target, claim: await claimed(key, readAsk(delivery.resolution.active, target)) };
+        const text = contextFor(moment, event, delivery, {
+          prompt,
+          part,
+          place,
+          proposals: proposalNotice,
+          ...edit === void 0 ? {} : { edit },
+          ...read2 === void 0 ? {} : { read: read2 },
+          ...onceReset === void 0 ? {} : { onceReset }
+        });
+        if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
         dreamOnce(event);
         return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place)) }] };
       } catch (error62) {
@@ -49539,9 +50363,9 @@ async function labelRefusal(error62, places, place) {
   if (error62 instanceof AlreadyExistsError || error62 instanceof ConflictError && !error62.gone) {
     let current = "not readable now";
     try {
-      const { read } = await places.readPlace(place);
-      if (read.state === "stored") current = labelList(read.stored.record.labels);
-      else if (read.state === "none") current = labelList([]);
+      const { read: read2 } = await places.readPlace(place);
+      if (read2.state === "stored") current = labelList(read2.stored.record.labels);
+      else if (read2.state === "none") current = labelList([]);
     } catch {
     }
     return LABEL_TEXT.changed(current);
@@ -49660,9 +50484,9 @@ function message(error62) {
 var import_yaml4 = __toESM(require_dist(), 1);
 import { createHash as createHash5, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { link, lstat, mkdir, open as open2, readdir as readdir2, readFile as readFile2, rename, rm, rmdir, stat as stat2, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir as mkdir2, open as open3, readdir as readdir2, readFile as readFile3, rename as rename2, rm as rm2, rmdir, stat as stat3, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname as dirname2, join as join3, relative } from "node:path";
+import { dirname as dirname2, join as join4, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 var PLACES = PLACE_AREA;
 var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -49695,12 +50519,12 @@ function markerOf(text) {
 function userLockBase(warn = () => {
 }, account = userInfo, home = homedir) {
   try {
-    return join3(account().homedir, ".neocortex", "locks");
+    return join4(account().homedir, ".neocortex", "locks");
   } catch (error62) {
-    let fallback = join3(tmpdir(), "neocortex-locks");
+    let fallback = join4(tmpdir(), "neocortex-locks");
     try {
       const folder = home();
-      if (folder !== "") fallback = join3(folder, ".neocortex", "locks");
+      if (folder !== "") fallback = join4(folder, ".neocortex", "locks");
     } catch {
     }
     const reason = error62 instanceof Error ? error62.message : String(error62);
@@ -49729,13 +50553,13 @@ var FileStore = class {
     this.root = root2;
     this.registry = options.registry ?? REGISTRY;
     this.placeRegistry = options.placeRegistry ?? PLACE_REGISTRY;
-    this.lockBase = options.lockBase ?? join3(tmpdir(), "neocortex-locks");
+    this.lockBase = options.lockBase ?? join4(tmpdir(), "neocortex-locks");
     this.busyBudgetMs = options.busyBudgetMs ?? 2e3;
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
-    this.readListed = options.readListed ?? ((path) => readFile2(path, "utf8"));
-    this.lookUp = options.lookUp ?? ((path) => stat2(path));
-    this.readStored = options.readStored ?? ((path) => readFile2(path));
+    this.readListed = options.readListed ?? ((path) => readFile3(path, "utf8"));
+    this.lookUp = options.lookUp ?? ((path) => stat3(path));
+    this.readStored = options.readStored ?? ((path) => readFile3(path));
     this.copySeams = { linkFile: options.linkFile, renameFile: options.renameFile };
   }
   get location() {
@@ -49768,7 +50592,7 @@ var FileStore = class {
     await this.assertRoot();
     let entries;
     try {
-      entries = await readdir2(join3(this.root, "projects"), { withFileTypes: true });
+      entries = await readdir2(join4(this.root, "projects"), { withFileTypes: true });
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -49786,7 +50610,7 @@ var FileStore = class {
   async holdsRecord(parts) {
     let names;
     try {
-      names = await readdir2(join3(this.root, ...parts));
+      names = await readdir2(join4(this.root, ...parts));
     } catch (error62) {
       if (isNotFound(error62)) return false;
       throw error62;
@@ -49802,7 +50626,7 @@ var FileStore = class {
   async sweep() {
     await this.assertRoot();
     const current = currentOf(this.registry);
-    const markerBefore = markerOf(await this.readIfPresent(join3(this.root, MARKER_FILE)).catch(() => void 0)).marker;
+    const markerBefore = markerOf(await this.readIfPresent(join4(this.root, MARKER_FILE)).catch(() => void 0)).marker;
     if (compareFormats(markerBefore, current) >= 0) return { markerBefore, upgraded: 0, left: [], complete: true };
     const left = [];
     let upgraded = 0;
@@ -49814,7 +50638,7 @@ var FileStore = class {
       complete = false;
     }
     for (const scope of [USER, ...keys.map((key) => projectScope(parseProjectKey(key)))]) {
-      const folder = join3(this.root, ...foldersOf(scope));
+      const folder = join4(this.root, ...foldersOf(scope));
       let names;
       try {
         names = await readdir2(folder);
@@ -49826,7 +50650,7 @@ var FileStore = class {
         const id = name.slice(0, -".md".length);
         if (!name.toLowerCase().endsWith(".md") || !UUID_RE.test(id)) continue;
         try {
-          const outcome = await this.upgradeOne(join3(folder, name), scope, id, current);
+          const outcome = await this.upgradeOne(join4(folder, name), scope, id, current);
           if (outcome === "upgraded") upgraded += 1;
           else if (outcome !== "skipped") left.push({ scope, id, reason: outcome.left });
         } catch (error62) {
@@ -49841,7 +50665,7 @@ var FileStore = class {
   /** The record of the pass, read only (MemoryStore.sweepState); its left entries only while it is behind. */
   async sweepState() {
     await this.assertRoot();
-    const state = markerOf(await this.readIfPresent(join3(this.root, MARKER_FILE)));
+    const state = markerOf(await this.readIfPresent(join4(this.root, MARKER_FILE)));
     return compareFormats(state.marker, currentOf(this.registry)) >= 0 ? { marker: state.marker, left: [] } : state;
   }
   /**
@@ -49861,18 +50685,18 @@ var FileStore = class {
       const text = bytes.toString("utf8");
       const stored = carryThroughOf(text, this.registry);
       if (stored !== null && stored !== void 0 && compareFormats(stored.format, current) >= 0) return "skipped";
-      let read;
+      let read2;
       try {
-        read = readMemoryFile(text, { scope, id }, this.registry);
+        read2 = readMemoryFile(text, { scope, id }, this.registry);
       } catch (error62) {
         return { left: messageOf2(error62) };
       }
       try {
-        await this.keepCopy(read.format, scope, id, bytes);
+        await this.keepCopy(read2.format, scope, id, bytes);
       } catch (error62) {
         return { left: systemErrorCode(error62) ?? messageOf2(error62) };
       }
-      await this.writeAtomically(path, serializeMemoryFile(read.memory, { format: current, unknown: {} }), id);
+      await this.writeAtomically(path, serializeMemoryFile(read2.memory, { format: current, unknown: {} }), id);
       return "upgraded";
     });
   }
@@ -49882,7 +50706,7 @@ var FileStore = class {
    * current format or a newer one, nor over one the OS will not let this read.
    */
   async recordSweep(current, left, complete) {
-    const path = join3(this.root, MARKER_FILE);
+    const path = join4(this.root, MARKER_FILE);
     await this.withLock("format-marker", async () => {
       const now = markerOf(await this.readIfPresent(path));
       if (compareFormats(now.marker, current) >= 0) return;
@@ -49941,12 +50765,12 @@ var FileStore = class {
   async remove(base) {
     await this.assertRoot();
     const source = this.pathFor(base.memory);
-    const folder = join3(this.root, "deleted", ...foldersOf(base.memory.scope));
+    const folder = join4(this.root, "deleted", ...foldersOf(base.memory.scope));
     await this.withLock(base.memory.id, async () => {
       await this.checkBase(source, base);
       const target = await this.freeDeletedPath(folder, base.memory.id);
-      await mkdir(folder, { recursive: true });
-      await this.retryWhileBusy(base.memory.id, () => rename(source, target));
+      await mkdir2(folder, { recursive: true });
+      await this.retryWhileBusy(base.memory.id, () => rename2(source, target));
     });
   }
   /**
@@ -49956,7 +50780,7 @@ var FileStore = class {
    */
   async freeDeletedPath(folder, id) {
     for (let n = 1; ; n += 1) {
-      const path = join3(folder, n === 1 ? `${id}.md` : `${id}.${n}.md`);
+      const path = join4(folder, n === 1 ? `${id}.md` : `${id}.${n}.md`);
       try {
         await this.lookUp(path);
       } catch (error62) {
@@ -49976,8 +50800,8 @@ var FileStore = class {
     const reads = await Promise.all(
       scopes.map(async (scope) => {
         const parts = [...foldersOf(scope), `${id}.md`];
-        const read = await this.readRecord(join3(this.root, ...parts), parts.join("/"), scope, id);
-        return read === void 0 ? [] : [{ scope, ...read }];
+        const read2 = await this.readRecord(join4(this.root, ...parts), parts.join("/"), scope, id);
+        return read2 === void 0 ? [] : [{ scope, ...read2 }];
       })
     );
     return reads.flat();
@@ -49996,9 +50820,9 @@ var FileStore = class {
       requests.map(async ({ scope, id }) => {
         const parts = foldersOf(scope);
         const key = parts.join("/");
-        if (!listings.has(key)) listings.set(key, this.idsListed(join3(this.root, ...parts)));
+        if (!listings.has(key)) listings.set(key, this.idsListed(join4(this.root, ...parts)));
         if (!(await listings.get(key))?.has(id)) return void 0;
-        return this.readRecord(join3(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
+        return this.readRecord(join4(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
       })
     );
   }
@@ -50025,9 +50849,9 @@ var FileStore = class {
     if ("problem" in area) return { read: { state: "unreadable", problem: area.problem, area: true }, problems: [area.problem] };
     const problems = [...area.strays];
     if (!area.stems.includes(stem)) return { read: { state: "none" }, problems };
-    const read = await this.readPlaceRecord(stem);
-    if (read.state === "unreadable") problems.push(read.problem);
-    return { read, problems };
+    const read2 = await this.readPlaceRecord(stem);
+    if (read2.state === "unreadable") problems.push(read2.problem);
+    return { read: read2, problems };
   }
   async loadPlaces() {
     await this.assertRoot();
@@ -50036,9 +50860,9 @@ var FileStore = class {
     const places = [];
     const problems = [...area.strays];
     for (const stem of area.stems) {
-      const read = await this.readPlaceRecord(stem);
-      if (read.state === "stored") places.push(read.stored);
-      else if (read.state === "unreadable") problems.push(read.problem);
+      const read2 = await this.readPlaceRecord(stem);
+      if (read2.state === "stored") places.push(read2.stored);
+      else if (read2.state === "unreadable") problems.push(read2.problem);
     }
     return { places, problems };
   }
@@ -50081,10 +50905,10 @@ var FileStore = class {
   async placeFiles() {
     let names;
     try {
-      names = await readdir2(join3(this.root, PLACES));
+      names = await readdir2(join4(this.root, PLACES));
     } catch (error62) {
       if (isNotFound(error62)) return { stems: [], strays: [] };
-      return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf2(error62) ?? messageOf2(error62)})` } };
+      return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf3(error62) ?? messageOf2(error62)})` } };
     }
     const stems = [];
     const strays = [];
@@ -50103,9 +50927,9 @@ var FileStore = class {
     try {
       text = await this.readIfPresent(this.placePath(stem));
       if (text === void 0) return { state: "none" };
-      const read = readPlaceFile(text, stem, this.placeRegistry);
-      const stored = { record: read.record, revision: revisionOf(text), format: read.format };
-      return { state: "stored", stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
+      const read2 = readPlaceFile(text, stem, this.placeRegistry);
+      const stored = { record: read2.record, revision: revisionOf(text), format: read2.format };
+      return { state: "stored", stored: Object.keys(read2.unknown).length > 0 ? { ...stored, unknown: read2.unknown } : stored };
     } catch (error62) {
       const newerFormat = error62 instanceof PlaceFormatError ? error62.newerFormat : void 0;
       return { state: "unreadable", problem: { file: file2, reason: systemErrorCode(error62) ?? messageOf2(error62), ...newerFormat === void 0 ? {} : { newerFormat } } };
@@ -50128,19 +50952,19 @@ var FileStore = class {
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
   placePath(stem) {
-    return join3(this.root, PLACES, `${stem}.yaml`);
+    return join4(this.root, PLACES, `${stem}.yaml`);
   }
   /** The lock folder of this root, made if missing: the same for every spelling of it, such as another case or an 8.3 short name. */
   async lockFolder() {
     const folder = this.lockFolderPath();
-    await mkdir(folder, { recursive: true });
+    await mkdir2(folder, { recursive: true });
     return folder;
   }
   lockFolderPath() {
     if (this.locks === void 0) {
       const real = realpathSync2.native(this.root);
       const key = process.platform === "win32" ? real.toLowerCase() : real;
-      this.locks = join3(this.lockBase, createHash5("sha256").update(key).digest("hex").slice(0, 16));
+      this.locks = join4(this.lockBase, createHash5("sha256").update(key).digest("hex").slice(0, 16));
     }
     return this.locks;
   }
@@ -50149,7 +50973,7 @@ var FileStore = class {
    * second look, was deleted or moved meanwhile and is none (#352); any other failure to read or parse it is a problem.
    */
   async loadFolder(parts, location, result) {
-    const folder = join3(this.root, ...parts);
+    const folder = join4(this.root, ...parts);
     let names;
     try {
       names = await readdir2(folder);
@@ -50161,7 +50985,7 @@ var FileStore = class {
     const pending = [];
     for (const name of names) {
       const id = TEMP_RE.exec(name)?.[1];
-      if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join3(folder, name))) pending.push(`${id}.md`);
+      if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join4(folder, name))) pending.push(`${id}.md`);
     }
     const listed3 = [];
     for (const name of [.../* @__PURE__ */ new Set([...names, ...pending])].sort()) {
@@ -50174,7 +50998,7 @@ var FileStore = class {
       }
       listed3.push({ name, file: file2, id });
     }
-    const reads = await this.readMany(listed3.flatMap((one) => one.notAnId === void 0 ? [join3(folder, one.name)] : []));
+    const reads = await this.readMany(listed3.flatMap((one) => one.notAnId === void 0 ? [join4(folder, one.name)] : []));
     let at = 0;
     for (const one of listed3) {
       if (one.notAnId !== void 0) {
@@ -50182,12 +51006,12 @@ var FileStore = class {
         continue;
       }
       const { name, file: file2, id } = one;
-      const read = await this.settle(reads[at++], join3(folder, name), file2, location.scope, id);
-      if (read === void 0) continue;
-      if ("problem" in read) result.problems.push(read.problem);
+      const read2 = await this.settle(reads[at++], join4(folder, name), file2, location.scope, id);
+      if (read2 === void 0) continue;
+      if ("problem" in read2) result.problems.push(read2.problem);
       else if (result.memories.some((stored) => stored.memory.id === id)) {
         result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
-      } else result.memories.push(read.stored);
+      } else result.memories.push(read2.stored);
     }
   }
   /**
@@ -50213,17 +51037,17 @@ var FileStore = class {
     return out;
   }
   /** `readRecord` over text this load already read, or over the failure reading it gave (#423): one path, one meaning. */
-  async settle(read, path, file2, scope, id) {
-    if ("text" in read) return this.decode(read.text, file2, scope, id);
-    if (isNotFound(read.error) && await isGone(path)) return void 0;
-    return { problem: { file: file2, id, reason: systemErrorCode(read.error) ?? messageOf2(read.error) } };
+  async settle(read2, path, file2, scope, id) {
+    if ("text" in read2) return this.decode(read2.text, file2, scope, id);
+    if (isNotFound(read2.error) && await isGone(path)) return void 0;
+    return { problem: { file: file2, id, reason: systemErrorCode(read2.error) ?? messageOf2(read2.error) } };
   }
   /** One record's text, decoded; its problem names the text when the text is what failed (#279, V4). */
   decode(text, file2, scope, id) {
     try {
-      const read = readMemoryFile(text, { scope, id }, this.registry);
-      const stored = { memory: read.memory, revision: revisionOf(text), format: read.format };
-      return { stored: Object.keys(read.unknown).length > 0 ? { ...stored, unknown: read.unknown } : stored };
+      const read2 = readMemoryFile(text, { scope, id }, this.registry);
+      const stored = { memory: read2.memory, revision: revisionOf(text), format: read2.format };
+      return { stored: Object.keys(read2.unknown).length > 0 ? { ...stored, unknown: read2.unknown } : stored };
     } catch (error62) {
       const delivery = deliveryNamedIn(text);
       const reason = systemErrorCode(error62) ?? messageOf2(error62);
@@ -50245,18 +51069,18 @@ var FileStore = class {
     }
     return this.decode(text, file2, scope, id);
   }
-  async readSettled(path, read = this.readListed) {
+  async readSettled(path, read2 = this.readListed) {
     const deadline = Date.now() + SETTLE_MS;
     let named = 0;
     for (; ; ) {
       try {
-        return await read(path);
+        return await read2(path);
       } catch (error62) {
-        const code = codeOf2(error62);
+        const code = codeOf3(error62);
         if (code !== "ENOENT" && !isBusy(code)) throw error62;
         if (code === "ENOENT" && !await isGone(path) && ++named > 1) throw error62;
         if (Date.now() >= deadline) throw error62;
-        await pause();
+        await pause2();
       }
     }
   }
@@ -50266,7 +51090,7 @@ var FileStore = class {
    */
   async isStaleTemp(path) {
     try {
-      return Date.now() - (await stat2(path)).mtimeMs > 2 * this.busyBudgetMs;
+      return Date.now() - (await stat3(path)).mtimeMs > 2 * this.busyBudgetMs;
     } catch {
       return false;
     }
@@ -50290,7 +51114,7 @@ var FileStore = class {
   async holdersOf(id) {
     const found = await Promise.all(
       (await this.scopesFor(id)).map(async (scope) => {
-        const path = join3(this.root, ...foldersOf(scope), `${id}.md`);
+        const path = join4(this.root, ...foldersOf(scope), `${id}.md`);
         try {
           await this.lookUp(path);
           return [{ scope, path }];
@@ -50326,7 +51150,7 @@ var FileStore = class {
    * busy error of its path, whose text would name the store's folders (#388).
    */
   async keepCopy(format, scope, id, bytes) {
-    const copy = join3(this.root, PREVIOUS, `format-${format}`, ...foldersOf(scope), `${id}.md`);
+    const copy = join4(this.root, PREVIOUS, `format-${format}`, ...foldersOf(scope), `${id}.md`);
     try {
       await writeCreateOnly(copy, bytes, { ...this.copySeams, busyBudgetMs: this.busyBudgetMs });
     } catch (error62) {
@@ -50341,7 +51165,7 @@ var FileStore = class {
    * the lock file proceeds.
    */
   async withLock(id, run) {
-    const path = join3(this.lockFolderPath(), `${id}.lock`);
+    const path = join4(this.lockFolderPath(), `${id}.lock`);
     const deadline = Date.now() + this.busyBudgetMs;
     let contended = false;
     for (; ; ) {
@@ -50349,27 +51173,27 @@ var FileStore = class {
       try {
         await this.lockFolder();
       } catch (error62) {
-        if (!isNotFound(error62) && !isBusy(codeOf2(error62))) throw error62;
+        if (!isNotFound(error62) && !isBusy(codeOf3(error62))) throw error62;
         if (Date.now() >= deadline) throw contended ? new StoreBusyError(id) : error62;
-        await pause();
+        await pause2();
         continue;
       }
       try {
-        handle = await open2(path, "wx");
+        handle = await open3(path, "wx");
       } catch (error62) {
-        const code = codeOf2(error62);
+        const code = codeOf3(error62);
         if (code !== "EEXIST" && code !== "ENOENT" && !isBusy(code)) throw error62;
         if (code !== "ENOENT") contended = true;
         if (code === "EEXIST" && await this.removeIfStale(path)) continue;
         if (Date.now() >= deadline) throw contended ? new StoreBusyError(id) : error62;
-        await pause();
+        await pause2();
         continue;
       }
       try {
         await handle.writeFile(String(process.pid));
       } catch (error62) {
         await handle.close();
-        await rm(path, { force: true });
+        await rm2(path, { force: true });
         throw error62;
       }
       await handle.close();
@@ -50378,7 +51202,7 @@ var FileStore = class {
     try {
       return await run();
     } finally {
-      await this.retryWhileBusy(id, () => rm(path, { force: true })).catch(() => {
+      await this.retryWhileBusy(id, () => rm2(path, { force: true })).catch(() => {
       });
       await rmdir(dirname2(path)).catch(() => {
       });
@@ -50389,16 +51213,16 @@ var FileStore = class {
     let age;
     let text;
     try {
-      age = Date.now() - (await stat2(path)).mtimeMs;
-      text = await readFile2(path, "utf8");
+      age = Date.now() - (await stat3(path)).mtimeMs;
+      text = await readFile3(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return true;
-      if (isBusy(codeOf2(error62))) return false;
+      if (isBusy(codeOf3(error62))) return false;
       throw error62;
     }
     const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : void 0;
     if (age > this.maxLockMs || age > this.staleLockMs && (pid === void 0 || !isAlive(pid))) {
-      await rm(path, { force: true });
+      await rm2(path, { force: true });
       return true;
     }
     return false;
@@ -50410,9 +51234,9 @@ var FileStore = class {
   /** Removes the old file of a scope move; when that stays impossible, removes the new file again (design 5.4). */
   async finishMove(source, target, id) {
     try {
-      await this.retryWhileBusy(id, () => rm(source, { force: true }));
+      await this.retryWhileBusy(id, () => rm2(source, { force: true }));
     } catch (error62) {
-      await rm(target, { force: true });
+      await rm2(target, { force: true });
       throw error62;
     }
   }
@@ -50422,7 +51246,7 @@ var FileStore = class {
   }
   async readIfPresent(path) {
     try {
-      return await readFile2(path, "utf8");
+      return await readFile3(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
@@ -50431,14 +51255,14 @@ var FileStore = class {
   /** readIfPresent as bytes: what a copy as it was keeps, which a utf8 round trip would change (#452, S1). */
   async readBytesIfPresent(path) {
     try {
-      return await readFile2(path);
+      return await readFile3(path);
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
     }
   }
   pathFor(memory) {
-    return join3(this.root, ...this.relativeParts(memory));
+    return join4(this.root, ...this.relativeParts(memory));
   }
   relative(path) {
     return relative(this.root, path).replace(/\\/g, "/");
@@ -50449,7 +51273,7 @@ var FileStore = class {
     return [...foldersOf(memory.scope), `${memory.id}.md`];
   }
   async assertRoot() {
-    const info = await stat2(this.root).catch((error62) => {
+    const info = await stat3(this.root).catch((error62) => {
       if (isNotFound(error62)) return null;
       throw error62;
     });
@@ -50495,9 +51319,9 @@ var FileProposalStore = class {
     this.lock = lock;
     this.newId = newId;
     this.linkFile = options.linkFile ?? link;
-    this.removeFile = options.removeFile ?? ((path) => rm(path, { force: true }));
+    this.removeFile = options.removeFile ?? ((path) => rm2(path, { force: true }));
     this.lookUp = options.lookUp ?? lstat;
-    this.renameFile = options.renameFile ?? rename;
+    this.renameFile = options.renameFile ?? rename2;
     this.busyBudgetMs = options.busyBudgetMs ?? DEFAULT_BUSY_BUDGET_MS;
   }
   async list() {
@@ -50594,21 +51418,21 @@ var FileProposalStore = class {
       const record2 = kind;
       let text;
       try {
-        text = await readFile2(join3(this.root, PROPOSAL_AREA, name), "utf8");
+        text = await readFile3(join4(this.root, PROPOSAL_AREA, name), "utf8");
       } catch (error62) {
         problems.push({ record: record2, proposal: id, reason: systemErrorCode(error62) ?? messageOf2(error62) });
         continue;
       }
-      const read = parseProposalFile(text);
-      if ("problem" in read) problems.push({ record: record2, proposal: id, reason: read.problem });
-      else records[kind === "proposal" ? "proposals" : kind === "decision" ? "decisions" : "applies"].push(read.raw);
+      const read2 = parseProposalFile(text);
+      if ("problem" in read2) problems.push({ record: record2, proposal: id, reason: read2.problem });
+      else records[kind === "proposal" ? "proposals" : kind === "decision" ? "decisions" : "applies"].push(read2.raw);
     }
     return { records, problems };
   }
   /** The names in the area that could be a record, sorted; a missing area holds none, any other failure is the store's. */
   async names() {
     try {
-      return (await readdir2(join3(this.root, PROPOSAL_AREA))).filter((name) => PROPOSAL_FILE_RE.test(name)).sort();
+      return (await readdir2(join4(this.root, PROPOSAL_AREA))).filter((name) => PROPOSAL_FILE_RE.test(name)).sort();
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -50621,7 +51445,7 @@ var FileProposalStore = class {
     return this.names().then((all) => all.some((name) => taken.test(name)));
   }
   pathOf(id, record2) {
-    return join3(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
+    return join4(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
   }
   /** Writes a new record file, create-only and atomically (writeCreateOnly), through this store's seams. */
   async write(path, text) {
@@ -50631,13 +51455,13 @@ var FileProposalStore = class {
 };
 async function writeCreateOnly(path, content, options) {
   const { linkFile = link } = options;
-  await mkdir(dirname2(path), { recursive: true });
+  await mkdir2(dirname2(path), { recursive: true });
   const temp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(temp, content);
+  await writeFile2(temp, content);
   try {
     await linkFile(temp, path);
   } catch (error62) {
-    if (codeOf2(error62) === "EEXIST") {
+    if (codeOf3(error62) === "EEXIST") {
       await dropTemp(temp, options);
       throw new RecordExistsError();
     }
@@ -50647,7 +51471,7 @@ async function writeCreateOnly(path, content, options) {
   await dropTemp(temp, options);
 }
 async function renameIfFree(temp, path, options) {
-  const { lookUp = lstat, renameFile = rename } = options;
+  const { lookUp = lstat, renameFile = rename2 } = options;
   try {
     await retryWhileBusy(
       path,
@@ -50663,7 +51487,7 @@ async function renameIfFree(temp, path, options) {
   }
 }
 async function dropTemp(temp, options) {
-  const { removeFile = (path) => rm(path, { force: true }) } = options;
+  const { removeFile = (path) => rm2(path, { force: true }) } = options;
   await retryWhileBusy(temp, () => removeFile(temp), options.busyBudgetMs).catch(() => {
   });
 }
@@ -50678,7 +51502,7 @@ var FileRunStore = class {
   constructor(root2, lock, options = {}) {
     this.root = root2;
     this.lock = lock;
-    this.readText = options.readText ?? ((path) => readFile2(path, "utf8"));
+    this.readText = options.readText ?? ((path) => readFile3(path, "utf8"));
   }
   async read() {
     let text;
@@ -50712,8 +51536,8 @@ var FileRunStore = class {
       try {
         return await this.readText(this.path());
       } catch (error62) {
-        if (!isBusy(codeOf2(error62)) || Date.now() >= deadline) throw error62;
-        await pause();
+        if (!isBusy(codeOf3(error62)) || Date.now() >= deadline) throw error62;
+        await pause2();
       }
     }
   }
@@ -50738,7 +51562,7 @@ var FileRunStore = class {
     await writeAtomically(this.path(), (0, import_yaml4.stringify)(record2), "dream-run", (id, op) => retryWhileBusy(id, op, DEFAULT_BUSY_BUDGET_MS));
   }
   path() {
-    return join3(this.root, DREAM_AREA, DREAM_RUN_FILE);
+    return join4(this.root, DREAM_AREA, DREAM_RUN_FILE);
   }
 };
 function recordOf(fields) {
@@ -50777,13 +51601,13 @@ function placeLock(stem) {
   return `place-${stem}`;
 }
 async function writeAtomically(target, text, id, retry) {
-  await mkdir(dirname2(target), { recursive: true });
+  await mkdir2(dirname2(target), { recursive: true });
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(temp, text, "utf8");
+  await writeFile2(temp, text, "utf8");
   try {
-    await retry(id, () => rename(temp, target));
+    await retry(id, () => rename2(temp, target));
   } catch (error62) {
-    await rm(temp, { force: true });
+    await rm2(temp, { force: true });
     throw error62;
   }
 }
@@ -50794,10 +51618,10 @@ async function retryWhileBusy(id, op, budgetMs) {
       await op();
       return;
     } catch (error62) {
-      if (!isBusy(codeOf2(error62))) throw error62;
+      if (!isBusy(codeOf3(error62))) throw error62;
       if (Date.now() >= deadline) throw Object.defineProperty(new StoreBusyError(id), "cause", { value: error62 });
     }
-    await pause();
+    await pause2();
   }
 }
 function messageOf2(error62) {
@@ -50836,21 +51660,21 @@ function isAlive(pid) {
     process.kill(pid, 0);
     return true;
   } catch (error62) {
-    return codeOf2(error62) === "EPERM";
+    return codeOf3(error62) === "EPERM";
   }
 }
-function pause() {
+function pause2() {
   return sleep(2 + Math.random() * 6);
 }
 function isBusy(code) {
   return code !== void 0 && BUSY_CODES.has(code);
 }
-function codeOf2(error62) {
+function codeOf3(error62) {
   const code = typeof error62 === "object" && error62 !== null ? error62.code : void 0;
   return typeof code === "string" ? code : void 0;
 }
 function isNotFound(error62) {
-  return codeOf2(error62) === "ENOENT";
+  return codeOf3(error62) === "ENOENT";
 }
 async function isFree(path, lookUp = lstat) {
   try {
@@ -50915,7 +51739,8 @@ if (move) {
   const upgrade2 = process.env[START_HOOK_ENV] === "1" ? void 0 : () => store.sweep().catch((error62) => {
     console.error(`NeoCortex: the upgrade of stored memories stopped (${error62 instanceof Error ? error62.message : String(error62)}); the next session tries again.`);
   });
-  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  const once = new FileOnce({ folder: onceFolder(homedir2()) });
+  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }
