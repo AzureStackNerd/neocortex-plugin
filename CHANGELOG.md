@@ -2,6 +2,22 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.11 - 2026-11-09
+
+- New: change which files a rule is about, give a pattern to a memory you already have, or drop its patterns, without
+  deleting it. Ask Claude; the question you confirm names the files before and after and where the memory now arrives,
+  such as `(at other files)` or `(at its files only, no longer at every edit)`. The memory keeps its id and the
+  exceptions that name it. A pattern for the files in a folder at any depth, such as `**/infra/*.bicep`, works too; a
+  folder from a repository's root and a project memory's patterns are refused, for now.
+- Changed: the question for a rule that loads nowhere, such as one whose end date has passed, now says "changed; it
+  does not load"; a rule moved between edits of its files and another moment says where it now arrives, such as
+  `(now at the startup moment, no longer at its files)`.
+- Fixed: a refused save or change of a memory with file patterns now names a call that passes whenever one exists,
+  such as "this call passes with its files removed", also when the call was wrong in several parts at once.
+- If several machines share your memory folder, update each one: 0.5.9 and 0.5.10 bring a rule whose files were
+  changed elsewhere at its new files but refuse such a change themselves, and 0.5.8 brings every file rule at every
+  edit, with a warning.
+
 ## 0.5.10 - 2026-11-09
 
 - Changed: the README's sections on when and where a memory loads are rewritten as short paragraphs and lists, with

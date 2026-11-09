@@ -205,10 +205,15 @@ A pattern names one kind of file: it has no slash, such as `*.md`, or starts wit
 matches such a file wherever it lies, in a subfolder, a worktree, another repository or a temp folder, in any letter
 case. A new rule that would leave another one without room at the edit of some file names that one in its question.
 
-Not possible yet, and refused with the reason: a pattern that names a folder (`infra/*.bicep`, `/*.bicep`), files on a
-project memory or on a memory with `overrides`, and a change of a saved rule's patterns (delete it and save a new one).
-A pattern no file can match, such as `infra/` or one with an open `[`, is refused too, and one written by hand is named
-at every edit. At a clone whose `settings.json` still has the older edit entry, an edit passes no file, so every such
+To change which files a rule is about, or to give a pattern to a memory you already have, ask Claude: it changes the
+memory in place, so it keeps its id and the exceptions that name it. The question names the files before and after,
+such as `(files **/*.bicep -> files **/*.bicepparam)`, and says where it now arrives, such as `(at other files)` or
+`(at its files only, no longer at every edit)`. Dropping every pattern makes a rule arrive at every edit again.
+
+Not possible yet, and refused with the reason: a pattern that names a folder from a repository's root (`infra/*.bicep`,
+`/*.bicep`; `**/infra/*.bicep` is possible), files on a project memory or on a memory with `overrides`, and moving a
+memory with patterns to another scope. A pattern no file can match, such as `infra/` or one with an open `[`, is refused
+too, and one written by hand is named at every edit. At a clone whose `settings.json` still has the older edit entry, an edit passes no file, so every such
 rule arrives at every edit and the first line says so.
 
 ### When a change is refused
@@ -226,7 +231,8 @@ Update NeoCortex on each machine. A machine that is still on an older version do
 - 0.5.2 refuses a change of a rule's condition and asks its rule questions without labels;
 - 0.5.7 refuses an exception that applies only inside a repo;
 - 0.5.8 refuses a rule for a kind of file, and delivers one saved elsewhere at every edit, with a warning, and at no
-  read.
+  read;
+- 0.5.10 refuses a change of a saved memory's file patterns, and delivers one changed elsewhere at its new files.
 
 ### What a memory holds
 

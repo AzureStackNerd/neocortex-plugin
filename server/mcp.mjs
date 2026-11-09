@@ -45858,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.10",
+  version: "0.5.11",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46082,7 +46082,7 @@ function linkProblem(kind, source, target) {
 }
 function changeable(target, source) {
   const changed = { ...target, appliesWhen: source.appliesWhen };
-  return !narrower(changed, source) && conditionProblems(changed, target, [], []).length === 0;
+  return !narrower(changed, source) && conditionProblems(changed, target, [], [], false).length === 0;
 }
 function narrower(a, b) {
   if (a.scope.kind !== b.scope.kind) return a.scope.kind === "project";
@@ -46127,14 +46127,8 @@ function validateLinks(memory, existing) {
   }
   return errors;
 }
-var RULE_WORDS = () => `a rule (enforced, or delivered at ${RULE_DELIVERIES.slice(0, -1).join(", ")} or ${RULE_DELIVERIES.at(-1)})`;
+var TWO_CALLS = "remove files from its condition in a call of its own, then make it a rule";
 var CONDITION_TEXT = {
-  /**
-   * T1 since #441: a rule takes inRepo and labels, and since #434 a new user rule delivered at edit takes files. This text
-   * is for a hand-written files part an update keeps while it makes the memory a rule, also when the update changes the
-   * condition's other parts (#439, finding F3); story B lifts it (S56).
-   */
-  becomesRule: () => `appliesWhen: this change makes a memory with a file condition ${RULE_WORDS()}, which is not possible yet; remove files from its condition in a call of its own, then make it a rule`,
   /**
    * T2 on a save: an exception takes inRepo since #443, and labels and files wait (exceptionPlaced). Each way out is
    * named only where it would pass (#443 review finding F1; #434 How line 17): leaving them out, or inRepo alone.
@@ -46151,35 +46145,54 @@ var CONDITION_TEXT = {
   overrideChanged: "appliesWhen: on a memory with overrides, labels or files cannot be set, changed or removed yet; leave appliesWhen out of this call, and change such a condition only in a call of its own while the memory has no overrides",
   /**
    * T2 on an update that gives a memory whose condition has labels or files overrides; each way out only where it passes
-   * (#434 How line 17): a rule's file part cannot be dropped until story B, so for it neither is named. stored: the
-   * record the update changes.
+   * (#434 How line 17): a user rule's file part can be dropped since #455 (B1), so null is named for it, while a project
+   * rule's cannot until B2 (#457). stored: the record the update changes.
    */
   becomesOverride: (written, existing = [], stored) => {
-    const twoSteps = (condition) => stored !== void 0 && conditionProblems({ ...stored, appliesWhen: condition }, stored, [], existing).length === 0 && wayPasses({ ...written, appliesWhen: condition }, void 0, existing);
+    const twoSteps = (condition) => stored !== void 0 && conditionProblems({ ...stored, appliesWhen: condition }, stored, [], existing, false).length === 0 && wayPasses({ ...written, appliesWhen: condition }, void 0, existing);
     const ways = [twoSteps(void 0) ? "null" : "", written.scope.kind === "user" && twoSteps({ inRepo: true }) ? "inRepo alone" : ""].filter((way) => way !== "");
     return `overrides: a memory with labels or files in its condition cannot override another yet${ways.length === 0 ? "" : `; first change its appliesWhen to ${ways.join(" or to ")}, then set overrides`}`;
   },
   // T3 (#434). Every way out a T3 text names is a call conditionProblems and the link check pass with the memory's other
   // fields as the call gives them (review F2, memory c2390ded); filesProblems and conditionProblems derive each flag by
   // running that call (wayPasses), and a text with none names no call.
-  /** A file condition comes only with delivery edit, lastingly (design-scopes 2.4): with delivery edit, or without files. */
-  filesDelivery: (ways) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList([ways.edit, "save it with delivery edit"], [ways.without, "leave files out"])}`,
-  /** An update that moves the delivery of a memory with a file condition away from edit (S22). */
-  filesDeliveryKept: (kept) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList([kept, "leave delivery as it is"])}`,
-  /** A project memory's patterns are story B's (S56); the same save in user scope, which applies in every project. */
-  filesProject: (user) => `appliesWhen: file patterns on a project memory are not possible yet${user ? "; a user memory takes them, and applies in every project, so ask the user before saving it in user scope" : ""}`,
-  /** A pattern that names a folder is story B's (S56); kinds: the kind form, named only when the call with it passes. */
-  filesFolder: (patterns, kinds) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "names" : "name"} a folder, which is not possible yet; a pattern for a kind of file is, with no slash or starting with **/` + (kinds === void 0 ? "" : `, such as ${kinds.map(shownText).join(", ")}`),
-  /** A pattern no file can match (S40, review F1); it names how a pattern is written, no call. */
-  filesUnusable: (patterns) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} cannot match a file: close every [ and {, end each with a file name rather than / or a backslash, and name no empty, . or .. folder`,
+  /**
+   * A file condition comes only with delivery edit, lastingly (design-scopes 2.4). A save's ways: with delivery edit, or
+   * without files. An update's (#455 How line 9): the same update with delivery edit, or with its files as stored, worded
+   * as a change, so Claude never reads "save" and saves a second memory; and, for a memory with files made a rule, the
+   * two calls of TWO_CALLS (fix round 1, review F2).
+   */
+  filesDelivery: (ways, update = false) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList(
+    [ways.edit, update ? "give it delivery edit" : "save it with delivery edit"],
+    [ways.without, update ? "leave files as they are" : "leave files out"],
+    [ways.twoCalls === true, TWO_CALLS]
+  )}`,
+  /**
+   * An update that moves the delivery of a memory with a file condition away from edit (S22); for a note made a rule with
+   * its files kept, also delivery edit and the two calls of TWO_CALLS, each where it passes (fix round 1, review F2).
+   */
+  filesDeliveryKept: (kept, ways = {}) => `appliesWhen: a file condition comes only with delivery edit, the moment Claude has a file in hand${wayList([kept, "leave delivery as it is"], [ways.edit === true, "give it delivery edit"], [ways.twoCalls === true, TWO_CALLS])}`,
+  /**
+   * A project memory's patterns are B2's (#457), in every direction (#455 How line 10). user: a save's way, the same save
+   * in user scope, which applies in every project; leave: an update's way, its files as stored; twoCalls: TWO_CALLS.
+   */
+  filesProject: (user, leave = false, twoCalls = false) => `appliesWhen: file patterns on a project memory are not possible yet${user ? "; a user memory takes them, and applies in every project, so ask the user before saving it in user scope" : wayList([leave, "leave files as they are"], [twoCalls, TWO_CALLS])}`,
+  /** A pattern that names a folder from a base is B2's (#457); kinds: the kind form, named only when the call with it passes. */
+  filesFolder: (patterns, kinds, twoCalls = false) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "names" : "name"} a folder from the repository's root, which is not possible yet; a pattern for a kind of file is, with no slash or starting with **/` + (kinds === void 0 ? "" : `, such as ${kinds.map(shownText).join(", ")}`) + (twoCalls ? `; or ${TWO_CALLS}` : ""),
+  /** A pattern no file can match (S40, review F1); it names how a pattern is written, and TWO_CALLS where that passes. */
+  filesUnusable: (patterns, twoCalls = false) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} cannot match a file: close every [ and {, end each with a file name rather than / or a backslash, and name no empty, . or .. folder` + (twoCalls ? `; or ${TWO_CALLS}` : ""),
   /**
    * A backslash (#434 How line 14); slashed: the forward-slash form, or its kind form when that names a folder, named
-   * only when the call with it passes.
+   * only when the call with it passes; twoCalls: TWO_CALLS.
    */
-  filesBackslash: (patterns, slashed) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "holds" : "hold"} a backslash, which a file pattern does not take` + (slashed === void 0 ? "" : `; write ${patterns.length === 1 ? "it" : "them"} with forward slashes, such as ${slashed.map(shownText).join(", ")}`),
-  /** An update of a saved memory's patterns (S56, #434 How line 15): they stay as they are until story B. */
-  filesChanged: (ways) => `appliesWhen: the file patterns of a saved memory cannot be set, changed or removed yet${wayList([ways.leave, "leave files as they are"], [ways.renew, "delete the memory and save a new one with the patterns this call gives"])}`,
-  /** A scope move of a memory with a file condition (S56). */
+  filesBackslash: (patterns, slashed, twoCalls = false) => `appliesWhen: the file ${patterns.length === 1 ? "pattern" : "patterns"} ${patterns.map(shownText).join(", ")} ${patterns.length === 1 ? "holds" : "hold"} a backslash, which a file pattern does not take` + (slashed === void 0 ? "" : `; write ${patterns.length === 1 ? "it" : "them"} with forward slashes, such as ${slashed.map(shownText).join(", ")}`) + (twoCalls ? `; ${slashed === void 0 ? "" : "or "}${TWO_CALLS}` : ""),
+  /**
+   * After the file reasons of an update that named no way out (fix round 3, the way-out contract of the How lines): the
+   * passing candidates that change the fewest parts of this call (waysOut), each in its parts' words, such as "its files
+   * removed and its scope as it is"; never empty, since it is given only where some candidate passes.
+   */
+  filesTogether: (options, what = "call") => `appliesWhen: this ${what} passes with ${options.map((parts) => parts.join(" and ")).join(", or with ")}`,
+  /** A scope move of a memory with a file condition (S56); B2's (#457). */
   filesMoved: (kept) => `appliesWhen: a memory with file patterns cannot move to another scope yet${wayList([kept, "leave scope as it is"])}`,
   /** The project reason (design-scopes 2.4). */
   project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
@@ -46196,7 +46209,7 @@ function leaveOutWayOut(written, existing) {
   return wayPasses({ ...written, appliesWhen: repo ? { inRepo: true } : void 0 }, void 0, existing);
 }
 function wayPasses(changed, stored, existing) {
-  if (conditionProblems(changed, stored, [], existing).length > 0) return false;
+  if (conditionProblems(changed, stored, [], existing, false).length > 0) return false;
   const byId = new Map(existing.map((memory) => [memory.id, memory]));
   return changed.overrides.every((id) => {
     const target = byId.get(id);
@@ -46206,6 +46219,18 @@ function wayPasses(changed, stored, existing) {
 function kindOf(pattern) {
   return `**/${pattern.replace(/^\/+/, "")}`;
 }
+function slashedOf(pattern) {
+  const slashed = pattern.replaceAll("\\", "/");
+  return patternKind(slashed) === "folder" ? kindOf(slashed) : slashed;
+}
+function correctedFiles(files) {
+  const corrected = files.flatMap((pattern) => {
+    if (pattern.includes("\\")) return [slashedOf(pattern)];
+    const kind = patternKind(pattern);
+    return kind === "unusable" ? [] : [kind === "folder" ? kindOf(pattern) : pattern];
+  });
+  return corrected.length === 0 ? void 0 : [...new Set(corrected)];
+}
 function wayList(...ways) {
   const named = ways.filter(([passes]) => passes).map(([, way]) => way);
   return named.length === 0 ? "" : `; ${named.join(", or ")}`;
@@ -46214,61 +46239,135 @@ function withFiles(memory, patterns) {
   const { files: _files, ...rest } = canonicalCondition(memory.appliesWhen) ?? {};
   return { ...memory, appliesWhen: canonicalCondition({ ...rest, ...patterns === void 0 ? {} : { files: [...patterns] } }) };
 }
-function filesProblems(written, files, existing) {
-  const passes = (changed) => wayPasses(changed, void 0, existing);
+function filesProblems(written, files, existing, stored, delivery = true, named = true, twoCalls = false, seen = { way: false }) {
+  const passes = (changed) => {
+    const way = named && wayPasses(changed, stored, existing);
+    if (way) seen.way = true;
+    return way;
+  };
+  const update = stored !== void 0;
+  const kept = withFiles(written, stored === void 0 ? void 0 : canonicalCondition(stored.appliesWhen)?.files);
+  const without = () => !(update && sameCondition(kept.appliesWhen, written.appliesWhen)) && passes(kept);
   const problems = [];
-  if (written.delivery !== "edit") problems.push(CONDITION_TEXT.filesDelivery({ edit: passes({ ...written, delivery: "edit" }), without: passes(withFiles(written, void 0)) }));
-  if (written.scope.kind === "project") problems.push(CONDITION_TEXT.filesProject(passes({ ...written, scope: USER })));
+  if (delivery && written.delivery !== "edit") problems.push(CONDITION_TEXT.filesDelivery({ edit: passes({ ...written, delivery: "edit" }), without: without(), twoCalls }, update));
+  if (written.scope.kind === "project") problems.push(update ? CONDITION_TEXT.filesProject(false, without(), twoCalls) : CONDITION_TEXT.filesProject(passes({ ...written, scope: USER })));
   const backslashed = files.filter((pattern) => pattern.includes("\\"));
   if (backslashed.length > 0) {
-    const slashedOf = (pattern) => {
-      const slashed = pattern.replaceAll("\\", "/");
-      return patternKind(slashed) === "folder" ? kindOf(slashed) : slashed;
-    };
-    const named = files.map((pattern) => pattern.includes("\\") ? slashedOf(pattern) : pattern);
-    problems.push(CONDITION_TEXT.filesBackslash(backslashed, passes(withFiles(written, named)) ? backslashed.map(slashedOf) : void 0));
+    const slashedAll = files.map((pattern) => pattern.includes("\\") ? slashedOf(pattern) : pattern);
+    problems.push(CONDITION_TEXT.filesBackslash(backslashed, passes(withFiles(written, slashedAll)) ? backslashed.map(slashedOf) : void 0, twoCalls));
   }
   const rest = files.filter((pattern) => !pattern.includes("\\"));
   const unusable = rest.filter((pattern) => patternKind(pattern) === "unusable");
-  if (unusable.length > 0) problems.push(CONDITION_TEXT.filesUnusable(unusable));
+  if (unusable.length > 0) problems.push(CONDITION_TEXT.filesUnusable(unusable, twoCalls));
   const folders = rest.filter((pattern) => patternKind(pattern) === "folder");
   if (folders.length > 0) {
     const kinds = files.map((pattern) => folders.includes(pattern) ? kindOf(pattern) : pattern);
-    problems.push(CONDITION_TEXT.filesFolder(folders, passes(withFiles(written, kinds)) ? folders.map(kindOf) : void 0));
+    problems.push(CONDITION_TEXT.filesFolder(folders, passes(withFiles(written, kinds)) ? folders.map(kindOf) : void 0, twoCalls));
   }
+  if (twoCalls && problems.length > 0) seen.way = true;
   return problems;
+}
+function waysOut(written, stored, existing) {
+  const given2 = canonicalCondition(written.appliesWhen)?.files;
+  const fixed = given2 === void 0 ? void 0 : correctedFiles(given2);
+  const files = [
+    [given2, ""],
+    ...stored === void 0 ? [] : [[canonicalCondition(stored.appliesWhen)?.files, "its files as they are"]],
+    [void 0, stored === void 0 ? "files left out" : "its files removed"],
+    ...fixed === void 0 ? [] : [[fixed, `the files ${fixed.map(shownText).join(", ")}`]]
+  ];
+  const asStored = stored === void 0 ? [] : [
+    [
+      stored.delivery,
+      stored.enforced,
+      [stored.delivery === written.delivery ? "" : "its delivery as it is", stored.enforced === written.enforced ? "" : "its enforced flag as it is"].filter((words) => words !== "").join(" and ")
+    ]
+  ];
+  const deliveries = [[written.delivery, written.enforced, ""], ...asStored, ["edit", written.enforced, "delivery edit"]];
+  const scopes = [
+    [written.scope, ""],
+    stored === void 0 ? [USER, "in user scope, which applies in every project, so ask the user first"] : [stored.scope, "its scope as it is"]
+  ];
+  const key = (memory) => JSON.stringify([scopeId(memory.scope), memory.delivery, memory.enforced, canonicalCondition(memory.appliesWhen) ?? null]);
+  const judged = /* @__PURE__ */ new Set([key(written), ...stored === void 0 ? [] : [key(stored)]]);
+  const passing = [];
+  for (const [delivery, enforced, deliveryWords] of deliveries) {
+    for (const [patterns, filesWords2] of files) {
+      for (const [scope, scopeWords2] of scopes) {
+        const call = { ...withFiles(written, patterns), delivery, enforced, scope };
+        if (judged.has(key(call))) continue;
+        judged.add(key(call));
+        const parts = [deliveryWords, filesWords2, scopeWords2].flatMap((words) => words === "" ? [] : words.split(" and "));
+        if (wayPasses(call, stored, existing)) passing.push({ parts, call, files: filesWords2 !== "" });
+      }
+    }
+  }
+  const fewest = Math.min(...passing.map(({ parts }) => parts.length));
+  const whole2 = (call) => ({ ...call, appliesWhen: canonicalCondition({ files: [...canonicalCondition(call.appliesWhen)?.files ?? []] }) });
+  return passing.filter(({ parts }) => parts.length === fewest).map(
+    ({ parts, call, files: filesPart }) => stored !== void 0 && filesPart && !wayPasses(whole2(call), stored, existing) ? [...parts, "its other condition parts kept"] : parts
+  );
+}
+function twoCallsPass(written, stored, existing) {
+  if (isRule(stored) || !isRule(written) || canonicalCondition(stored.appliesWhen)?.files === void 0) return false;
+  const first = withFiles(stored, void 0);
+  return wayPasses(first, stored, existing) && wayPasses(withFiles(written, void 0), first, existing);
 }
 function exceptionPlaced(condition) {
   return condition === void 0 || condition.labels === void 0 && condition.files === void 0;
 }
-function conditionProblems(written, stored, current, existing) {
+function conditionProblems(written, stored, current, existing, named = true) {
   const after = canonicalCondition(written.appliesWhen);
   const placed = after?.inRepo === true || after?.labels !== void 0;
   const filed = after?.files !== void 0;
   const problems = [];
   if (stored === void 0) {
     if (after === void 0) return problems;
-    if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, existing));
-    if (after.files !== void 0) problems.push(...filesProblems(written, after.files, existing));
+    if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, named ? existing : []));
+    if (after.files !== void 0) {
+      const seen2 = { way: false };
+      const reasons = filesProblems(written, after.files, existing, void 0, true, named, false, seen2);
+      problems.push(...reasons);
+      const options = named && reasons.length > 0 && !seen2.way ? waysOut(written, void 0, existing) : [];
+      if (options.length > 0) problems.push(CONDITION_TEXT.filesTogether(options, "save"));
+    }
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
     return problems;
   }
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
-  if (filed && !isRule(stored) && isRule(written)) problems.push(CONDITION_TEXT.becomesRule());
   const overriding = stored.overrides.length > 0 || written.overrides.length > 0;
   if (changed && overriding && !(exceptionPlaced(before) && exceptionPlaced(after))) problems.push(CONDITION_TEXT.overrideChanged);
-  if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing, stored));
+  if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing, named ? stored : void 0));
   const filesChanged = !sameCondition({ files: before?.files }, { files: after?.files });
-  if (filesChanged && (isRule(stored) || isRule(written) || after?.files !== void 0)) {
-    const leave = wayPasses(withFiles(written, before?.files), stored, existing);
-    problems.push(CONDITION_TEXT.filesChanged({ leave, renew: wayPasses(written, void 0, existing) }));
+  const deliveryKept = filed && !filesChanged && written.delivery !== stored.delivery && written.delivery !== "edit";
+  const seen = { way: false };
+  const passes = (way) => {
+    const ok2 = named && wayPasses(way, stored, existing);
+    if (ok2) seen.way = true;
+    return ok2;
+  };
+  const twoCalls = () => {
+    const ok2 = named && twoCallsPass(written, stored, existing);
+    if (ok2) seen.way = true;
+    return ok2;
+  };
+  const fileReasons = problems.length;
+  if (after?.files !== void 0 && (filesChanged || !isRule(stored) && isRule(written))) {
+    problems.push(...filesProblems(written, after.files, existing, stored, !deliveryKept, named, named && twoCallsPass(written, stored, existing), seen));
+  } else if (filesChanged && (stored.scope.kind === "project" || written.scope.kind === "project") && (isRule(stored) || isRule(written))) {
+    problems.push(CONDITION_TEXT.filesProject(false, passes(withFiles(written, before?.files)), twoCalls()));
   }
-  if (filed && !filesChanged && written.delivery !== stored.delivery && written.delivery !== "edit") {
-    problems.push(CONDITION_TEXT.filesDeliveryKept(wayPasses({ ...written, delivery: stored.delivery }, stored, existing)));
+  if (deliveryKept) {
+    const ways = { edit: !isRule(stored) && passes({ ...written, delivery: "edit" }), twoCalls: twoCalls() };
+    problems.push(CONDITION_TEXT.filesDeliveryKept(passes({ ...written, delivery: stored.delivery }), ways));
   }
   if ((filed || before?.files !== void 0) && written.scope.kind !== stored.scope.kind) {
-    problems.push(CONDITION_TEXT.filesMoved(wayPasses({ ...written, scope: stored.scope }, stored, existing)));
+    problems.push(CONDITION_TEXT.filesMoved(passes({ ...written, scope: stored.scope })));
+  }
+  if (named && problems.length > fileReasons && !seen.way) {
+    const options = waysOut(written, stored, existing);
+    if (options.length > 0) problems.push(CONDITION_TEXT.filesTogether(options));
   }
   if (written.scope.kind === "project" && placed && (changed || stored.scope.kind !== "project")) problems.push(CONDITION_TEXT.project);
   if (changed) {
@@ -46336,20 +46435,26 @@ function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE,
   const changes = [.../* @__PURE__ */ new Set([...was.keys(), ...will.keys()])].map((key) => {
     const { id, place, where } = was.get(key) ?? will.get(key);
     const [from, to] = [was.get(key)?.row ?? none, will.get(key)?.row ?? none];
+    const [fromFiles, toFiles] = [was.get(key)?.files ?? none, will.get(key)?.files ?? none];
     const swap = id !== written && from.some((scope, day) => scope !== null && to[day] !== null && scope !== to[day]);
+    const filed = (key2) => key2 !== null && key2 !== "none" && !key2.startsWith("moment:");
+    const otherFiles = !swap && fromFiles.some((files, day) => files !== null && toFiles[day] !== null && files !== toFiles[day] && (filed(files) || filed(toFiles[day])));
     return {
       id,
       place,
       before: from.map((scope) => scope !== null),
       after: to.map((scope) => scope !== null),
       ...swap ? { swap: true } : {},
+      ...otherFiles ? { otherFiles: true } : {},
       ...where === void 0 ? {} : { where }
     };
-  }).filter((change) => change.swap === true || change.before.some((loads, day) => loads !== change.after[day])).sort(
+  }).filter((change) => change.swap === true || change.otherFiles === true || change.before.some((loads, day) => loads !== change.after[day])).sort(
     (a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place] || compareText(conditionWords(a.where), conditionWords(b.where)) || compareText(classKey(a.where), classKey(b.where))
   );
   const ruleIn = (memories) => memories.some((m) => m.id === written && isRule(m));
-  return { days, changes, writtenRule: written !== null && (ruleIn(before) || ruleIn(after)) ? written : null };
+  const writtenRule = written !== null && (ruleIn(before) || ruleIn(after)) ? written : null;
+  const nowhere = writtenRule !== null && ![...was.values(), ...will.values()].some((loading) => loading.id === writtenRule);
+  return { days, changes, writtenRule, ...nowhere ? { nowhere: true } : {} };
 }
 function sampleDate(day, today) {
   return day.kind === "today" ? today : `${day.date}~`;
@@ -46396,13 +46501,26 @@ function hiderPlaces(before, after, id) {
   }
   return [...places.values()];
 }
+function editFiles(memory) {
+  const files = canonicalCondition(memory.appliesWhen)?.files;
+  if (files === void 0) return { state: "none" };
+  const kinds = files.map(patternKind);
+  if (memory.scope.kind === "project" || kinds.includes("folder")) return { state: "unjudged", patterns: files };
+  return { state: "judged", usable: files.filter((_, i) => kinds[i] === "kind"), unusable: files.filter((_, i) => kinds[i] === "unusable") };
+}
+function filesKey(memory) {
+  const files = editFiles(memory);
+  if (files.state !== "judged") return files.state;
+  return JSON.stringify([...new Set(files.usable.map((pattern) => pattern.toLowerCase()).map((pattern) => pattern.includes("/") ? pattern : `**/${pattern}`))].sort());
+}
 function loadingOf(memories, session, samples, here, classes) {
   const user = memories.filter((m) => m.scope.kind === "user");
   const loading = /* @__PURE__ */ new Map();
   const mark = (memory, place, where, day) => {
     const key = `${memory.id} ${place} ${classKey(where)}`;
-    const entry = loading.get(key) ?? { id: memory.id, place, where, row: samples.map(() => null) };
+    const entry = loading.get(key) ?? { id: memory.id, place, where, row: samples.map(() => null), files: samples.map(() => null) };
     entry.row[day] = scopeId(memory.scope);
+    entry.files[day] = memory.delivery === "edit" ? filesKey(memory) : `moment:${memory.delivery}`;
     loading.set(key, entry);
   };
   const distinct = /* @__PURE__ */ new Map();
@@ -46746,13 +46864,6 @@ function refreshContext(input2, place, proposals) {
 }
 var NO_FILE = { kind: "no-file" };
 var EVERY_EDIT = { kind: "class", matched: /* @__PURE__ */ new Set() };
-function editFiles(memory) {
-  const files = canonicalCondition(memory.appliesWhen)?.files;
-  if (files === void 0) return { state: "none" };
-  const kinds = files.map(patternKind);
-  if (memory.scope.kind === "project" || kinds.includes("folder")) return { state: "unjudged", patterns: files };
-  return { state: "judged", usable: files.filter((_, i) => kinds[i] === "kind"), unusable: files.filter((_, i) => kinds[i] === "unusable") };
-}
 function arrivesAtEdit(memory, edit) {
   const files = editFiles(memory);
   if (files.state !== "judged" || edit.kind === "no-file") return true;
@@ -46822,20 +46933,32 @@ function deliveredAt(moment, active, byId, problems, edit = NO_FILE) {
   return fullParts(kinds, active, byId, budgets, { problems, edit, ...priority === void 0 ? {} : { priority } }).placed;
 }
 var EDIT_CASES_MAX = 1024;
-function editCases(memories) {
-  const patterns = /* @__PURE__ */ new Map();
-  for (const memory of memories) {
-    const files = memory.delivery === "edit" ? editFiles(memory) : void 0;
-    if (files?.state !== "judged" || files.usable.length === 0) continue;
-    patterns.set(memory.id, [.../* @__PURE__ */ new Set([...patterns.get(memory.id) ?? [], ...files.usable])]);
-  }
-  const ids = [...patterns.keys()];
-  const meets = ids.map((a) => ids.map((b) => a === b || patternsMayMeet(patterns.get(a), patterns.get(b))));
+function editCases(before, after = before) {
+  const nodes = /* @__PURE__ */ new Map();
+  const add = (memories, side) => {
+    for (const memory of memories) {
+      const files = memory.delivery === "edit" ? editFiles(memory) : void 0;
+      if (files?.state !== "judged" || files.usable.length === 0) continue;
+      const patterns = [...new Set(files.usable)].sort();
+      const key = JSON.stringify([memory.id, patterns]);
+      const node2 = nodes.get(key) ?? { id: memory.id, patterns, sides: /* @__PURE__ */ new Set() };
+      node2.sides.add(side);
+      nodes.set(key, node2);
+    }
+  };
+  add(before, "before");
+  add(after, "after");
+  const list = [...nodes.values()];
+  const meets = list.map((a, i) => list.map((b, j) => i === j || patternsMayMeet(a.patterns, b.patterns)));
+  const on = (chosen, side) => ({
+    kind: "class",
+    matched: new Set(chosen.filter((i) => list[i].sides.has(side)).map((i) => list[i].id))
+  });
   const cases = [];
   const grow = (chosen, from) => {
-    cases.push({ kind: "class", matched: new Set(chosen.map((i) => ids[i])) });
+    cases.push({ before: on(chosen, "before"), after: on(chosen, "after") });
     if (cases.length > EDIT_CASES_MAX) return false;
-    for (let next = from; next < ids.length; next += 1) {
+    for (let next = from; next < list.length; next += 1) {
       if (chosen.every((i) => meets[i][next]) && !grow([...chosen, next], next + 1)) return false;
     }
     return true;
@@ -46864,16 +46987,16 @@ function pushedOut(before, after, problems, skip) {
     if (!skip.has(id) && !(moments.get(id) ?? []).includes(moment)) moments.set(id, [...moments.get(id) ?? [], moment]);
   };
   for (const moment of FILL_MOMENTS) {
-    const cases = moment === "edit" ? editCases([...before.active, ...after.active]) : [NO_FILE];
+    const cases = moment === "edit" ? editCases(before.active, after.active) : [{ before: NO_FILE, after: NO_FILE }];
     if (cases === null) {
       const was = new Set(before.active.map((m) => m.id));
       for (const memory of after.active) if (memory.delivery === "edit" && was.has(memory.id) && maybeNoRoom(memory, after.active, after.byId, problems)) push(memory.id, moment);
       continue;
     }
     for (const edit of cases) {
-      const was = deliveredAt(moment, before.active, before.byId, problems, edit).map((m) => m.id);
+      const was = deliveredAt(moment, before.active, before.byId, problems, edit.before).map((m) => m.id);
       if (was.length === 0) continue;
-      const now = new Set(deliveredAt(moment, after.active, after.byId, problems, edit).map((m) => m.id));
+      const now = new Set(deliveredAt(moment, after.active, after.byId, problems, edit.after).map((m) => m.id));
       for (const id of was) if (!now.has(id)) push(id, moment);
     }
   }
@@ -46888,7 +47011,7 @@ function standingAt(memory, active, byId, problems = []) {
   if (memory.delivery !== "edit") return deliveredAt(memory.delivery, active, byId, problems).includes(memory) ? "loads" : "no-room";
   const cases = editCases(active);
   if (cases === null) return maybeNoRoom(memory, active, byId, problems) ? "no-room" : "loads";
-  const left = cases.some((edit) => arrivesAtEdit(memory, edit) && !deliveredAt("edit", active, byId, problems, edit).includes(memory));
+  const left = cases.some(({ after: edit }) => arrivesAtEdit(memory, edit) && !deliveredAt("edit", active, byId, problems, edit).includes(memory));
   return left ? "no-room" : "loads";
 }
 function fullText(kinds, active, byId, rooms, priority) {
@@ -48688,7 +48811,7 @@ function loadingFields(memory) {
 function textToCarry(write, effect) {
   if (write.kind !== "update") return [];
   const [was, will] = [write.base.memory, write.memory];
-  const starts = effect.changes.some((change) => change.id === will.id && change.after.some((loads, day) => loads && !change.before[day]));
+  const starts = effect.changes.some((change) => change.id === will.id && (change.otherFiles === true || change.after.some((loads, day) => loads && !change.before[day])));
   const loaded = loadingFields(was);
   const fields = !isRule(was) && isRule(will) || was.delivery !== will.delivery || starts ? loadingFields(will) : loadingFields(will).filter((field) => !loaded.includes(field));
   return fields.filter((field) => will[field] !== "");
@@ -48710,6 +48833,44 @@ function filesWords(memory) {
   return files.state === "unjudged" ? `${words}, not judged yet` : words;
 }
 var SWAP_MARK = " (another record of this memory)";
+var FILES_SHIFT = {
+  other: " (at other files)",
+  narrowed: " (at its files only, no longer at every edit)",
+  widened: " (now at every edit)",
+  unread: " (at every edit, no longer at reads)",
+  read: " (at every edit, now also at reads)"
+};
+function deliveryWhere(delivery) {
+  switch (delivery) {
+    case "startup":
+    case "prompt":
+    case "question":
+    case "subagent":
+      return `at the ${delivery} moment`;
+    case "index":
+      return "at the start index";
+    case "on-demand":
+      return "only when looked up";
+    case "edit":
+      return "at edits";
+    default:
+      throw new Error(`unknown delivery ${JSON.stringify(delivery)}`);
+  }
+}
+var MOMENT_SHIFT = {
+  fromFiles: (delivery) => ` (now ${deliveryWhere(delivery)}, no longer at its files)`,
+  fromEvery: (delivery) => ` (now ${deliveryWhere(delivery)}, no longer at every edit)`,
+  toFiles: (delivery) => ` (now at its files, no longer ${deliveryWhere(delivery)})`,
+  toEvery: (delivery) => ` (now at every edit, no longer ${deliveryWhere(delivery)})`
+};
+function filesShift(was, will) {
+  const [from, to] = [editFiles(was).state, editFiles(will).state];
+  if (was.delivery !== "edit") return to === "judged" ? MOMENT_SHIFT.toFiles(was.delivery) : MOMENT_SHIFT.toEvery(was.delivery);
+  if (will.delivery !== "edit") return from === "judged" ? MOMENT_SHIFT.fromFiles(will.delivery) : MOMENT_SHIFT.fromEvery(will.delivery);
+  if (from === "judged") return to === "judged" ? FILES_SHIFT.other : FILES_SHIFT.widened;
+  if (to === "judged") return FILES_SHIFT.narrowed;
+  return to === "none" ? FILES_SHIFT.unread : FILES_SHIFT.read;
+}
 var STANDING_TEXT = {
   // True in every place: no part of any moment holds more than one hook's cap.
   "too-long": " (more than one hook part holds, so it does not load)",
@@ -48755,7 +48916,8 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
     return ` (${shownCut(was || "no files", FILES_MARK_MAX)} -> ${shownCut(will || "no files", FILES_MARK_MAX)})`;
   };
   const titled = (change) => who(change.id, change.after.some(Boolean) ? afterById.get(change.id) : beforeById.get(change.id) ?? afterById.get(change.id));
-  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.swap === true ? SWAP_MARK : ""}${change.after.some(Boolean) ? size(change.id) : ""}`;
+  const moved = (change) => change.otherFiles === true ? filesShift(beforeById.get(change.id), afterById.get(change.id)) : "";
+  const shift = (change) => `${loadingText(effect.days, change.before)} -> ${loadingText(effect.days, change.after)}${change.swap === true ? SWAP_MARK : ""}${moved(change)}${change.after.some(Boolean) ? size(change.id) : ""}`;
   const lines = [];
   for (const id of new Set(effect.changes.map((change) => change.id))) {
     const mine = effect.changes.filter((change) => change.id === id);
@@ -48781,7 +48943,8 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
   const written = effect.writtenRule;
   if (written !== null && !effect.changes.some((change) => change.id === written)) {
     const shown2 = afterById.get(written) ?? beforeById.get(written);
-    lines.push(written === created ? `${who(written, shown2)}: saved; it does not load` : `${who(written, shown2)}: changed; its loading does not change${size(written)}`);
+    const kept = written === created ? "saved; it does not load" : `${effect.nowhere === true ? "changed; it does not load" : "changed; its loading does not change"}${size(written)}`;
+    lines.push(`${who(written, shown2)}: ${kept}`);
   }
   for (const { memory, moments } of pushed.slice(0, PUSHED_NAMED)) lines.push(pushedLine(who(memory.id, memory), moments));
   const rest = pushed.slice(PUSHED_NAMED);
@@ -48858,10 +49021,10 @@ var CONDITION = external_exports.strictObject({
   inRepo: external_exports.literal(true).optional().describe("true: only in a session inside a git repository"),
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
   files: external_exports.array(external_exports.string()).optional().describe(
-    "Patterns for one kind of file, such as **/*.bicep or *.md (no slash, or starting with **/, forward slashes only): the memory arrives when Claude writes or edits such a file, wherever it lies, and once per agent when it reads or searches for one. Needs delivery edit and user scope"
+    "Patterns for one kind of file, such as **/*.bicep, *.md or **/infra/*.bicep (no slash, or starting with **/, forward slashes only): the memory arrives when Claude writes or edits such a file, wherever it lies, and once per agent when it reads or searches for one. Needs delivery edit and user scope"
   )
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: labels or files on a memory with overrides, a file pattern that names a folder, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: labels or files on a memory with overrides, a file pattern that names a folder from a repository's root, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
