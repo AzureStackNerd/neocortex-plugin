@@ -45858,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.11",
+  version: "0.5.12",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46401,7 +46401,12 @@ function resolve4(memories, session, today, here = UNKNOWN_HERE) {
 }
 function hidesAt(memory, here) {
   if (!conditionHolds(memory.appliesWhen, here)) return false;
-  return memory.appliesWhen?.files === void 0 || memory.appliesWhen.files.length === 0;
+  if (memory.appliesWhen?.files !== void 0 && memory.appliesWhen.files.length > 0) return false;
+  const canonical = canonicalCondition(memory.appliesWhen);
+  if (canonical === void 0) return true;
+  if (canonical.inRepo === true && here.inRepo === "unknown") return false;
+  if (canonical.labels !== void 0 && canonical.labels.length > 0 && here.labels === "unknown") return false;
+  return true;
 }
 function hidersOf(memories, target, session, date5, here = UNKNOWN_HERE) {
   const { byId, expired, current } = resolve4(memories, session, date5, here);
@@ -46449,7 +46454,7 @@ function ruleEffect(before, after, written, session, today, here = UNKNOWN_HERE,
       ...where === void 0 ? {} : { where }
     };
   }).filter((change) => change.swap === true || change.otherFiles === true || change.before.some((loads, day) => loads !== change.after[day])).sort(
-    (a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place] || compareText(conditionWords(a.where), conditionWords(b.where)) || compareText(classKey(a.where), classKey(b.where))
+    (a, b) => compareText(a.id, b.id) || PLACE_ORDER[a.place] - PLACE_ORDER[b.place] || compareText(classWords(a.where), classWords(b.where)) || compareText(classKey(a.where), classKey(b.where))
   );
   const ruleIn = (memories) => memories.some((m) => m.id === written && isRule(m));
   const writtenRule = written !== null && (ruleIn(before) || ruleIn(after)) ? written : null;
@@ -46462,13 +46467,22 @@ function sampleDate(day, today) {
 function changesRules(effect) {
   return effect.changes.length > 0 || effect.writtenRule !== null;
 }
+var UNSET_IN_FOLDER = { unsetLabels: true, inRepo: false };
+var UNSET_IN_REPO = { unsetLabels: true, inRepo: true };
+var isUnset = (where) => where !== void 0 && "unsetLabels" in where;
 function classKey(where) {
+  if (isUnset(where)) return JSON.stringify([where.inRepo, "unset"]);
   return JSON.stringify([where?.inRepo === true, where?.labels ?? []]);
+}
+function classWords(where) {
+  if (isUnset(where)) return where.inRepo ? "in a repo; labels not set" : "labels not set";
+  return conditionWords(where);
 }
 function classOf(labels, inRepo) {
   return canonicalCondition({ ...inRepo ? { inRepo: true } : {}, labels: [...labels] });
 }
 function placeOf(where) {
+  if (isUnset(where)) return { inRepo: where.inRepo, labels: "unknown" };
   return { inRepo: where?.inRepo === true, labels: where?.labels ?? [] };
 }
 function otherPlaces(before, after) {
@@ -46479,13 +46493,20 @@ function otherPlaces(before, after) {
     const classes = /* @__PURE__ */ new Map([[classKey(void 0), void 0]]);
     const add = (where) => classes.set(classKey(where), where);
     const overrides = user.filter((m) => m.overrides.includes(id));
+    let ownLabel = false;
     for (const version2 of user.filter((m) => m.id === id)) {
       const own2 = parts(version2);
+      if ((own2.labels ?? []).length > 0) ownLabel = true;
       add(classOf(own2.labels ?? [], own2.inRepo === true));
       for (const override of overrides) {
         const theirs = parts(override);
         add(classOf([...own2.labels ?? [], ...theirs.labels ?? []], own2.inRepo === true || theirs.inRepo === true));
       }
+    }
+    if (ownLabel) {
+      const inRepo = [...classes.values()].some((where) => where !== void 0 && !isUnset(where) && where.inRepo === true);
+      add(UNSET_IN_FOLDER);
+      if (inRepo) add(UNSET_IN_REPO);
     }
     places.set(id, [...classes.values()]);
   }
@@ -46550,6 +46571,9 @@ function linkedTargets(kind, sources, byId, liveById, ignored, here) {
     }
   }
   return targets;
+}
+function overrideHolds(source, target, byId) {
+  return source.overrides.includes(target.id) && linkProblem("overrides", source, target) === null && !linksInTurn("overrides", source, target, byId);
 }
 function linksInTurn(kind, source, target, byId) {
   if (!byId.has(target.id)) return false;
@@ -47550,10 +47574,12 @@ function scoreOf(words, a, b) {
 }
 function pairsIn(active, words, keep) {
   const pairs = [];
+  const byId = new Map(active.map((m) => [m.id, m]));
   for (let i = 0; i < active.length; i += 1) {
     for (let j = i + 1; j < active.length; j += 1) {
       const [a, b] = active[i].id < active[j].id ? [active[i], active[j]] : [active[j], active[i]];
       if (!keep(a, b)) continue;
+      if (overrideHolds(a, b, byId) || overrideHolds(b, a, byId)) continue;
       const score = scoreOf(words, a, b);
       if (score >= NEAR_DUPLICATE_MIN) pairs.push({ a, b, score });
     }
@@ -48928,7 +48954,7 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
     for (const [key, where] of classes) {
       const at = (place) => mine.find((change) => change.place === place && classKey(change.where) === key);
       const [there, overriding] = [at("elsewhere"), at("overriding")];
-      const words = where === void 0 ? "" : ` (${conditionWords(where)})`;
+      const words = where === void 0 ? "" : ` (${classWords(where)})`;
       if (where === void 0 && here !== void 0 && there !== void 0 && shift(here) === shift(there)) {
         parts.push([titled(here), "here and in other places", shift(here)]);
       } else {

@@ -178,9 +178,10 @@ loading there asks you first and names those rules, through `set_context_labels_
 **Conditions on rules.** A rule with `labels` or `inRepo` arrives at its own moment, such as a prompt, an edit or a
 subagent's start, only where its condition holds. Claude proposes such a label itself for a rule that belongs to one
 kind of place, and you confirm it like any rule change. Every rule question names the places where the rule starts or
-stops loading, such as `in other places (labels contoso)`. `update_rule` narrows, widens or removes a rule's condition
-in one change, which you confirm; the rule keeps its id and the exceptions that name it. An update that leaves
-`appliesWhen` out keeps the condition, and `null` or `{}` removes it.
+stops loading, such as `in other places (labels contoso)`; a place not labelled yet has its own line, `in other places
+(labels not set)`, where a labelled rule loads and an exception with a label hides nothing. `update_rule` narrows,
+widens or removes a rule's condition in one change, which you confirm; the rule keeps its id and the exceptions that
+name it. An update that leaves `appliesWhen` out keeps the condition, and `null` or `{}` removes it.
 
 **Exceptions inside repos.** A memory with `overrides` can take `inRepo`, and no other condition. Inside repos it then
 hides what it overrides, and in folders outside one it does not, so a repository's own definition of done can replace

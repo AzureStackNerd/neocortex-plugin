@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.12 - 2026-11-11
+
+- Fixed: an exception with a label, such as one for places labelled contoso, no longer hides the memory it replaces
+  in a repo or folder whose labels nobody has set yet, so the general memory arrives there. Until now such a place
+  counted as carrying every label, and a contoso exception hid the general memory in every place you had not labelled.
+- Changed: a rule question names a place not labelled yet on a line of its own, `in other places (labels not set)` or
+  `in other places (in a repo; labels not set)`, for a rule whose own condition names a label, so a change that moves
+  what loads there asks you first.
+- If several machines share your memory folder, update each one: 0.5.11 still hides the general memory in places not
+  labelled yet, and saves a change that moves what loads there without asking.
+
 ## 0.5.11 - 2026-11-09
 
 - New: change which files a rule is about, give a pattern to a memory you already have, or drop its patterns, without
