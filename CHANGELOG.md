@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.13 - 2026-11-12
+
+- New: ask Claude to record that in places labelled contoso a memory takes a general rule's place, such as one
+  customer's definition of done. Claude saves it as an exception of that rule with the label; the question you
+  confirm says the rule stops loading here and in other places labelled contoso, and once you confirm, the rule
+  still arrives everywhere else. Giving an exception you already have a label, and changing the labels of a place
+  where such an exception applies, ask first in the same way and name the rule.
+- Changed: a rule takes at most 20 exceptions with labels. A 21st is refused, naming the 20 and how many to delete
+  first. Exceptions already in your store stay as they are, and every change that adds none is still accepted.
+- Changed: the refusal for a memory that replaces another now speaks of file patterns only, which are still not
+  possible there; a label is no longer refused.
+- If several machines share your memory folder, update each one: 0.5.12 refuses to save an exception with a label
+  and to give one to an exception you have.
+
 ## 0.5.12 - 2026-11-11
 
 - Fixed: an exception with a label, such as one for places labelled contoso, no longer hides the memory it replaces

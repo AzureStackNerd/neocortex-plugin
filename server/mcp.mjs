@@ -45858,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.12",
+  version: "0.5.13",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46130,28 +46130,47 @@ function validateLinks(memory, existing) {
 var TWO_CALLS = "remove files from its condition in a call of its own, then make it a rule";
 var CONDITION_TEXT = {
   /**
-   * T2 on a save: an exception takes inRepo since #443, and labels and files wait (exceptionPlaced). Each way out is
-   * named only where it would pass (#443 review finding F1; #434 How line 17): leaving them out, or inRepo alone.
-   * existing: the loaded memories, as validateLinks takes them; left out, no way out is named, which is never false.
+   * T2 on a save: an exception takes inRepo since #443 and labels since #446, and a file part waits (exceptionPlaced).
+   * Each way out is named only where it would pass (#443 review finding F1; #434 How line 17): its files left out, its
+   * labels and inRepo kept; or its condition replaced by inRepo alone, worded as a call, since "inRepo alone is possible"
+   * beside a file refusal reads as "labels are not" (#446 How line 2, S12, S13). existing: the loaded memories, as
+   * validateLinks takes them; left out, no way out is judged or named, which is never false, and so a way's own check
+   * (named false) runs no further check, as wayPasses requires.
    */
-  override: (written, existing = []) => {
-    const ways = [leaveOutWayOut(written, existing) ? "leave them out" : "", repoWayOut(written, existing) ? "inRepo alone is possible" : ""].filter((way) => way !== "");
-    return `appliesWhen: labels or files are not possible yet on a memory with overrides${ways.length === 0 ? "" : `; ${ways.join(", ")}`}`;
-  },
+  override: (written, existing) => `appliesWhen: a file condition is not possible yet on a memory with overrides${existing === void 0 ? "" : wayList([leaveOutWayOut(written, existing), "leave files out"], [repoWayOut(written, existing), "replace its condition with inRepo true"])}`,
   /**
    * T2 on an update that sets, changes or removes the condition of a memory with overrides before or after, where that
-   * condition, before or after, has labels or files (#443 point 3).
+   * condition, before or after, has files (#443 point 3; #446). "A condition with files", since it also fires for a
+   * label change beside hand-written files the call keeps. "Leave appliesWhen out of this call" is named only where the
+   * call with the stored condition passes (#446 How line 3): a note with files given overrides and a changed condition
+   * in one call would trip becomesOverride. stored: the record the update changes; left out, that way is not named.
    */
-  overrideChanged: "appliesWhen: on a memory with overrides, labels or files cannot be set, changed or removed yet; leave appliesWhen out of this call, and change such a condition only in a call of its own while the memory has no overrides",
+  overrideChanged: (written, existing = [], stored) => `appliesWhen: on a memory with overrides, a condition with files cannot be set, changed or removed yet; ${written !== void 0 && stored !== void 0 && wayPasses({ ...written, appliesWhen: stored.appliesWhen }, stored, existing) ? "leave appliesWhen out of this call, and " : ""}change such a condition only in a call of its own while the memory has no overrides`,
   /**
-   * T2 on an update that gives a memory whose condition has labels or files overrides; each way out only where it passes
-   * (#434 How line 17): a user rule's file part can be dropped since #455 (B1), so null is named for it, while a project
-   * rule's cannot until B2 (#457). stored: the record the update changes.
+   * T2 on an update that gives a memory whose condition has files overrides; each way out only where both its calls pass
+   * (#434 How line 17): its condition without files, its labels and inRepo kept (#446 How line 4), or inRepo alone for a
+   * user memory. A user rule's file part can be dropped since #455 (B1), while a project rule's cannot until B2 (#457).
+   * stored: the record the update changes.
    */
   becomesOverride: (written, existing = [], stored) => {
     const twoSteps = (condition) => stored !== void 0 && conditionProblems({ ...stored, appliesWhen: condition }, stored, [], existing, false).length === 0 && wayPasses({ ...written, appliesWhen: condition }, void 0, existing);
-    const ways = [twoSteps(void 0) ? "null" : "", written.scope.kind === "user" && twoSteps({ inRepo: true }) ? "inRepo alone" : ""].filter((way) => way !== "");
-    return `overrides: a memory with labels or files in its condition cannot override another yet${ways.length === 0 ? "" : `; first change its appliesWhen to ${ways.join(" or to ")}, then set overrides`}`;
+    const ways = [
+      twoSteps(withFiles(written, void 0).appliesWhen) ? "remove files from its appliesWhen" : "",
+      written.scope.kind === "user" && twoSteps({ inRepo: true }) ? "change its appliesWhen to inRepo alone" : ""
+    ].filter((way) => way !== "");
+    return `overrides: a memory with files in its condition cannot override another yet${ways.length === 0 ? "" : `; first ${ways.join(" or ")}, then set overrides`}`;
+  },
+  /**
+   * The cap (#446 point 4, Remco, 2026-11-12): one rule takes at most EXCEPTIONS_MAX exceptions with labels. Lasting, so
+   * no "yet". others: the counted exceptions of target but the written memory, their real number, so the text stays true
+   * in a store filled past the cap by hand; k: how many must go; way: whether this call passes with k of them gone, the
+   * one case its ways are named (memory c2390ded). Changing one's labels makes no room, and removing them hides the rule
+   * everywhere, so neither is named (#446 How line 8).
+   */
+  capped: (target, others, k, way) => {
+    const ids = others.map((memory) => shortId(memory.id)).sort();
+    const room = k === 1 ? `delete one of them, or take ${shortId(target)} out of its overrides` : `delete ${k} of them, or take ${shortId(target)} out of their overrides`;
+    return `overrides: ${shortId(target)} already has ${others.length} exceptions with labels, the most a rule takes is ${EXCEPTIONS_MAX} (${ids.join(", ")})${way ? `; first ${room}` : ""}`;
   },
   // T3 (#434). Every way out a T3 text names is a call conditionProblems and the link check pass with the memory's other
   // fields as the call gives them (review F2, memory c2390ded); filesProblems and conditionProblems derive each flag by
@@ -46205,8 +46224,7 @@ function repoWayOut(written, existing) {
 }
 function leaveOutWayOut(written, existing) {
   if (written.overrides.length === 0) return false;
-  const repo = canonicalCondition(written.appliesWhen)?.inRepo === true;
-  return wayPasses({ ...written, appliesWhen: repo ? { inRepo: true } : void 0 }, void 0, existing);
+  return wayPasses(withFiles(written, void 0), void 0, existing);
 }
 function wayPasses(changed, stored, existing) {
   if (conditionProblems(changed, stored, [], existing, false).length > 0) return false;
@@ -46314,7 +46332,28 @@ function twoCallsPass(written, stored, existing) {
   return wayPasses(first, stored, existing) && wayPasses(withFiles(written, void 0), first, existing);
 }
 function exceptionPlaced(condition) {
-  return condition === void 0 || condition.labels === void 0 && condition.files === void 0;
+  return condition?.files === void 0;
+}
+var EXCEPTIONS_MAX = 20;
+var capCounts = (memory, target) => memory !== void 0 && memory.scope.kind === "user" && memory.overrides.includes(target) && canonicalCondition(memory.appliesWhen)?.labels !== void 0;
+var userRule = (memory) => memory !== void 0 && memory.scope.kind === "user" && isRule(memory);
+function capProblems(written, stored, existing, named = true) {
+  const others = (target) => existing.filter((memory) => memory.id !== written.id && capCounts(memory, target));
+  const refused = (target, counted, k) => {
+    const gone = new Set(counted.slice(0, k));
+    return CONDITION_TEXT.capped(target, counted, k, named && wayPasses(written, stored, existing.filter((memory) => !gone.has(memory))));
+  };
+  const problems = [];
+  for (const target of written.overrides) {
+    if (!capCounts(written, target) || capCounts(stored, target) || !userRule(existing.find((memory) => memory.id === target))) continue;
+    const counted = others(target);
+    if (counted.length >= EXCEPTIONS_MAX) problems.push(refused(target, counted, counted.length - EXCEPTIONS_MAX + 1));
+  }
+  if (userRule(written) && !userRule(stored)) {
+    const counted = others(written.id);
+    if (counted.length > EXCEPTIONS_MAX) problems.push(refused(written.id, counted, counted.length - EXCEPTIONS_MAX));
+  }
+  return problems;
 }
 function conditionProblems(written, stored, current, existing, named = true) {
   const after = canonicalCondition(written.appliesWhen);
@@ -46323,7 +46362,7 @@ function conditionProblems(written, stored, current, existing, named = true) {
   const problems = [];
   if (stored === void 0) {
     if (after === void 0) return problems;
-    if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, named ? existing : []));
+    if (written.overrides.length > 0 && !exceptionPlaced(after)) problems.push(CONDITION_TEXT.override(written, named ? existing : void 0));
     if (after.files !== void 0) {
       const seen2 = { way: false };
       const reasons = filesProblems(written, after.files, existing, void 0, true, named, false, seen2);
@@ -46332,12 +46371,13 @@ function conditionProblems(written, stored, current, existing, named = true) {
       if (options.length > 0) problems.push(CONDITION_TEXT.filesTogether(options, "save"));
     }
     if (written.scope.kind === "project" && placed) problems.push(CONDITION_TEXT.project);
+    problems.push(...capProblems(written, void 0, existing, named));
     return problems;
   }
   const before = canonicalCondition(stored.appliesWhen);
   const changed = !sameCondition(before, after);
   const overriding = stored.overrides.length > 0 || written.overrides.length > 0;
-  if (changed && overriding && !(exceptionPlaced(before) && exceptionPlaced(after))) problems.push(CONDITION_TEXT.overrideChanged);
+  if (changed && overriding && !(exceptionPlaced(before) && exceptionPlaced(after))) problems.push(CONDITION_TEXT.overrideChanged(written, named ? existing : [], named ? stored : void 0));
   if (!changed && !exceptionPlaced(after) && stored.overrides.length === 0 && written.overrides.length > 0) problems.push(CONDITION_TEXT.becomesOverride(written, existing, named ? stored : void 0));
   const filesChanged = !sameCondition({ files: before?.files }, { files: after?.files });
   const deliveryKept = filed && !filesChanged && written.delivery !== stored.delivery && written.delivery !== "edit";
@@ -46370,6 +46410,7 @@ function conditionProblems(written, stored, current, existing, named = true) {
     if (options.length > 0) problems.push(CONDITION_TEXT.filesTogether(options));
   }
   if (written.scope.kind === "project" && placed && (changed || stored.scope.kind !== "project")) problems.push(CONDITION_TEXT.project);
+  problems.push(...capProblems(written, stored, existing, named));
   if (changed) {
     for (const by of current) {
       if (by.id === written.id || !by.overrides.includes(written.id)) continue;
@@ -49050,7 +49091,7 @@ var CONDITION = external_exports.strictObject({
     "Patterns for one kind of file, such as **/*.bicep, *.md or **/infra/*.bicep (no slash, or starting with **/, forward slashes only): the memory arrives when Claude writes or edits such a file, wherever it lies, and once per agent when it reads or searches for one. Needs delivery edit and user scope"
   )
 });
-var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: labels or files on a memory with overrides, a file pattern that names a folder from a repository's root, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
+var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: files on a memory with overrides, a file pattern that names a folder from a repository's root, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -49064,9 +49105,9 @@ var SAVE_INPUT = {
   ),
   enforced: external_exports.boolean().default(false).describe("Enforced memories can never be overridden by another scope"),
   supersedes: LINK_IDS.default([]).describe("Memories in the same scope that this one replaces everywhere"),
-  // #443 S1 and S12: the exception's routes in words, since the instructions have no room for them.
+  // #443 S1 and S12, #446 S12: the exception's routes in words, since the instructions have no room for them.
   overrides: LINK_IDS.default([]).describe(
-    "Memories this one is an exception to; each stops loading where this one applies: in its project for a project memory, or where its appliesWhen holds (inRepo true: only inside repos). Needs overrideReason"
+    "Memories this one is an exception to; each stops loading where this one applies: in its project for a project memory, or where its appliesWhen holds (labels: only in places that carry every label listed; inRepo true: only inside repos). Needs overrideReason"
   ),
   overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
@@ -49466,9 +49507,11 @@ function createServer(deps) {
     const steps = plan.steps ?? [];
     const current = resolve4(existing, deps.session, toLocalDate(now())).current;
     const links = steps.flatMap((step) => step.kind === "update" ? validateLinks(step.memory, existing) : []);
-    const conditions = steps.flatMap((step) => step.kind === "update" ? conditionProblems(step.memory, step.base.memory, current, existing) : []).map((one) => one.split("; ")[0]);
+    const capped = new Set(steps.flatMap((step) => step.kind === "update" ? capProblems(step.memory, step.base.memory, existing) : []));
+    const conditions = steps.flatMap((step) => step.kind === "update" ? conditionProblems(step.memory, step.base.memory, current, existing) : []).filter((one) => !capped.has(one)).map((one) => one.split("; ")[0]);
     if (conditions.length > 0) return { stop: PROPOSAL_TEXT.cannot([...links, ...conditions].join("; ")), cannot: conditions.join("; ") };
-    return links.length === 0 ? { steps } : { stop: links.join("; ") };
+    const stops = [...links, ...capped];
+    return stops.length === 0 ? { steps } : { stop: stops.join("; ") };
   };
   const acceptedVerdict = async (proposal, load2, given2) => {
     const memories = given2 ?? await reader.load(visibleScopes(deps.session));

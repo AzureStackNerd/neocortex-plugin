@@ -183,9 +183,12 @@ stops loading, such as `in other places (labels contoso)`; a place not labelled 
 widens or removes a rule's condition in one change, which you confirm; the rule keeps its id and the exceptions that
 name it. An update that leaves `appliesWhen` out keeps the condition, and `null` or `{}` removes it.
 
-**Exceptions inside repos.** A memory with `overrides` can take `inRepo`, and no other condition. Inside repos it then
-hides what it overrides, and in folders outside one it does not, so a repository's own definition of done can replace
-the general one in repos only. You confirm it like any rule change.
+**Exceptions inside repos or in places with a label.** A memory with `overrides` can take `inRepo` and labels, and no
+file condition. Inside repos, or in places that carry every label it lists, it then hides what it overrides, and
+elsewhere it does not, so a repository's own definition of done can replace the general one in repos only, and one
+customer's in places labelled with that customer only. Where nobody has set the labels yet, an exception with a label
+hides nothing. You confirm it like any rule change. A rule takes at most 20 exceptions with labels; a write that would
+give it more is refused, naming them and how many must go.
 
 ### Rules for one kind of file
 
