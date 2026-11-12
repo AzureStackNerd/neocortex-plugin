@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.15 - 2026-11-12
+
+- Changed: NeoCortex's hooks no longer read every memory at each Read, Grep, Glob, edit, prompt and subagent start;
+  they read only the memories that changed since the hook before. With hundreds of memories a read now answers almost
+  as fast as with one: on a 300-memory store a read went from about 76 ms to about 4 ms, and ten reads at once from
+  about 710 ms to about 10 ms (measured on one Windows machine). A memory saved, changed or deleted in another session,
+  on another machine or by hand still arrives, or stops arriving, at the next call. A session start and NeoCortex's
+  tools read every memory as before.
+
 ## 0.5.14 - 2026-11-12
 
 - Fixed: when `dream_report` offers to rewrite summaries so the start index fits its budget, it now says how long

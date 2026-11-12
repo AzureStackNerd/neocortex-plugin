@@ -45858,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.14",
+  version: "0.5.15",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48703,7 +48703,8 @@ var KeepOneError = class extends Error {
 function readerOf(store2) {
   return {
     location: store2.location,
-    load: (scopes) => store2.load(scopes),
+    // The hooks' reuse passes through to the store (#456); every other caller passes none and reads every record.
+    load: (scopes, options) => store2.load(scopes, options),
     scopes: () => store2.scopes(),
     recordsOf: (id) => store2.recordsOf(id),
     recordsAt: (requests) => store2.recordsAt(requests),
@@ -49398,9 +49399,9 @@ function createServer(deps) {
     const here = await hereNow();
     return { stored, memories, problems, here, resolution: resolve4(memories, deps.session, toLocalDate(now()), here) };
   };
-  const seen = async () => {
+  const seen = async (reuse = false) => {
     const scopes = visibleScopes(deps.session);
-    return { visible: scopes, loaded: await reader.load(scopes) };
+    return { visible: scopes, loaded: await (reuse ? reader.load(scopes, { reuse: true }) : reader.load(scopes)) };
   };
   const listed3 = async () => {
     try {
@@ -49554,8 +49555,8 @@ function createServer(deps) {
       return { failed: true };
     }
   };
-  const delivered = async (here, notices = false) => {
-    const view = await seen();
+  const delivered = async (here, notices = false, reuse = false) => {
+    const view = await seen(reuse);
     const pass = notices ? await passNotices(view.loaded) : { leftBehind: [], awaiting: 0 };
     return { view, delivery: { ...deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here), ...pass } };
   };
@@ -50077,7 +50078,8 @@ function createServer(deps) {
           });
         }
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
-        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), PLACE_MOMENTS.includes(moment) && part === 1);
+        const reuse = event !== "SessionStart";
+        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), PLACE_MOMENTS.includes(moment) && part === 1, reuse);
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const edit = moment === "edit" ? editOf(file2, deps.placeDir) : void 0;
         const named = moment === "read" ? readOf(file2, deps.placeDir) : moment === "search" ? searchOf({ path, glob, type, pattern }, deps.placeDir) : void 0;
@@ -50740,6 +50742,7 @@ var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var SETTLE_MS = 250;
 var TEMP_RE = /^(.+)\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
 var BYTE_ORDER_MARK3 = String.fromCharCode(65279);
+var SETTLED_MS = 2e3;
 var MARKER_FILE = "format.json";
 var PREVIOUS = "previous";
 function markerOf(text) {
@@ -50795,6 +50798,17 @@ var FileStore = class {
   lookUp;
   readStored;
   copySeams;
+  clock;
+  statListed;
+  /**
+   * Per folder, what loads with reuse kept of each record by its listed name (#456). A load without reuse neither
+   * consults nor fills it.
+   */
+  kept = /* @__PURE__ */ new Map();
+  /** Per folder, the pass of a load with reuse that runs, and the one that waits to start after it (#456, shared). */
+  passes = /* @__PURE__ */ new Map();
+  /** Orders the call of a load and the start of a pass, so a load knows whether a pass began after it (#456, shared). */
+  events = 0;
   locks;
   constructor(root2, options = {}) {
     this.root = root2;
@@ -50808,16 +50822,20 @@ var FileStore = class {
     this.lookUp = options.lookUp ?? ((path) => stat3(path));
     this.readStored = options.readStored ?? ((path) => readFile3(path));
     this.copySeams = { linkFile: options.linkFile, renameFile: options.renameFile };
+    this.clock = options.clock ?? Date.now;
+    this.statListed = options.statListed ?? ((path) => stat3(path, { bigint: true }));
   }
   get location() {
     return this.root;
   }
-  async load(scopes) {
+  async load(scopes, options = {}) {
+    const called = options.reuse === true ? ++this.events : void 0;
     const unique2 = [...new Map(scopes.map((scope) => [scopeId(scope), scope])).values()].sort(canonicalOrder);
     const folders = unique2.map((scope) => ({ scope, parts: foldersOf(scope) }));
     await this.assertRoot();
     const result = { memories: [], problems: [] };
-    for (const { scope, parts } of folders) await this.loadFolder(parts, { scope }, result);
+    const loaded = /* @__PURE__ */ new Set();
+    for (const { scope, parts } of folders) await this.loadFolder(parts, { scope }, result, loaded, called);
     return result;
   }
   /** Runs a proposal step under the machine-local lock of that id, so a record write shares this root's locks (D8). */
@@ -51218,14 +51236,71 @@ var FileStore = class {
   /**
    * The memories of one folder into result. A file that went missing since it was listed, and has no name there on a
    * second look, was deleted or moved meanwhile and is none (#352); any other failure to read or parse it is a problem.
+   * loaded holds the ids result already holds a memory of. With reuse (#456), called is when the load was called: the
+   * folder's pass may answer from what earlier loads with reuse kept, and loads at once share it.
    */
-  async loadFolder(parts, location, result) {
+  async loadFolder(parts, location, result, loaded, called) {
     const folder = join4(this.root, ...parts);
+    const listed3 = called === void 0 ? await this.pass(folder, parts, location.scope, false) : await this.shared(folder, called, () => this.pass(folder, parts, location.scope, true));
+    for (const one of listed3) {
+      if (one.notAnId !== void 0) {
+        result.problems.push(one.notAnId);
+        continue;
+      }
+      const { file: file2, id, read: read2 } = one;
+      if (read2 === void 0) continue;
+      if ("problem" in read2) result.problems.push(read2.problem);
+      else if (loaded.has(id)) {
+        result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
+      } else {
+        result.memories.push(read2.stored);
+        loaded.add(id);
+      }
+    }
+  }
+  /**
+   * One pass over a folder for loads with reuse (#456). A load joins a pass only if the pass began after the load was
+   * called; otherwise it waits for the next, which every load then waiting shares. So no load answers from a moment
+   * before it began (S21), and ten reads at once make one or two passes instead of ten.
+   */
+  shared(folder, called, run) {
+    const slot = this.passes.get(folder) ?? {};
+    this.passes.set(folder, slot);
+    const start = () => {
+      const began = ++this.events;
+      const pass = run();
+      slot.running = { pass, began };
+      pass.then(
+        () => void 0,
+        () => void 0
+      ).finally(() => {
+        if (slot.running?.pass === pass) slot.running = void 0;
+      });
+      return pass;
+    };
+    if (slot.running !== void 0 && slot.running.began > called) return slot.running.pass;
+    if (slot.queued !== void 0) return slot.queued;
+    if (slot.running === void 0) return start();
+    slot.queued = slot.running.pass.then(
+      () => void 0,
+      () => void 0
+    ).then(() => {
+      slot.queued = void 0;
+      return start();
+    });
+    return slot.queued;
+  }
+  /**
+   * Every listed name of a folder in the order the answer reports them, each with what its read gave, or as no memory
+   * id. Decided at every pass, never kept (#456): the listing, the pending names and a temp file's age (S20), and a
+   * folder that is not there, which is empty (S26, S33); a listing that fails throws, so nothing kept answers (S27).
+   */
+  async pass(folder, parts, scope, reuse) {
     let names;
     try {
       names = await readdir2(folder);
     } catch (error62) {
-      if (isNotFound(error62)) return;
+      if (isNotFound(error62)) return [];
       throw error62;
     }
     const lower = new Set(names.map((name) => name.toLowerCase()));
@@ -51240,26 +51315,70 @@ var FileStore = class {
       const file2 = [...parts, name].join("/");
       const id = name.slice(0, -".md".length);
       if (!UUID_RE.test(id)) {
-        listed3.push({ name, file: file2, id, notAnId: { file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" } });
+        const notAnId = { file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" };
+        listed3.push({ name, file: file2, id, notAnId: reuse ? frozen(notAnId) : notAnId });
         continue;
       }
       listed3.push({ name, file: file2, id });
     }
-    const reads = await this.readMany(listed3.flatMap((one) => one.notAnId === void 0 ? [join4(folder, one.name)] : []));
+    const records = listed3.filter((one) => one.notAnId === void 0);
+    const reads = reuse ? await this.reused(folder, records, scope) : await this.readAll(folder, records, scope);
     let at = 0;
-    for (const one of listed3) {
-      if (one.notAnId !== void 0) {
-        result.problems.push(one.notAnId);
-        continue;
-      }
-      const { name, file: file2, id } = one;
-      const read2 = await this.settle(reads[at++], join4(folder, name), file2, location.scope, id);
-      if (read2 === void 0) continue;
-      if ("problem" in read2) result.problems.push(read2.problem);
-      else if (result.memories.some((stored) => stored.memory.id === id)) {
-        result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
-      } else result.memories.push(read2.stored);
+    return listed3.map((one) => one.notAnId !== void 0 ? one : { ...one, read: reads[at++] });
+  }
+  /**
+   * What each record reads as, in the order given. Several records are read at a time (LOAD_CONCURRENCY): on a synced
+   * folder each read costs a round trip, so reading one at a time is what made a load wait. The reads never decide the
+   * answer's order; the caller's walk does.
+   */
+  async readAll(folder, records, scope) {
+    const reads = await this.readMany(records.map((one) => join4(folder, one.name)));
+    const out = [];
+    for (const [n, { name, file: file2, id }] of records.entries()) out.push(await this.settle(reads[n], join4(folder, name), file2, scope, id));
+    return out;
+  }
+  /**
+   * readAll for a load with reuse (#456): a stat of every record first, all at once, then a read of only those whose
+   * name is new, whose stat moved, or of which nothing was kept; every other record answers with what was kept. Each
+   * record's key is the stat taken BEFORE its read, kept with what that read gave as one pair, so a write that lands
+   * after the stat costs a read at the next load, never a stale answer. Kept is only what the bytes decide (a memory, or
+   * a problem with its text) and only from a stat older than SETTLED_MS; a read the OS refused and a name whose stat
+   * failed (one pending mid-rename) are read again next time (S8, S20). Everything read here is frozen, kept or not.
+   */
+  async reused(folder, records, scope) {
+    const before = this.kept.get(folder);
+    const settledBefore = (BigInt(Math.floor(this.clock())) - BigInt(SETTLED_MS)) * 1000000n;
+    const stats = await Promise.all(
+      records.map(
+        (one) => this.statListed(join4(folder, one.name)).then(
+          (found) => found,
+          () => void 0
+        )
+      )
+    );
+    const out = new Array(records.length);
+    const next = /* @__PURE__ */ new Map();
+    const toRead = [];
+    for (const [n, one] of records.entries()) {
+      const found = stats[n];
+      const kept = found === void 0 ? void 0 : before?.get(one.name);
+      if (kept !== void 0 && found !== void 0 && sameStat(kept.stat, found)) {
+        out[n] = kept.outcome;
+        next.set(one.name, kept);
+      } else toRead.push(n);
     }
+    const reads = await this.readMany(toRead.map((n) => join4(folder, records[n].name)));
+    for (const [k, n] of toRead.entries()) {
+      const { name, file: file2, id } = records[n];
+      const outcome = frozen(await this.settle(reads[k], join4(folder, name), file2, scope, id));
+      out[n] = outcome;
+      const found = stats[n];
+      if (found !== void 0 && outcome !== void 0 && fromBytes(outcome) && found.ctimeNs < settledBefore && found.mtimeNs < settledBefore) {
+        next.set(name, { stat: found, outcome });
+      }
+    }
+    this.kept.set(folder, next);
+    return out;
   }
   /**
    * The text of each path, read LOAD_CONCURRENCY at a time (#423); a read that fails is kept as its error for `settle`,
@@ -51922,6 +52041,19 @@ function codeOf3(error62) {
 }
 function isNotFound(error62) {
   return codeOf3(error62) === "ENOENT";
+}
+function sameStat(a, b) {
+  return a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs && a.ino === b.ino;
+}
+function fromBytes(outcome) {
+  return "stored" in outcome || outcome.problem.text !== void 0;
+}
+function frozen(value) {
+  if (typeof value === "object" && value !== null) {
+    Object.freeze(value);
+    for (const inner of Object.values(value)) frozen(inner);
+  }
+  return value;
 }
 async function isFree(path, lookUp = lstat) {
   try {
