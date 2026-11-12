@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.14 - 2026-11-12
+
+- Fixed: when `dream_report` offers to rewrite summaries so the start index fits its budget, it now says how long
+  those summaries are today and how much of each remains, such as "rewrite 19 summaries of 280 to 299 characters so
+  that 5 to 6 characters of each remain". Before, it said "to at most the length named", and the only number it gave
+  per memory was the length of the whole index line, so a plan could leave a summary of one character without
+  saying so. Each rewrite in the answer now carries `summaryLength` with both lengths, and the old `line` number
+  is gone. Which plans are offered, and their order, do not change.
+
 ## 0.5.13 - 2026-11-12
 
 - New: ask Claude to record that in places labelled contoso a memory takes a general rule's place, such as one

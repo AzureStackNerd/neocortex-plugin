@@ -45858,7 +45858,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.13",
+  version: "0.5.14",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47860,21 +47860,32 @@ var PLAN_TEXT = {
   cheapest: (plan, others) => `The recommended plan changes ${plan.changes} ${plan.changes === 1 ? "memory" : "memories"} and leaves the start at ${plan.characters} of its ${INDEX_PART_BUDGETS.reduce((sum, part) => sum + part, 0)} characters: ` + describePlan(plan) + "." + (others === 0 ? "" : ` ${others === 1 ? "One other plan" : `${others} other plans`} also fit.`),
   /**
    * What the recommended plan costs outside this place, in the same sentence that recommends it (#420): the memories it
-   * moves down stop loading elsewhere, and the ones it only shortens keep a shortened line there.
+   * moves down stop loading elsewhere, and the ones it only rewrites show there with the cut summary, whose remaining
+   * length the clause states, taken over those user rewrites alone (#460).
    */
   elsewhere: (plan) => {
     const moved = plan.elsewhere;
     const shortened = plan.userScope - plan.elsewhere;
+    const userAfter = plan.shorten.filter((one) => one.memory.scope.kind === "user").map((one) => one.summaryLength.after);
     const movedText = moved === 0 ? "" : ` ${moved === 1 ? "One of them is a user memory, so it stops" : `${moved} of them are user memories, so they stop`} loading at the start of every other place.`;
-    const shortenedText = shortened === 0 ? "" : ` ${shortened === 1 ? "One other is a user memory whose line" : `${shortened} others are user memories whose lines`} every other place still shows, shortened.`;
+    const shortenedText = shortened === 0 ? "" : shortened === 1 ? ` One other is a user memory, so every other place shows it with the cut summary too: ${lengthSpan(userAfter).text} of it.` : ` ${shortened} others are user memories, so every other place shows them with the cut summary too: ${lengthSpan(userAfter).text} of each.`;
     return movedText + shortenedText === "" ? " None of them is a user memory, so no other place is affected." : `${movedText}${shortenedText}`;
   }
 };
+function lengthSpan(lengths) {
+  const low = Math.min(...lengths);
+  const high = Math.max(...lengths);
+  if (low !== high) return { text: `${low} to ${high} characters`, one: false };
+  return { text: `${low} ${low === 1 ? "character" : "characters"}`, one: low === 1 };
+}
 function describePlan(plan) {
   const parts = [];
   if (plan.shorten.length > 0) {
+    const today = lengthSpan(plan.shorten.map((one) => one.summaryLength.today)).text;
+    const after = lengthSpan(plan.shorten.map((one) => one.summaryLength.after));
+    const tail = "with get_memory for its revision and then update_memory with the shorter summary (the old text is not kept, so copy it first if you may want it back)";
     parts.push(
-      `rewrite ${plan.shorten.length === 1 ? "one summary" : `${plan.shorten.length} summaries`} to at most the length named, each with get_memory for its revision and then update_memory with the shorter summary (the old text is not kept, so copy it first if you may want it back)`
+      plan.shorten.length === 1 ? `rewrite one summary of ${today} so that ${after.text} of it ${after.one ? "remains" : "remain"} (its summaryLength.after), ${tail}` : `rewrite ${plan.shorten.length} summaries of ${today} so that ${after.text} of each ${after.one ? "remains" : "remain"} (each memory's summaryLength.after), each ${tail}`
     );
   }
   if (plan.demote.length > 0) {
@@ -47899,14 +47910,15 @@ function indexPlans(input2, place) {
     if (k + j === 0) return null;
     const rewrite = order.slice(0, k).map((one) => one.memory);
     const moves = order.slice(k, k + j).map((one) => one.memory);
-    const fill = fillPlanned(input2, place, cap, rewrite, moves);
+    const { fill, priced } = fillPlanned(input2, place, cap, rewrite, moves);
     if (fill.unshown > 0 || fill.shortened > 0) return null;
     return {
-      shorten: order.slice(0, k).map(({ memory }) => ({ memory, line: cap })),
+      // Each length is read off the summary the fill above priced, never worked out again from the cap (#460).
+      shorten: priced.map(({ memory, summary }) => ({ memory, summaryLength: { today: shownText(memory.summary).length, after: summary.length } })),
       demote: moves,
       changes: k + j,
       userScope: userScopeOf([...rewrite, ...moves]),
-      // Only a demotion takes a memory off another place's start; a rewrite leaves it there, shortened (#420).
+      // Only a demotion takes a memory off another place's start; a rewrite leaves it there, with the cut summary (#420).
       elsewhere: userScopeOf(moves),
       characters: charactersOf(fill)
     };
@@ -47957,15 +47969,18 @@ function longestCap(planAt, k, j, longest) {
 }
 function fillPlanned(input2, place, cap, rewrites, moves) {
   const moved = new Set(moves.map((memory) => memory.id));
-  const cut = new Set(rewrites.map((memory) => memory.id));
-  const active = input2.resolution.active.map((memory) => {
-    if (moved.has(memory.id)) return { ...memory, delivery: "on-demand" };
-    if (!cut.has(memory.id)) return memory;
+  const priced = rewrites.map((memory) => {
     const shown2 = shownText(memory.summary);
     const room = cap - (indexLine(memory).length - shown2.length);
-    return { ...memory, summary: shown2.slice(0, Math.max(1, room)).trimEnd() };
+    return { memory, summary: shown2.slice(0, Math.max(1, room)).trimEnd() };
   });
-  return startFill(input2, place, active);
+  const cut = new Map(priced.map(({ memory, summary }) => [memory.id, summary]));
+  const active = input2.resolution.active.map((memory) => {
+    if (moved.has(memory.id)) return { ...memory, delivery: "on-demand" };
+    const summary = cut.get(memory.id);
+    return summary === void 0 ? memory : { ...memory, summary };
+  });
+  return { fill: startFill(input2, place, active), priced };
 }
 
 // src/dream/visibility.ts
@@ -49167,7 +49182,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
@@ -50665,7 +50680,7 @@ function promoteCost(shown2, intent) {
 }
 function planOf(plan) {
   return {
-    shorten: plan.shorten.map(({ memory, line }) => ({ ...relatedEntryOf(memory), line })),
+    shorten: plan.shorten.map(({ memory, summaryLength }) => ({ ...relatedEntryOf(memory), summaryLength })),
     demote: plan.demote.map(relatedEntryOf),
     changes: plan.changes,
     userScope: plan.userScope,
