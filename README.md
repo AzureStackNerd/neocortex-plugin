@@ -148,6 +148,11 @@ default is `index`.
 | `edit` | Before every edit of a file. With a file pattern: at a write or edit of a matching file, and once at the first read or search of one; see [Rules for one kind of file](#rules-for-one-kind-of-file) | The whole body |
 | `on-demand` | Only when Claude asks for it by id or search | Nothing until then; `get_memory` and `search_memories` always reach it |
 
+A memory can also carry a **failure mark** (`failure: {tool, pattern}`). It then arrives when a tool call fails the way
+its tool and pattern say, once per agent and beside the tool's own error. The pattern is judged against the call's own
+input (a shell's command, a file tool's path, any other tool's arguments), never against the error text, and a rule
+cannot carry one yet.
+
 **Rules.** A memory that loads on its own at a moment (`startup`, `prompt`, `question`, `subagent` or `edit`), or that
 is enforced, is a rule. Claude changes a rule only with `save_rule`, `update_rule` or `delete_rule`, and Claude Code
 asks you before every one of those calls; see [Permissions](#permissions).

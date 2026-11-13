@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.15",
+  version: "0.5.16",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18409,9 +18409,9 @@ var package_default = {
 };
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure"];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
-var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
+var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure"];
 var DEFAULT_EVENT = {
   index: "SessionStart",
   full: "SessionStart",
@@ -18420,7 +18420,8 @@ var DEFAULT_EVENT = {
   edit: "PreToolUse",
   read: "PreToolUse",
   search: "PreToolUse",
-  subagent: "SubagentStart"
+  subagent: "SubagentStart",
+  failure: "PostToolUseFailure"
 };
 var MISSING = {
   index: "the memory index is",
@@ -18430,7 +18431,8 @@ var MISSING = {
   edit: "the write-time standards are",
   read: "the read rules are",
   search: "the search rules are",
-  subagent: "the subagent rules are"
+  subagent: "the subagent rules are",
+  failure: "the failure memories are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);

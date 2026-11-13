@@ -177,6 +177,47 @@
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^(?!mcp__plugin_neocortex_neocortex__.*$)(?!mcp__neocortex__.*$)(?!Read$)(?!Write$)(?!Edit$)(?!MultiEdit$)(?!NotebookEdit$).*$",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "failure",
+              "event": "${hook_event_name}",
+              "tool": "${tool_name}",
+              "input": "${tool_input}",
+              "interrupted": "${is_interrupt}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": "^((Read)|(Write)|(Edit)|(MultiEdit)|(NotebookEdit))$",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "failure",
+              "event": "${hook_event_name}",
+              "tool": "${tool_name}",
+              "call": "${tool_input.file_path}",
+              "notebook": "${tool_input.notebook_path}",
+              "interrupted": "${is_interrupt}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
+            }
+          }
+        ]
+      }
     ]
   }
 }

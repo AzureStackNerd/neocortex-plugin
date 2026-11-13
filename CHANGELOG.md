@@ -2,6 +2,19 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.16 - 2026-11-13
+
+- New: mark a memory about a failure, such as `failure: {tool: 'Bash', pattern: 'npm test*'}`, and it arrives in full
+  when a tool call fails that way: beside the tool's own error, once per agent, and again after a compaction or
+  `/clear`. It is matched on the failed call's own input (a shell's command, a file tool's path), never on the
+  error's text, and a call you interrupted brings nothing. The mark shows in `get_memory`, a search and a refusal,
+  not on the start's index line, and the memory keeps every moment it had. A mark on a rule is refused for now.
+- Changed: marked memories are format 2.1. Once a machine on this version has started on a store, every memory there
+  reads as 2.1; a machine on an earlier 0.5 version reads them all as before and shows one start line suggesting an
+  update.
+- Changed: a clone install needs the two new `PostToolUseFailure` entries to answer a failure; the plugin's own
+  hooks.json has them, and `node scripts/update-clone-hooks.ts` lists them.
+
 ## 0.5.15 - 2026-11-12
 
 - Changed: NeoCortex's hooks no longer read every memory at each Read, Grep, Glob, edit, prompt and subagent start;

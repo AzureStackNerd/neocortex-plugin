@@ -35922,13 +35922,16 @@ var FIELDS_1_0 = [
   "updated"
 ];
 var FIELDS_2_0 = [...FIELDS_1_0, "appliesWhen"];
+var FIELDS_2_1 = [...FIELDS_2_0, "failure"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
-    { version: "2.0", fields: FIELDS_2_0 }
+    { version: "2.0", fields: FIELDS_2_0 },
+    { version: "2.1", fields: FIELDS_2_1 }
   ],
-  // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means.
-  steps: { "1.0": (fields) => fields }
+  // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
+  // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means.
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -35985,8 +35988,8 @@ function normalizeLabel(label) {
   return label.trim().toLowerCase().replace(/\s+/g, "-");
 }
 function normalizeLabels(labels) {
-  const cleaned = labels.map(normalizeLabel).filter((label) => label !== "");
-  return [...new Set(cleaned)].sort();
+  const cleaned2 = labels.map(normalizeLabel).filter((label) => label !== "");
+  return [...new Set(cleaned2)].sort();
 }
 function carriesLabel(labelled, label) {
   return labelled.labels.includes(label);
@@ -35996,8 +35999,8 @@ function carriesLabel(labelled, label) {
 var CONDITION_PARTS = ["inRepo", "labels", "files"];
 var UNKNOWN_HERE = { inRepo: "unknown", labels: "unknown" };
 function canonicalFiles(files) {
-  const cleaned = files.map((file2) => file2.trim()).filter((file2) => file2 !== "");
-  return [...new Set(cleaned)].sort();
+  const cleaned2 = files.map((file2) => file2.trim()).filter((file2) => file2 !== "");
+  return [...new Set(cleaned2)].sort();
 }
 function canonicalCondition(condition) {
   if (condition === void 0) return void 0;
@@ -36328,6 +36331,70 @@ function patternsMayMeet(a, b) {
   return a.some((p) => b.some((q) => tails(p).some((x) => tails(q).some((y) => x.endsWith(y) || y.endsWith(x)))));
 }
 
+// src/failure.ts
+function cleaned(value) {
+  return value.trim();
+}
+function canonicalMark(mark) {
+  if (mark === void 0) return void 0;
+  const tool = cleaned(mark.tool);
+  return tool === "" ? void 0 : { tool, pattern: cleaned(mark.pattern) };
+}
+function sameMark(a, b) {
+  const [x, y] = [canonicalMark(a), canonicalMark(b)];
+  return x === void 0 || y === void 0 ? x === y : x.tool === y.tool && x.pattern === y.pattern;
+}
+function matchesFailure(pattern, call) {
+  const parts = pattern.split("*");
+  if (parts.length === 1) return pattern === call;
+  const first = parts[0] ?? "";
+  const last = parts[parts.length - 1] ?? "";
+  let at = -1;
+  if (!call.startsWith(first)) return false;
+  at = first.length;
+  for (const part of parts.slice(1, -1)) {
+    const found = call.indexOf(part, at);
+    if (found === -1) return false;
+    at = found + part.length;
+  }
+  return call.length - last.length >= at && call.endsWith(last);
+}
+function callStringOf(input2) {
+  const own2 = (input2.call ?? "").trim();
+  if (own2 !== "") return input2.tool === "Bash" || input2.tool === "PowerShell" ? own2 : own2.replaceAll("\\", "/");
+  const json2 = (input2.json ?? "").trim();
+  if (json2 === "") return "";
+  if (input2.tool === "Bash" || input2.tool === "PowerShell") {
+    const command = /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(json2);
+    if (command !== null && command[1] !== void 0) return unescapedJson(command[1]);
+  }
+  return json2;
+}
+function unescapedJson(raw) {
+  return raw.replace(/\\(u[0-9a-fA-F]{4}|.)/g, (_whole, escape2) => {
+    if (escape2.length === 5) return String.fromCharCode(Number.parseInt(escape2.slice(1), 16));
+    switch (escape2) {
+      case "n":
+        return "\n";
+      case "t":
+        return "	";
+      case "r":
+        return "\r";
+      case "b":
+        return "\b";
+      case "f":
+        return "\f";
+      default:
+        return escape2;
+    }
+  });
+}
+function aboutFailure(mark, tool, call) {
+  const canonical = canonicalMark(mark);
+  if (canonical === void 0 || canonical.tool !== tool.trim()) return false;
+  return canonical.pattern === "" || matchesFailure(canonical.pattern, call);
+}
+
 // src/memory.ts
 var SCOPES = ["user", "project"];
 var PROJECT_KEY_RE = /^[a-z0-9-][a-z0-9._-]*$/;
@@ -36424,6 +36491,9 @@ var reasonInputSchema = external_exports.string().refine(whole, WHOLE_ONLY);
 function shownProblem(problem) {
   return { record: shownText(problem.file), reason: shownText(problem.reason) };
 }
+function problemKey(problem) {
+  return `problem:${problem.file}`;
+}
 function systemErrorCode(error62) {
   if (!(error62 instanceof Error)) return void 0;
   const { code, syscall } = error62;
@@ -36498,7 +36568,10 @@ var frontmatterSchema = external_exports.strictObject({
   expires: external_exports.string().regex(DATE_RE, "must be YYYY-MM-DD").nullable(),
   created: external_exports.string().min(1),
   updated: external_exports.string().min(1),
-  appliesWhen: appliesWhenSchema.optional()
+  appliesWhen: appliesWhenSchema.optional(),
+  // #459, format 2.1: the failure mark, a top-level field of its own and never a part of appliesWhen. Strict, so a part
+  // this server does not know in it is a load problem naming failure rather than a part silently dropped (B14).
+  failure: external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() }).optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36651,6 +36724,7 @@ function findByIdPrefix(memories, prefix, unloadedIds = []) {
 }
 function toFrontmatter(memory) {
   const canonical = canonicalCondition(memory.appliesWhen);
+  const mark = canonicalMark(memory.failure);
   return {
     id: memory.id,
     title: memory.title,
@@ -36668,7 +36742,9 @@ function toFrontmatter(memory) {
     updated: memory.updated,
     // Absent when the memory applies everywhere, so a record without a condition keeps exactly the 1.0 keys and a
     // condition that canonicalises to nothing writes no key at all.
-    ...canonical === void 0 ? {} : { appliesWhen: canonical }
+    ...canonical === void 0 ? {} : { appliesWhen: canonical },
+    // #459: absent when the memory is about no failure, so a record without a mark keeps exactly the keys it had.
+    ...mark === void 0 ? {} : { failure: mark }
   };
 }
 function issueMessages(issues) {
@@ -37583,11 +37659,11 @@ function messageOf(error62) {
 }
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure"];
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
 var FULL_PART_BUDGETS = [1e4, 1e4];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
-var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse"];
+var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure"];
 var MISSING = {
   index: "the memory index is",
   full: "the startup memories are",
@@ -37596,7 +37672,8 @@ var MISSING = {
   edit: "the write-time standards are",
   read: "the read rules are",
   search: "the search rules are",
-  subagent: "the subagent rules are"
+  subagent: "the subagent rules are",
+  failure: "the failure memories are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
@@ -45858,7 +45935,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.15",
+  version: "0.5.16",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46213,6 +46290,13 @@ var CONDITION_TEXT = {
   filesTogether: (options, what = "call") => `appliesWhen: this ${what} passes with ${options.map((parts) => parts.join(" and ")).join(", or with ")}`,
   /** A scope move of a memory with a file condition (S56); B2's (#457). */
   filesMoved: (kept) => `appliesWhen: a memory with file patterns cannot move to another scope yet${wayList([kept, "leave scope as it is"])}`,
+  /**
+   * A failure mark on a rule (#459 S40). A rule is a memory that is enforced, or whose delivery loads its full text at a
+   * moment (isRule), and setting a mark on one would make the failure moment a second moment for it. The way out is a
+   * memory that is no rule: a remedy saved on its own as index or on-demand, marked there. named only where that call
+   * passes, as every other way out is.
+   */
+  ruleMark: (mark, way, update = false) => `failure: a rule cannot be marked about a failure yet (the mark ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"), because the failure moment would be a second moment for it${wayList([way, update ? "save the remedy as a memory that is no rule and mark that one" : "save it as a memory that is no rule (index or on-demand) and mark that one"])}`,
   /** The project reason (design-scopes 2.4). */
   project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
   /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
@@ -46418,6 +46502,13 @@ function conditionProblems(written, stored, current, existing, named = true) {
     }
   }
   return problems;
+}
+function markProblems(written, stored, named = true) {
+  const mark = canonicalMark(written.failure);
+  if (mark === void 0 || !isRule(written)) return [];
+  if (stored !== void 0 && isRule(stored) && sameMark(written.failure, stored.failure)) return [];
+  const way = stored !== void 0 && !isRule(stored);
+  return [CONDITION_TEXT.ruleMark(mark, named && way, stored !== void 0)];
 }
 function resolve4(memories, session, today, here = UNKNOWN_HERE) {
   const visible = memories.filter((m) => m.scope.kind === "user" || sameScope(m.scope, session.project));
@@ -46938,6 +47029,7 @@ function fileRulesAt(active, edit) {
   return active.filter((memory) => memory.delivery === "edit" && editFiles(memory).state !== "none" && arrivesAtEdit(memory, edit)).map((memory) => memory.id);
 }
 var NO_TARGET = { kind: "no-target" };
+var NO_FAILURE = { kind: "call", tool: "", call: "", problems: [] };
 function claimAll(ask) {
   return { seen: new Set(ask.seen), named: new Set(ask.named) };
 }
@@ -47081,9 +47173,12 @@ function standingAt(memory, active, byId, problems = []) {
 }
 function fullText(kinds, active, byId, rooms, priority) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
-  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0, kept: rooms.map(() => []) };
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
-  const blocks = chosen.map((m) => ({ memory: m, text: loadedText(m, byId) }));
+  return fillChosen(chosen, byId, rooms, priority, heading, (memory) => loadedText(memory, byId));
+}
+function fillChosen(chosen, byId, rooms, priority, heading, blockOf) {
+  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0, kept: rooms.map(() => []) };
+  const blocks = chosen.map((m) => ({ memory: m, text: blockOf(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
   const order = blocks.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || a - b);
   const last = rooms.length - 1;
@@ -47238,6 +47333,33 @@ function readText(active, byId, problems, target, claim2 = claimAll(readAsk(acti
   const brought = active.filter((memory) => memory.delivery === "edit" && claim2.seen.has(memory.id));
   const { parts } = fullText(["edit"], brought, byId, [room], ["edit"]);
   return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+}
+function failureAsk(active, problems, call) {
+  if (call.tool === "") return { seen: [], named: [] };
+  const marked = active.filter((memory) => aboutFailure(memory.failure, call.tool, call.call) && filesHoldAtFailure(memory, call)).map((memory) => memory.id);
+  return { seen: marked, named: [...call.problems] };
+}
+function filesHoldAtFailure(memory, call) {
+  const files = editFiles(memory);
+  if (files.state === "none") return true;
+  if (files.state === "unjudged") return false;
+  const path = call.filePath;
+  return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
+}
+function failureText(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call))) {
+  const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
+  const warnings = [problemWarning(naming)].filter((warning) => warning !== "");
+  const lead = warnings.join("\n\n");
+  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+  const brought = active.filter((memory) => memory.failure !== void 0 && claim2.seen.has(memory.id));
+  const { parts } = fillChosen(brought, byId, [room], [], null, fullBlock);
+  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+}
+function problemWarning(problems) {
+  if (problems.length === 0) return "";
+  const one = problems.length === 1;
+  const records = problems.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
+  return `WARNING: ${problems.length} NeoCortex memory ${one ? "record" : "records"} did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (problems.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
 function readWarnings(active, target, claim2) {
   const rules = active.filter((memory) => memory.delivery === "edit");
@@ -47464,6 +47586,8 @@ function contextFor(command, event, input2, extra) {
     case "read":
     case "search":
       return readText(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
+    case "failure":
+      return failureText(active, byId, problems, extra.failure ?? NO_FAILURE, extra.failure?.claim);
   }
 }
 var NO_SEARCH = { kind: "search", patterns: [] };
@@ -48043,6 +48167,12 @@ function isLater(a, b) {
 }
 
 // src/dream/apply.ts
+function supersedeMark(retired, survivor) {
+  const mark = canonicalMark(retired?.failure);
+  if (mark === void 0 || survivor === void 0) return {};
+  if (canonicalMark(survivor.failure) === void 0 && !isRule(survivor)) return { carried: mark };
+  return sameMark(survivor.failure, mark) ? {} : { dropped: mark };
+}
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
   if (intent === void 0) return { refusal: { reason: "no-intent" } };
@@ -48082,9 +48212,15 @@ function planOfIntent(intent, recordOf2, restOf, context) {
   };
   const stillHere = () => false;
   if (intent.act === "supersede") {
+    const gone = recordOf2(intent.retired);
+    const retiredMemory = gone !== void 0 && "stored" in gone ? gone.stored.memory : void 0;
+    const carry = (memory) => {
+      const { carried } = supersedeMark(retiredMemory, memory);
+      return carried === void 0 ? memory : { ...memory, failure: carried };
+    };
     const survivor = stepOf(intent.survivor, (memory) => memory.supersedes.includes(intent.retired), (base) => ({
       kind: "update",
-      memory: { ...base.memory, supersedes: addTarget(base.memory.supersedes, intent.retired), updated: stamp },
+      memory: { ...carry(base.memory), supersedes: addTarget(base.memory.supersedes, intent.retired), updated: stamp },
       base
     }));
     if (survivor !== null && "reason" in survivor) return { refusal: survivor };
@@ -48582,20 +48718,20 @@ When to save:
 - context: decisions, constraints and goals of ongoing work that the code and git history do not show. Make dates absolute.
 - reference: where to find things outside the repo (URLs, dashboards, tickets, folders).
 
-Do not save: what the repository records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters in this conversation.
+Do not save: what the repository records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters here.
 
 How to save:
 1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision everywhere, set supersedes.
 2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
-4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels and reuse a label; never invent a near-duplicate.
-5. Use scope project when it only applies in this repository, scope user when everywhere.
+4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels, reuse a label, never invent a near-duplicate.
+5. Use scope project when it only applies here, scope user when everywhere. A failure memory takes failure: {tool, pattern}.
 6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving a memory to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
 7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
-When two memories differ without contradicting and one is more specific, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer: a context label when it belongs to one kind of place, inRepo when it fits code work alone.
+When two memories differ without contradicting, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer: a context label when it belongs to one kind of place, inRepo when it fits code work alone.
 
 At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
 
@@ -49100,6 +49236,7 @@ function sameLines(a, b) {
 // src/server.ts
 var ID = external_exports.string().min(8).describe("Memory id, or its first 8 characters as shown in the index");
 var LINK_IDS = external_exports.array(external_exports.string()).describe("Memory ids, or their first 8 characters");
+var OWN_TOOL_RE = /^mcp__(plugin_neocortex_neocortex|neocortex)__/;
 var CONDITION = external_exports.strictObject({
   inRepo: external_exports.literal(true).optional().describe("true: only in a session inside a git repository"),
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
@@ -49108,6 +49245,13 @@ var CONDITION = external_exports.strictObject({
   )
 });
 var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: files on a memory with overrides, a file pattern that names a folder from a repository's root, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
+var FAILURE = external_exports.strictObject({
+  tool: external_exports.string().describe("The tool whose failure this memory is about, exactly as Claude Code names it: Bash, Read, Write, Edit, MultiEdit, NotebookEdit, or an MCP tool such as mcp__contoso__query"),
+  pattern: external_exports.string().describe(
+    `A glob over the call's own input, * matching any run of characters including / and spaces: 'npm test*' for a command, '**/infra/*.bicep' for a file path, '{"pattern":"ABC"}' for an MCP tool's arguments. Empty: every failure of that tool`
+  )
+});
+var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -49127,7 +49271,8 @@ var SAVE_INPUT = {
   ),
   overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
-  appliesWhen: CONDITION.optional().describe(CONDITION_WORDS)
+  appliesWhen: CONDITION.optional().describe(CONDITION_WORDS),
+  failure: FAILURE.optional().describe(FAILURE_WORDS)
 };
 var MISSING_REVISION = "revision is required: pass the revision from the last response that showed this memory (get_memory, search_memories, save_memory or update_memory), or call get_memory first";
 var REVISION = external_exports.string({ error: MISSING_REVISION }).min(1).describe("The revision of this memory from the last response that showed it; read a memory you know only from the index with get_memory first");
@@ -49147,7 +49292,8 @@ var UPDATE_INPUT = {
   overrides: LINK_IDS.optional(),
   overrideReason: reasonInputSchema.nullable().optional(),
   expires: external_exports.string().regex(DATE_RE).nullable().optional(),
-  appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`)
+  appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`),
+  failure: FAILURE.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`)
 };
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
@@ -49341,6 +49487,21 @@ function createServer(deps) {
   const server = new McpServer({ name: "neocortex", version: package_default.version }, { instructions: INSTRUCTIONS });
   const reader = readerOf(deps.store);
   const guard = new RuleGuard(deps.store, deps.session, () => toLocalDate(now()), () => hereNow());
+  const failedCallOf = (tool, own2, input2, problems, interrupted, active) => {
+    const named = given(tool);
+    if (named === void 0) return "unjudged";
+    if (interrupted || OWN_TOOL_RE.test(named)) return void 0;
+    const own_ = (own2 ?? "").trim().replaceAll(String.fromCharCode(92), "/");
+    const fieldGiven = given(own2) !== void 0 || given(input2) !== void 0;
+    if (!fieldGiven) return active.some((memory) => canonicalMark(memory.failure)?.tool === named) ? "unjudged" : void 0;
+    return {
+      kind: "call",
+      tool: named,
+      call: callStringOf({ tool: named, call: own2 ?? "", json: input2 ?? "" }),
+      ...own_ === "" ? {} : { filePath: own_ },
+      problems: problems.filter((problem) => problem.delivery !== void 0).map(problemKey)
+    };
+  };
   const upgraded = deps.upgrade === void 0 ? Promise.resolve() : Promise.resolve().then(deps.upgrade).then(
     () => void 0,
     () => void 0
@@ -49568,6 +49729,7 @@ function createServer(deps) {
     if ("error" in overrides) return fail(overrides.error);
     const stamp = now().toISOString();
     const condition = canonicalCondition(args2.appliesWhen);
+    const mark = canonicalMark(args2.failure === void 0 || args2.failure === null ? void 0 : args2.failure);
     const memory = {
       id: newId(),
       scope: args2.scope === "project" ? deps.session.project : deps.session.user,
@@ -49585,9 +49747,10 @@ function createServer(deps) {
       expires: args2.expires ?? null,
       created: stamp,
       updated: stamp,
-      ...condition === void 0 ? {} : { appliesWhen: condition }
+      ...condition === void 0 ? {} : { appliesWhen: condition },
+      ...mark === void 0 ? {} : { failure: mark }
     };
-    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...validateLinks(memory, memories)];
+    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -49646,6 +49809,7 @@ function createServer(deps) {
     if ("error" in overrides) return fail(overrides.error);
     const kind = args2.scope ?? previous.scope.kind;
     const condition = args2.appliesWhen === void 0 ? previous.appliesWhen : canonicalCondition(args2.appliesWhen ?? void 0);
+    const mark = args2.failure === void 0 ? previous.failure : canonicalMark(args2.failure ?? void 0);
     const memory = {
       id: previous.id,
       scope: kind === "project" ? deps.session.project : deps.session.user,
@@ -49663,12 +49827,14 @@ function createServer(deps) {
       expires: args2.expires === void 0 ? previous.expires : args2.expires,
       created: previous.created,
       updated: now().toISOString(),
-      ...condition === void 0 ? {} : { appliesWhen: condition }
+      ...condition === void 0 ? {} : { appliesWhen: condition },
+      ...mark === void 0 ? {} : { failure: mark }
     };
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
     const errors = [
       ...conditionProblems(memory, previous, resolution.current, memories),
+      ...markProblems(memory, previous),
       ...validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories)
     ];
     if (errors.length > 0) return fail(errors.join("; "));
@@ -50065,10 +50231,21 @@ function createServer(deps) {
         // #454: whose once a read, a search or an edit reads and writes, and which session a start clears
         // (session_id and agent_id); they decide delivery, never what a condition sees.
         session: external_exports.string().optional(),
-        agent: external_exports.string().optional()
+        agent: external_exports.string().optional(),
+        // #459: the failed call's own tool and input, read at the failure moment only (callOf). The error's text is
+        // never passed: nothing decides on it, so it reaches no answer, no record and no log (How lines 4 and 6).
+        tool: external_exports.string().optional(),
+        call: external_exports.string().optional(),
+        // A NotebookEdit names its file in notebook_path, never file_path (the CLI's own tool table, How line 4), so the
+        // file entry passes both and the one the tool named is the call's string.
+        notebook: external_exports.string().optional(),
+        input: external_exports.string().optional(),
+        // The interrupt flag, which substitutes the STRING 'true' or 'false' and never a boolean (measured at gate 2):
+        // 'true' is an abort, and anything else, the empty string included, is an error the tool reported (S8, S9, S24).
+        interrupted: external_exports.string().optional()
       }
     },
-    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent }) => {
+    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted }) => {
       try {
         const key = onceKeyOf(session, agent);
         let onceReset;
@@ -50086,6 +50263,14 @@ function createServer(deps) {
         const look = named?.kind === "search" ? pathToLookAt(delivery.resolution.active, named) : void 0;
         const target = named?.kind === "search" && look !== void 0 ? { ...named, pathIsFile: isFile(look) } : named;
         const read2 = target === void 0 ? void 0 : { target, claim: await claimed(key, readAsk(delivery.resolution.active, target)) };
+        const judged = moment === "failure" ? failedCallOf(tool, given(call) ?? notebook, input2, delivery.problems, interrupted === "true", delivery.resolution.active) : void 0;
+        if (judged === "unjudged") {
+          const missing = given(tool) === void 0 ? "no tool name" : "no input for the call";
+          const warning = `WARNING: no memory was judged at this call, because the failure entry passed ${missing}; the failure memories are NOT in context. Say so before answering.`;
+          return { content: [{ type: "text", text: hookOutput(event, warning) }] };
+        }
+        const failed = judged === void 0 ? void 0 : judged;
+        const failure2 = failed === void 0 ? void 0 : { ...failed, claim: await claimed(key, failureAsk(delivery.resolution.active, delivery.problems, failed)) };
         const text = contextFor(moment, event, delivery, {
           prompt,
           part,
@@ -50093,6 +50278,7 @@ function createServer(deps) {
           proposals: proposalNotice,
           ...edit === void 0 ? {} : { edit },
           ...read2 === void 0 ? {} : { read: read2 },
+          ...failure2 === void 0 ? {} : { failure: failure2 },
           ...onceReset === void 0 ? {} : { onceReset }
         });
         if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
@@ -50664,21 +50850,34 @@ function relatedEntryOf(memory) {
 }
 function shownCondition(memory) {
   const condition = canonicalCondition(memory.appliesWhen);
-  if (condition === void 0) return {};
+  const mark = canonicalMark(memory.failure);
+  if (condition === void 0) return mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } };
   const { inRepo, labels, files } = condition;
   return {
     appliesWhen: {
       ...inRepo === true ? { inRepo } : {},
       ...labels === void 0 ? {} : { labels: labels.map(shownText) },
       ...files === void 0 ? {} : { files: files.map(shownText) }
-    }
+    },
+    ...mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } }
   };
 }
 function promoteCost(shown2, intent) {
+  if (intent?.act === "supersede") return supersedeCost(shown2, intent.survivor, intent.retired);
   if (intent?.act !== "promote") return {};
   const record2 = shown2.find((one) => one.memory.id === intent.record)?.memory;
   const carries = canonicalCondition(record2?.appliesWhen) !== void 0;
-  return { carriesCondition: carries, loadsEverywhere: !carries };
+  const marked = canonicalMark(record2?.failure) !== void 0;
+  return { carriesCondition: carries, loadsEverywhere: !carries && !marked, ...marked ? { carriesFailureMark: true } : {} };
+}
+function supersedeCost(shown2, survivorId, retiredId) {
+  const memoryOf2 = (id) => shown2.find((one) => one.memory.id === id)?.memory;
+  const { dropped } = supersedeMark(memoryOf2(retiredId), memoryOf2(survivorId));
+  if (dropped === void 0) return {};
+  return {
+    dropsFailureMark: true,
+    failureMarkGoes: `Accepting retires ${shortId(retiredId)}, marked about a failure of ${shownCut(dropped.tool, 80)} "${shownCut(dropped.pattern, 80)}"; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory arrives at that failure. Tell the user before accepting.`
+  };
 }
 function planOf(plan) {
   return {
