@@ -2,6 +2,21 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.17 - 2026-11-14
+
+- New: mark a memory about a call's own input, such as `callInput: {tool: 'Bash', pattern: 'git push*'}`, and it
+  arrives in full at the first call that input is about, once per agent and again after a compaction or `/clear`. A
+  call that cannot be taken back (a shell command, an MCP tool, an agent spawn, a web fetch) is refused once with the
+  memory as the reason, before it runs, and the same call then runs; a write, an edit, a read or a search gets the
+  memory beside its result, so Claude can correct the file. The pattern judges the call's own input only: a command,
+  a write's content, an edit's new text, a path, or any other tool's whole input. Nothing of a call's own input is
+  stored, logged or echoed. A mark on a rule is refused for now.
+- Changed: marked memories are format 2.2. A machine on 0.5.16 reads every memory as before and never brings or
+  refuses anything because of the new mark.
+- Changed: a clone install needs six new `PreToolUse` entries to answer a call (four inside the existing edit, read,
+  Grep and Glob groups, a `NotebookEdit` group and one broad group); the plugin's own hooks.json has them, and
+  `node scripts/update-clone-hooks.ts` lists them.
+
 ## 0.5.16 - 2026-11-13
 
 - New: mark a memory about a failure, such as `failure: {tool: 'Bash', pattern: 'npm test*'}`, and it arrives in full

@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.16",
+  version: "0.5.17",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18409,7 +18409,7 @@ var package_default = {
 };
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input"];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure"];
 var DEFAULT_EVENT = {
@@ -18421,7 +18421,8 @@ var DEFAULT_EVENT = {
   read: "PreToolUse",
   search: "PreToolUse",
   subagent: "SubagentStart",
-  failure: "PostToolUseFailure"
+  failure: "PostToolUseFailure",
+  input: "PreToolUse"
 };
 var MISSING = {
   index: "the memory index is",
@@ -18432,7 +18433,8 @@ var MISSING = {
   read: "the read rules are",
   search: "the search rules are",
   subagent: "the subagent rules are",
-  failure: "the failure memories are"
+  failure: "the failure memories are",
+  input: "the memories about calls are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);

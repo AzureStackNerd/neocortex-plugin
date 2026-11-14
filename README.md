@@ -2,7 +2,8 @@
 
 Central memory for Claude Code: one place for everything Claude should know or follow across sessions, projects and
 machines. The plugin adds an MCP server and hooks that give Claude each memory at its own moment: at session start,
-with every prompt, before every edit, and when a subagent starts. Claude saves memories on its own initiative. They
+with every prompt, before every edit, when a subagent starts, when a tool call fails, and before a call a memory is
+about. Claude saves memories on its own initiative. They
 are files in one folder you choose, outside the plugin, so they stay when you update or remove the plugin.
 
 NeoCortex is proprietary; see [LICENSE](LICENSE). `server/THIRD-PARTY-NOTICES` holds the licences of the open-source
@@ -152,6 +153,17 @@ A memory can also carry a **failure mark** (`failure: {tool, pattern}`). It then
 its tool and pattern say, once per agent and beside the tool's own error. The pattern is judged against the call's own
 input (a shell's command, a file tool's path, any other tool's arguments), never against the error text, and a rule
 cannot carry one yet.
+
+A memory can carry a **call mark** (`callInput: {tool, pattern}`) instead, or as well. It then arrives in full at the
+first call in each agent's context whose own input the tool and pattern are about, once per agent and again after a
+compaction or `/clear`. The pattern judges what the call is about to do: a shell's command, a `Write`'s content, an
+`Edit`'s new text and never what it removes, a notebook's new source, a path, or any other tool's whole input. A call
+that cannot be taken back — a shell command, an MCP tool, an agent spawn, a web fetch — is **refused once** with the
+memory as the reason, before it runs, and the same call then runs; a write, an edit, a read or a search gets the memory
+beside its result, so Claude can correct the file. Its `tool` may name several tools separated by `|`, such as
+`Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
+merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry
+one yet.
 
 **Rules.** A memory that loads on its own at a moment (`startup`, `prompt`, `question`, `subagent` or `edit`), or that
 is enforced, is a rule. Claude changes a rule only with `save_rule`, `update_rule` or `delete_rule`, and Claude Code

@@ -35923,15 +35923,18 @@ var FIELDS_1_0 = [
 ];
 var FIELDS_2_0 = [...FIELDS_1_0, "appliesWhen"];
 var FIELDS_2_1 = [...FIELDS_2_0, "failure"];
+var FIELDS_2_2 = [...FIELDS_2_1, "callInput"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
     { version: "2.0", fields: FIELDS_2_0 },
-    { version: "2.1", fields: FIELDS_2_1 }
+    { version: "2.1", fields: FIELDS_2_1 },
+    { version: "2.2", fields: FIELDS_2_2 }
   ],
   // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
-  // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means.
-  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields }
+  // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means. Nor
+  // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means.
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -36331,18 +36334,29 @@ function patternsMayMeet(a, b) {
   return a.some((p) => b.some((q) => tails(p).some((x) => tails(q).some((y) => x.endsWith(y) || y.endsWith(x)))));
 }
 
-// src/failure.ts
+// src/marks.ts
 function cleaned(value) {
   return value.trim();
 }
-function canonicalMark(mark) {
-  if (mark === void 0) return void 0;
-  const tool = cleaned(mark.tool);
-  return tool === "" ? void 0 : { tool, pattern: cleaned(mark.pattern) };
+function toolsOf(mark, kind) {
+  if (kind === "failure") {
+    const one = cleaned(mark.tool);
+    return one === "" ? [] : [one];
+  }
+  const names = mark.tool.split("|").map(cleaned).filter((one) => one !== "");
+  return [...new Set(names)];
 }
-function sameMark(a, b) {
-  const [x, y] = [canonicalMark(a), canonicalMark(b)];
-  return x === void 0 || y === void 0 ? x === y : x.tool === y.tool && x.pattern === y.pattern;
+function canonicalMark(mark, kind) {
+  if (mark === void 0) return void 0;
+  const names = toolsOf(mark, kind);
+  if (names.length === 0) return void 0;
+  return { tool: names.join("|"), pattern: cleaned(mark.pattern) };
+}
+function sameMark(a, b, kind) {
+  const [x, y] = [canonicalMark(a, kind), canonicalMark(b, kind)];
+  if (x === void 0 || y === void 0) return x === y;
+  const [xs, ys] = [[...toolsOf(x, kind)].sort(), [...toolsOf(y, kind)].sort()];
+  return x.pattern === y.pattern && xs.length === ys.length && xs.every((one, i) => one === ys[i]);
 }
 function matchesFailure(pattern, call) {
   const parts = pattern.split("*");
@@ -36359,40 +36373,60 @@ function matchesFailure(pattern, call) {
   }
   return call.length - last.length >= at && call.endsWith(last);
 }
-function callStringOf(input2) {
-  const own2 = (input2.call ?? "").trim();
-  if (own2 !== "") return input2.tool === "Bash" || input2.tool === "PowerShell" ? own2 : own2.replaceAll("\\", "/");
-  const json2 = (input2.json ?? "").trim();
-  if (json2 === "") return "";
-  if (input2.tool === "Bash" || input2.tool === "PowerShell") {
-    const command = /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(json2);
-    if (command !== null && command[1] !== void 0) return unescapedJson(command[1]);
+function inputData(json2) {
+  const text = json2.trim();
+  if (text === "") return void 0;
+  try {
+    const parsed = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : void 0;
+  } catch {
+    return void 0;
   }
-  return json2;
 }
-function unescapedJson(raw) {
-  return raw.replace(/\\(u[0-9a-fA-F]{4}|.)/g, (_whole, escape2) => {
-    if (escape2.length === 5) return String.fromCharCode(Number.parseInt(escape2.slice(1), 16));
-    switch (escape2) {
-      case "n":
-        return "\n";
-      case "t":
-        return "	";
-      case "r":
-        return "\r";
-      case "b":
-        return "\b";
-      case "f":
-        return "\f";
-      default:
-        return escape2;
+function fieldOf(data, name) {
+  const value = data?.[name];
+  return typeof value === "string" ? value : "";
+}
+function callStringsOf(input2) {
+  const one = (value, path) => value.trim() === "" ? [] : [path ? value.replaceAll("\\", "/") : value];
+  const own2 = (input2.call ?? "").trim();
+  if (own2 !== "") return one(own2, input2.tool !== "Bash" && input2.tool !== "PowerShell");
+  const json2 = (input2.json ?? "").trim();
+  if (json2 === "") return [];
+  const data = inputData(json2);
+  switch (input2.tool.trim()) {
+    case "Bash":
+    case "PowerShell":
+      return one(fieldOf(data, "command"), false);
+    case "Write":
+      return one(fieldOf(data, "content"), false);
+    case "Edit":
+      return one(fieldOf(data, "new_string"), false);
+    case "MultiEdit": {
+      const edits = data?.["edits"];
+      if (!Array.isArray(edits)) return one(fieldOf(data, "new_string"), false);
+      return edits.flatMap((edit) => one(typeof edit === "object" && edit !== null ? fieldOf(edit, "new_string") : "", false));
     }
-  });
+    case "NotebookEdit":
+      return one(fieldOf(data, "new_source"), false);
+    case "Read":
+    case "Grep":
+    case "Glob":
+      return one(fieldOf(data, "file_path") === "" ? fieldOf(data, "path") : fieldOf(data, "file_path"), true);
+    default:
+      return [json2];
+  }
 }
-function aboutFailure(mark, tool, call) {
-  const canonical = canonicalMark(mark);
-  if (canonical === void 0 || canonical.tool !== tool.trim()) return false;
-  return canonical.pattern === "" || matchesFailure(canonical.pattern, call);
+function callPathOf(tool, json2) {
+  const data = inputData(json2);
+  const named = ["Write", "Edit", "MultiEdit", "Read"].includes(tool.trim()) ? fieldOf(data, "file_path") : tool.trim() === "NotebookEdit" ? fieldOf(data, "notebook_path") : ["Grep", "Glob"].includes(tool.trim()) ? fieldOf(data, "path") : "";
+  return named.trim() === "" ? void 0 : named.replaceAll("\\", "/");
+}
+function aboutMark(mark, kind, tool, calls) {
+  const canonical = canonicalMark(mark, kind);
+  if (canonical === void 0 || !toolsOf(canonical, kind).includes(tool.trim())) return false;
+  if (canonical.pattern === "") return true;
+  return calls.some((call) => matchesFailure(canonical.pattern, call));
 }
 
 // src/memory.ts
@@ -36553,6 +36587,7 @@ var appliesWhenSchema = external_exports.strictObject({
   labels: external_exports.array(external_exports.string()).optional(),
   files: external_exports.array(external_exports.string()).optional()
 });
+var markSchema = external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() });
 var frontmatterSchema = external_exports.strictObject({
   id: memoryId,
   title: external_exports.string().trim().min(1),
@@ -36571,7 +36606,10 @@ var frontmatterSchema = external_exports.strictObject({
   appliesWhen: appliesWhenSchema.optional(),
   // #459, format 2.1: the failure mark, a top-level field of its own and never a part of appliesWhen. Strict, so a part
   // this server does not know in it is a load problem naming failure rather than a part silently dropped (B14).
-  failure: external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() }).optional()
+  failure: markSchema.optional(),
+  // #466, format 2.2: the mark about a call's own input, the same shape and its own field for the same reasons. Strict
+  // too: a part this server does not know in it is a load problem naming callInput.
+  callInput: markSchema.optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36724,7 +36762,8 @@ function findByIdPrefix(memories, prefix, unloadedIds = []) {
 }
 function toFrontmatter(memory) {
   const canonical = canonicalCondition(memory.appliesWhen);
-  const mark = canonicalMark(memory.failure);
+  const mark = canonicalMark(memory.failure, "failure");
+  const callMark = canonicalMark(memory.callInput, "callInput");
   return {
     id: memory.id,
     title: memory.title,
@@ -36744,7 +36783,9 @@ function toFrontmatter(memory) {
     // condition that canonicalises to nothing writes no key at all.
     ...canonical === void 0 ? {} : { appliesWhen: canonical },
     // #459: absent when the memory is about no failure, so a record without a mark keeps exactly the keys it had.
-    ...mark === void 0 ? {} : { failure: mark }
+    ...mark === void 0 ? {} : { failure: mark },
+    // #466: the same for the mark about a call, so a record with neither keeps exactly the 2.0 keys.
+    ...callMark === void 0 ? {} : { callInput: callMark }
   };
 }
 function issueMessages(issues) {
@@ -37659,7 +37700,7 @@ function messageOf(error62) {
 }
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input"];
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
 var FULL_PART_BUDGETS = [1e4, 1e4];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
@@ -37673,7 +37714,8 @@ var MISSING = {
   read: "the read rules are",
   search: "the search rules are",
   subagent: "the subagent rules are",
-  failure: "the failure memories are"
+  failure: "the failure memories are",
+  input: "the memories about calls are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
@@ -37736,24 +37778,28 @@ var FileOnce = class {
     this.now = options.now ?? (() => Date.now());
     this.readText = options.readText ?? ((path) => readFile2(path, "utf8"));
   }
-  /** Marks these ids in the agent's row and returns, of each list, the ones it did not hold before. */
+  /**
+   * Marks these ids in the agent's row and returns, of each list, the ones it did not hold before, and whether this write
+   * was confirmed. A call that matched nothing takes no lock and records nothing: it has nothing to record, so `recorded`
+   * says true, and the input moment's refusal never rests on that arm (a call that matched nothing refuses nothing).
+   */
   async claim(key, ask) {
-    if (ask.seen.length === 0 && ask.named.length === 0) return { seen: /* @__PURE__ */ new Set(), named: /* @__PURE__ */ new Set() };
+    if (ask.seen.length === 0 && ask.named.length === 0) return { seen: /* @__PURE__ */ new Set(), named: /* @__PURE__ */ new Set(), recorded: true };
     return this.locked(async () => {
       const rows = await this.read();
-      if (rows === void 0) return { seen: new Set(ask.seen), named: new Set(ask.named) };
+      if (rows === void 0) return { seen: new Set(ask.seen), named: new Set(ask.named), recorded: false };
       const row = rows.get(key.session)?.get(key.agent);
       const seenBefore = idsOf(row?.seen);
       const namedBefore = idsOf(row?.named);
       const seen = new Set(ask.seen.filter((id) => !seenBefore.has(id)));
       const named = new Set(ask.named.filter((id) => !namedBefore.has(id)));
-      if (seen.size === 0 && named.size === 0) return { seen, named };
+      if (seen.size === 0 && named.size === 0) return { seen, named, recorded: true };
       const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
       agents.set(key.agent, { seen: [...seenBefore, ...seen], named: [...namedBefore, ...named], updated: new Date(this.now()).toISOString() });
       rows.set(key.session, agents);
-      await this.write(rows, key).catch(() => void 0);
-      return { seen, named };
-    }, () => ({ seen: new Set(ask.seen), named: new Set(ask.named) }));
+      const written = await this.write(rows, key).then(() => true, () => false);
+      return { seen, named, recorded: written };
+    }, () => ({ seen: new Set(ask.seen), named: new Set(ask.named), recorded: false }));
   }
   /**
    * Drops the main conversation's row of this session, which a start with a rebuilt context does (S10, S11). The server
@@ -45935,7 +45981,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.16",
+  version: "0.5.17",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46291,12 +46337,13 @@ var CONDITION_TEXT = {
   /** A scope move of a memory with a file condition (S56); B2's (#457). */
   filesMoved: (kept) => `appliesWhen: a memory with file patterns cannot move to another scope yet${wayList([kept, "leave scope as it is"])}`,
   /**
-   * A failure mark on a rule (#459 S40). A rule is a memory that is enforced, or whose delivery loads its full text at a
-   * moment (isRule), and setting a mark on one would make the failure moment a second moment for it. The way out is a
-   * memory that is no rule: a remedy saved on its own as index or on-demand, marked there. named only where that call
-   * passes, as every other way out is.
+   * A mark on a rule (#459 S40, #466 S43). A rule is a memory that is enforced, or whose delivery loads its full text at
+   * a moment (isRule), and setting a mark on one would make its moment a second moment for it. The way out is a memory
+   * that is no rule: a remedy saved on its own as index or on-demand, marked there. named only where that call passes, as
+   * every other way out is. which says the field's name, what the mark is about and the moment that answers it, so one
+   * text serves both marks.
    */
-  ruleMark: (mark, way, update = false) => `failure: a rule cannot be marked about a failure yet (the mark ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"), because the failure moment would be a second moment for it${wayList([way, update ? "save the remedy as a memory that is no rule and mark that one" : "save it as a memory that is no rule (index or on-demand) and mark that one"])}`,
+  ruleMark: (which, mark, way, update = false) => `${which.field}: a rule cannot be marked about ${which.what} yet (the mark ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"), because the ${which.moment} moment would be a second moment for it${wayList([way, update ? "save the remedy as a memory that is no rule and mark that one" : "save it as a memory that is no rule (index or on-demand) and mark that one"])}`,
   /** The project reason (design-scopes 2.4). */
   project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
   /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
@@ -46503,12 +46550,35 @@ function conditionProblems(written, stored, current, existing, named = true) {
   }
   return problems;
 }
+var MARKS = [
+  { field: "failure", what: "a failure", moment: "failure" },
+  { field: "callInput", what: "a call's input", moment: "input" }
+];
+function unusableMarkProblems(given2) {
+  const problems = [];
+  const call = given2.callInput;
+  if (call !== void 0 && call !== null && toolsOf(call, "callInput").length === 0) {
+    problems.push(
+      "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; leave the mark out (null) to remove it"
+    );
+  }
+  const failure2 = given2.failure;
+  if (failure2 !== void 0 && failure2 !== null && failure2.tool.includes("|")) {
+    problems.push(
+      "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead"
+    );
+  }
+  return problems;
+}
 function markProblems(written, stored, named = true) {
-  const mark = canonicalMark(written.failure);
-  if (mark === void 0 || !isRule(written)) return [];
-  if (stored !== void 0 && isRule(stored) && sameMark(written.failure, stored.failure)) return [];
+  if (!isRule(written)) return [];
   const way = stored !== void 0 && !isRule(stored);
-  return [CONDITION_TEXT.ruleMark(mark, named && way, stored !== void 0)];
+  return MARKS.flatMap(({ field, ...which }) => {
+    const mark = canonicalMark(written[field], field);
+    if (mark === void 0) return [];
+    if (stored !== void 0 && isRule(stored) && sameMark(written[field], stored[field], field)) return [];
+    return [CONDITION_TEXT.ruleMark({ field, ...which }, mark, named && way, stored !== void 0)];
+  });
 }
 function resolve4(memories, session, today, here = UNKNOWN_HERE) {
   const visible = memories.filter((m) => m.scope.kind === "user" || sameScope(m.scope, session.project));
@@ -47031,7 +47101,7 @@ function fileRulesAt(active, edit) {
 var NO_TARGET = { kind: "no-target" };
 var NO_FAILURE = { kind: "call", tool: "", call: "", problems: [] };
 function claimAll(ask) {
-  return { seen: new Set(ask.seen), named: new Set(ask.named) };
+  return { seen: new Set(ask.seen), named: new Set(ask.named), recorded: false };
 }
 function judgedBy(target) {
   if (target.kind === "no-target") return null;
@@ -47336,7 +47406,7 @@ function readText(active, byId, problems, target, claim2 = claimAll(readAsk(acti
 }
 function failureAsk(active, problems, call) {
   if (call.tool === "") return { seen: [], named: [] };
-  const marked = active.filter((memory) => aboutFailure(memory.failure, call.tool, call.call) && filesHoldAtFailure(memory, call)).map((memory) => memory.id);
+  const marked = active.filter((memory) => aboutMark(memory.failure, "failure", call.tool, [call.call]) && filesHoldAtFailure(memory, call)).map((memory) => memory.id);
   return { seen: marked, named: [...call.problems] };
 }
 function filesHoldAtFailure(memory, call) {
@@ -47354,6 +47424,44 @@ function failureText(active, byId, problems, call = NO_FAILURE, claim2 = claimAl
   const brought = active.filter((memory) => memory.failure !== void 0 && claim2.seen.has(memory.id));
   const { parts } = fillChosen(brought, byId, [room], [], null, fullBlock);
   return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+}
+var NO_INPUT = { kind: "call", tool: "", calls: [] };
+var CHANGES_NOTHING = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob"]);
+function refusesAt(tool) {
+  return !CHANGES_NOTHING.has(tool.trim());
+}
+function inputAsk(active, problems, call) {
+  if (call === "unjudged" || call.tool === "") return { seen: [], named: [] };
+  const marked = active.filter((memory) => aboutMark(memory.callInput, "callInput", call.tool, call.calls) && filesHoldAtInput(memory, call)).map((memory) => memory.id);
+  return { seen: marked, named: problems.filter((problem) => problem.delivery !== void 0).map(problemKey) };
+}
+function filesHoldAtInput(memory, call) {
+  const files = editFiles(memory);
+  if (files.state === "none") return true;
+  if (files.state === "unjudged") return false;
+  const path = call.filePath;
+  return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
+}
+var REFUSAL_LEAD = "NeoCortex refuses this call once, on purpose: a memory you saved is about this call, and its rule is below. Read it, then make the call again, changed to follow it or as it is; it will run.";
+function inputText(active, byId, problems, call = NO_INPUT, claim2 = claimAll(inputAsk(active, problems, call))) {
+  const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
+  const warnings = [problemWarning(naming)].filter((warning) => warning !== "");
+  const lead = warnings.join("\n\n");
+  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+  const brought = active.filter((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
+  const { parts } = fillChosen(brought, byId, [room], [], null, fullBlock);
+  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+}
+function inputAnswer(active, byId, problems, call, claim2) {
+  const text = inputText(active, byId, problems, call, claim2);
+  if (text === "" || call === "unjudged") return { text, deny: false };
+  const brought = active.some((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
+  return { text: brought && claim2.recorded && refusesAt(call.tool) ? `${REFUSAL_LEAD}
+
+${text}` : text, deny: brought && claim2.recorded && refusesAt(call.tool) };
+}
+function unjudgedInputWarning(missing) {
+  return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
 }
 function problemWarning(problems) {
   if (problems.length === 0) return "";
@@ -47588,6 +47696,8 @@ function contextFor(command, event, input2, extra) {
       return readText(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
     case "failure":
       return failureText(active, byId, problems, extra.failure ?? NO_FAILURE, extra.failure?.claim);
+    case "input":
+      return extra.input === void 0 ? "" : inputAnswer(active, byId, problems, extra.input.call, extra.input.claim).text;
   }
 }
 var NO_SEARCH = { kind: "search", patterns: [] };
@@ -47632,11 +47742,11 @@ function indexOptions(command, event, place, proposals, onceReset) {
 function eventsDelivering(command, event) {
   return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
 }
-function hookOutput(event, text, systemMessage = "") {
+function hookOutput(event, text, systemMessage = "", deny = false) {
   if (text === "" && systemMessage === "") return "";
   return hookJson({
     ...systemMessage === "" ? {} : { systemMessage },
-    ...text === "" ? {} : { hookSpecificOutput: { hookEventName: event, additionalContext: text } }
+    ...text === "" ? {} : deny ? { hookSpecificOutput: { hookEventName: event, permissionDecision: "deny", permissionDecisionReason: text } } : { hookSpecificOutput: { hookEventName: event, additionalContext: text } }
   });
 }
 function systemMessageFor(command, event, input2, part, place) {
@@ -48168,10 +48278,20 @@ function isLater(a, b) {
 
 // src/dream/apply.ts
 function supersedeMark(retired, survivor) {
-  const mark = canonicalMark(retired?.failure);
-  if (mark === void 0 || survivor === void 0) return {};
-  if (canonicalMark(survivor.failure) === void 0 && !isRule(survivor)) return { carried: mark };
-  return sameMark(survivor.failure, mark) ? {} : { dropped: mark };
+  if (survivor === void 0) return {};
+  const settle2 = (mark, held, kind) => {
+    const one = canonicalMark(mark, kind);
+    if (one === void 0) return {};
+    if (canonicalMark(held, kind) === void 0 && !isRule(survivor)) return { carried: one };
+    return sameMark(held, one, kind) ? {} : { dropped: one };
+  };
+  const failure2 = settle2(retired?.failure, survivor.failure, "failure");
+  const call = settle2(retired?.callInput, survivor.callInput, "callInput");
+  return {
+    ...failure2,
+    ...call.carried === void 0 ? {} : { carriedCall: call.carried },
+    ...call.dropped === void 0 ? {} : { droppedCall: call.dropped }
+  };
 }
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
@@ -48215,8 +48335,12 @@ function planOfIntent(intent, recordOf2, restOf, context) {
     const gone = recordOf2(intent.retired);
     const retiredMemory = gone !== void 0 && "stored" in gone ? gone.stored.memory : void 0;
     const carry = (memory) => {
-      const { carried } = supersedeMark(retiredMemory, memory);
-      return carried === void 0 ? memory : { ...memory, failure: carried };
+      const { carried, carriedCall } = supersedeMark(retiredMemory, memory);
+      return {
+        ...memory,
+        ...carried === void 0 ? {} : { failure: carried },
+        ...carriedCall === void 0 ? {} : { callInput: carriedCall }
+      };
     };
     const survivor = stepOf(intent.survivor, (memory) => memory.supersedes.includes(intent.retired), (base) => ({
       kind: "update",
@@ -48725,7 +48849,7 @@ How to save:
 2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
 3. why is required: the reason, the incident or the user's words. The body holds the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels, reuse a label, never invent a near-duplicate.
-5. Use scope project when it only applies here, scope user when everywhere. A failure memory takes failure: {tool, pattern}.
+5. Use scope project when it only applies here, scope user when everywhere. A memory about a failure takes failure: {tool, pattern}; one about a call's input callInput: {tool, pattern}.
 6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving a memory to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
 7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
 
@@ -48735,7 +48859,7 @@ When two memories differ without contradicting, follow the more specific one. Wh
 
 At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
 
-When a start says its index is crowded, shrinking it is the user's choice: call dream_report, offer what it prices as movable, and on the user's yes call update_memory with delivery on-demand, one memory per call.`;
+When a start says its index is crowded, offer what dream_report prices as movable; on the user's yes call update_memory with delivery on-demand, one per call.`;
 
 // src/rule-guard.ts
 import { createHash as createHash4 } from "node:crypto";
@@ -49245,13 +49369,16 @@ var CONDITION = external_exports.strictObject({
   )
 });
 var CONDITION_WORDS = "Where this memory applies, beyond its scope; leave it out for everywhere. Every part present must hold: labels needs a place that carries every label listed, inRepo true a session inside a git repository, files an edit, a read or a search of a matching file. Not possible yet: files on a memory with overrides, a file pattern that names a folder from a repository's root, and files on a project memory; a project memory takes neither labels nor inRepo, because its project already fixes where it applies.";
-var FAILURE = external_exports.strictObject({
-  tool: external_exports.string().describe("The tool whose failure this memory is about, exactly as Claude Code names it: Bash, Read, Write, Edit, MultiEdit, NotebookEdit, or an MCP tool such as mcp__contoso__query"),
-  pattern: external_exports.string().describe(
-    `A glob over the call's own input, * matching any run of characters including / and spaces: 'npm test*' for a command, '**/infra/*.bicep' for a file path, '{"pattern":"ABC"}' for an MCP tool's arguments. Empty: every failure of that tool`
-  )
+var FAILURE_PATTERN_WORDS = `A glob over the call's own input, * matching any run of characters including / and spaces: 'npm test*' for a command, '**/infra/*.bicep' for a file path, '{"pattern":"ABC"}' for an MCP tool's arguments. Empty: every call of that tool`;
+var CALL_PATTERN_WORDS = "A glob over the call's own input, * matching any run of characters including / and spaces, judged against what that tool's call carries: a command for Bash and PowerShell, the text written for Write, the new text for Edit and MultiEdit, the new source for NotebookEdit, the path it names for Read, Grep and Glob, and the whole input for any other tool. Empty: every call of that tool. A Write, an Edit, a MultiEdit and a NotebookEdit are never judged by the path they write, so a memory about which file it is belongs in appliesWhen.files.";
+var markSchema2 = (patternWords) => external_exports.strictObject({
+  tool: external_exports.string().describe("The tool this memory is about, exactly as Claude Code names it: Bash, Read, Write, Edit, MultiEdit, NotebookEdit, Agent, WebFetch, or an MCP tool such as mcp__contoso__query. A callInput mark may name several, such as Write|Edit|MultiEdit|NotebookEdit; a failure mark names one"),
+  pattern: external_exports.string().describe(patternWords)
 });
+var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
+var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
+var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. Before a command, a tool call, an agent spawn or a web fetch that cannot be taken back, NeoCortex refuses that call once with this memory as the reason; beside the result of a write, an edit or a read. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -49272,7 +49399,8 @@ var SAVE_INPUT = {
   overrideReason: reasonInputSchema.optional(),
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
   appliesWhen: CONDITION.optional().describe(CONDITION_WORDS),
-  failure: FAILURE.optional().describe(FAILURE_WORDS)
+  failure: FAILURE_MARK.optional().describe(FAILURE_WORDS),
+  callInput: CALL_MARK.optional().describe(CALL_INPUT_WORDS)
 };
 var MISSING_REVISION = "revision is required: pass the revision from the last response that showed this memory (get_memory, search_memories, save_memory or update_memory), or call get_memory first";
 var REVISION = external_exports.string({ error: MISSING_REVISION }).min(1).describe("The revision of this memory from the last response that showed it; read a memory you know only from the index with get_memory first");
@@ -49293,7 +49421,8 @@ var UPDATE_INPUT = {
   overrideReason: reasonInputSchema.nullable().optional(),
   expires: external_exports.string().regex(DATE_RE).nullable().optional(),
   appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`),
-  failure: FAILURE.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`)
+  failure: FAILURE_MARK.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
+  callInput: CALL_MARK.nullable().optional().describe(`${CALL_INPUT_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`)
 };
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
@@ -49493,14 +49622,29 @@ function createServer(deps) {
     if (interrupted || OWN_TOOL_RE.test(named)) return void 0;
     const own_ = (own2 ?? "").trim().replaceAll(String.fromCharCode(92), "/");
     const fieldGiven = given(own2) !== void 0 || given(input2) !== void 0;
-    if (!fieldGiven) return active.some((memory) => canonicalMark(memory.failure)?.tool === named) ? "unjudged" : void 0;
+    if (!fieldGiven) return active.some((memory) => canonicalMark(memory.failure, "failure")?.tool === named) ? "unjudged" : void 0;
     return {
       kind: "call",
       tool: named,
-      call: callStringOf({ tool: named, call: own2 ?? "", json: input2 ?? "" }),
+      call: callStringsOf({ tool: named, call: own2 ?? "", json: input2 ?? "" })[0] ?? "",
       ...own_ === "" ? {} : { filePath: own_ },
       problems: problems.filter((problem) => problem.delivery !== void 0).map(problemKey)
     };
+  };
+  const inputCallOf = (tool, input2, problems, active) => {
+    const named = given(tool);
+    if (named !== void 0 && OWN_TOOL_RE.test(named)) return void 0;
+    const json2 = input2 ?? "";
+    if (named === void 0 || given(input2) === void 0) {
+      const owed = active.some((memory) => {
+        const mark = canonicalMark(memory.callInput, "callInput");
+        return mark !== void 0 && (named === void 0 || toolsOf(mark, "callInput").includes(named));
+      });
+      return owed ? "unjudged" : void 0;
+    }
+    const calls = callStringsOf({ tool: named, json: json2 });
+    const filePath = callPathOf(named, json2);
+    return { kind: "call", tool: named, calls, ...filePath === void 0 ? {} : { filePath } };
   };
   const upgraded = deps.upgrade === void 0 ? Promise.resolve() : Promise.resolve().then(deps.upgrade).then(
     () => void 0,
@@ -49729,7 +49873,8 @@ function createServer(deps) {
     if ("error" in overrides) return fail(overrides.error);
     const stamp = now().toISOString();
     const condition = canonicalCondition(args2.appliesWhen);
-    const mark = canonicalMark(args2.failure === void 0 || args2.failure === null ? void 0 : args2.failure);
+    const mark = canonicalMark(args2.failure === void 0 || args2.failure === null ? void 0 : args2.failure, "failure");
+    const callMark = canonicalMark(args2.callInput === void 0 || args2.callInput === null ? void 0 : args2.callInput, "callInput");
     const memory = {
       id: newId(),
       scope: args2.scope === "project" ? deps.session.project : deps.session.user,
@@ -49748,9 +49893,10 @@ function createServer(deps) {
       created: stamp,
       updated: stamp,
       ...condition === void 0 ? {} : { appliesWhen: condition },
-      ...mark === void 0 ? {} : { failure: mark }
+      ...mark === void 0 ? {} : { failure: mark },
+      ...callMark === void 0 ? {} : { callInput: callMark }
     };
-    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0), ...validateLinks(memory, memories)];
+    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0), ...unusableMarkProblems(args2), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -49809,7 +49955,8 @@ function createServer(deps) {
     if ("error" in overrides) return fail(overrides.error);
     const kind = args2.scope ?? previous.scope.kind;
     const condition = args2.appliesWhen === void 0 ? previous.appliesWhen : canonicalCondition(args2.appliesWhen ?? void 0);
-    const mark = args2.failure === void 0 ? previous.failure : canonicalMark(args2.failure ?? void 0);
+    const mark = args2.failure === void 0 ? previous.failure : canonicalMark(args2.failure ?? void 0, "failure");
+    const callMark = args2.callInput === void 0 ? previous.callInput : canonicalMark(args2.callInput ?? void 0, "callInput");
     const memory = {
       id: previous.id,
       scope: kind === "project" ? deps.session.project : deps.session.user,
@@ -49828,13 +49975,15 @@ function createServer(deps) {
       created: previous.created,
       updated: now().toISOString(),
       ...condition === void 0 ? {} : { appliesWhen: condition },
-      ...mark === void 0 ? {} : { failure: mark }
+      ...mark === void 0 ? {} : { failure: mark },
+      ...callMark === void 0 ? {} : { callInput: callMark }
     };
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
     const errors = [
       ...conditionProblems(memory, previous, resolution.current, memories),
       ...markProblems(memory, previous),
+      ...unusableMarkProblems(args2),
       ...validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories)
     ];
     if (errors.length > 0) return fail(errors.join("; "));
@@ -50232,8 +50381,9 @@ function createServer(deps) {
         // (session_id and agent_id); they decide delivery, never what a condition sees.
         session: external_exports.string().optional(),
         agent: external_exports.string().optional(),
-        // #459: the failed call's own tool and input, read at the failure moment only (callOf). The error's text is
-        // never passed: nothing decides on it, so it reaches no answer, no record and no log (How lines 4 and 6).
+        // #459, #466: the call's own tool and input, read at the failure moment and at the input moment only. The error's
+        // text is never passed and neither is a result: nothing decides on them, so they reach no answer, no record and no
+        // log (#466 S34).
         tool: external_exports.string().optional(),
         call: external_exports.string().optional(),
         // A NotebookEdit names its file in notebook_path, never file_path (the CLI's own tool table, How line 4), so the
@@ -50271,7 +50421,15 @@ function createServer(deps) {
         }
         const failed = judged === void 0 ? void 0 : judged;
         const failure2 = failed === void 0 ? void 0 : { ...failed, claim: await claimed(key, failureAsk(delivery.resolution.active, delivery.problems, failed)) };
-        const text = contextFor(moment, event, delivery, {
+        const callInput = moment === "input" ? inputCallOf(tool, input2, delivery.problems, delivery.resolution.active) : void 0;
+        if (callInput === "unjudged") {
+          const missing = given(tool) === void 0 ? "no tool name" : "no input for the call";
+          return { content: [{ type: "text", text: hookOutput(event, unjudgedInputWarning(missing)) }] };
+        }
+        const inputCase = callInput === void 0 ? void 0 : callInput;
+        const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase));
+        const inputAnswerHere = inputCase === void 0 || inputClaim === void 0 ? void 0 : inputAnswer(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, inputClaim);
+        const text = inputAnswerHere?.text ?? contextFor(moment, event, delivery, {
           prompt,
           part,
           place,
@@ -50283,7 +50441,8 @@ function createServer(deps) {
         });
         if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
         dreamOnce(event);
-        return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place)) }] };
+        const deny = inputAnswerHere?.deny === true;
+        return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place), deny) }] };
       } catch (error62) {
         return { content: [{ type: "text", text: hookFailure(moment, event, message(error62)) }] };
       }
@@ -50850,8 +51009,13 @@ function relatedEntryOf(memory) {
 }
 function shownCondition(memory) {
   const condition = canonicalCondition(memory.appliesWhen);
-  const mark = canonicalMark(memory.failure);
-  if (condition === void 0) return mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } };
+  const mark = canonicalMark(memory.failure, "failure");
+  const callMark = canonicalMark(memory.callInput, "callInput");
+  const marks = {
+    ...mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } },
+    ...callMark === void 0 ? {} : { callInput: { tool: shownText(callMark.tool), pattern: shownText(callMark.pattern) } }
+  };
+  if (condition === void 0) return marks;
   const { inRepo, labels, files } = condition;
   return {
     appliesWhen: {
@@ -50859,7 +51023,7 @@ function shownCondition(memory) {
       ...labels === void 0 ? {} : { labels: labels.map(shownText) },
       ...files === void 0 ? {} : { files: files.map(shownText) }
     },
-    ...mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } }
+    ...marks
   };
 }
 function promoteCost(shown2, intent) {
@@ -50867,17 +51031,27 @@ function promoteCost(shown2, intent) {
   if (intent?.act !== "promote") return {};
   const record2 = shown2.find((one) => one.memory.id === intent.record)?.memory;
   const carries = canonicalCondition(record2?.appliesWhen) !== void 0;
-  const marked = canonicalMark(record2?.failure) !== void 0;
-  return { carriesCondition: carries, loadsEverywhere: !carries && !marked, ...marked ? { carriesFailureMark: true } : {} };
+  const marked = canonicalMark(record2?.failure, "failure") !== void 0;
+  const callMarked = canonicalMark(record2?.callInput, "callInput") !== void 0;
+  return {
+    carriesCondition: carries,
+    loadsEverywhere: !carries && !marked && !callMarked,
+    ...marked ? { carriesFailureMark: true } : {},
+    ...callMarked ? { carriesCallInputMark: true } : {}
+  };
 }
 function supersedeCost(shown2, survivorId, retiredId) {
   const memoryOf2 = (id) => shown2.find((one) => one.memory.id === id)?.memory;
-  const { dropped } = supersedeMark(memoryOf2(retiredId), memoryOf2(survivorId));
-  if (dropped === void 0) return {};
+  const { dropped, droppedCall } = supersedeMark(memoryOf2(retiredId), memoryOf2(survivorId));
   return {
-    dropsFailureMark: true,
-    failureMarkGoes: `Accepting retires ${shortId(retiredId)}, marked about a failure of ${shownCut(dropped.tool, 80)} "${shownCut(dropped.pattern, 80)}"; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory arrives at that failure. Tell the user before accepting.`
+    ...dropped === void 0 ? {} : { dropsFailureMark: true, failureMarkGoes: markGoes(dropped, "failure", "a failure", retiredId, survivorId) },
+    // #466 S46: a call mark the accept would lose is said in the same words, before the accept, so the answer never
+    // leaves Claude thinking the memory about that call still arrives.
+    ...droppedCall === void 0 ? {} : { dropsCallInputMark: true, callInputMarkGoes: markGoes(droppedCall, "a call", "the call's own input", retiredId, survivorId) }
   };
+}
+function markGoes(mark, what, judged, retiredId, survivorId) {
+  return `Accepting retires ${shortId(retiredId)}, marked about ${what} of ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory arrives at a call judging ${judged}. Tell the user before accepting.`;
 }
 function planOf(plan) {
   return {
