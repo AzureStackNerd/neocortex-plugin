@@ -45981,7 +45981,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.17",
+  version: "0.5.18",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46892,6 +46892,19 @@ var PLACE_TEXT = {
   folderFirstVisit: `First visit: this folder has no context labels yet. Propose at most ${PROPOSED_MAX}, from the folder's path, the file types and any README, reusing names from list_labels. Tell the user what you propose and why, then call set_context_labels with confirmed false; set confirmed true only for a label the user confirms. If this folder was renamed or moved, its earlier labels and memories stayed under the old path and do not load here. Skip this when no user can answer in this session, such as a claude -p run.`,
   updateWarning: (format) => `NeoCortex on this machine cannot read the context labels of this place: they were written by a newer NeoCortex (format ${format}). Update NeoCortex on this machine.`
 };
+function arrivalsOf(placed, how, named = []) {
+  const seen = new Set(placed.map((memory) => memory.id));
+  const out = placed.map((memory) => ({ id: memory.id, how }));
+  for (const id of named) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, how: "named" });
+  }
+  return out;
+}
+function trackLine(conversation) {
+  return `Track record: conversation ${conversation}`;
+}
 function onceResetNotice(reason) {
   return `WARNING: NeoCortex could not reset which rules for a kind of file this conversation already has (${truncateReason(reason, 120)}), so such a rule may not arrive again at a read or a search in this conversation. Say so before answering.`;
 }
@@ -46989,8 +47002,10 @@ function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
 function indexFill(input2, budget = HOOK_CAP, options = NO_PLACE) {
   const { projectKey, location, resolution, problems } = input2;
   const line = placeLine(options.place);
+  const track = options.conversation === void 0 ? "" : `
+${trackLine(options.conversation)}`;
   const header = `# NeoCortex \xB7 project ${projectKey}${line === null ? "" : `
-${line}`}`;
+${line}`}${track}`;
   const sectionOf = (notices) => notices.length > 0 ? ["## Notices", ...notices].join("\n") : "";
   const noticeSection = sectionOf(noticeLines(input2, options));
   const longestSection = (crowd) => sectionOf(noticeLines(input2, options.proposals === void 0 ? options : { ...options, proposals: LONGEST_PROPOSALS }, crowd));
@@ -47000,7 +47015,7 @@ ${line}`}`;
 ${left}` : `${notices}
 ${left}`;
   if (resolution.byId.size === 0 && problems.length === 0) {
-    return { parts: [[header, `No memories yet in ${location}.`, withLeft(noticeSection)].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0 };
+    return { parts: [[header, `No memories yet in ${location}.`, withLeft(noticeSection)].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0, arrivals: [[]] };
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
   const partCount = Math.min(options.parts ?? INDEX_PART_BUDGETS.length, INDEX_PART_BUDGETS.length);
@@ -47013,6 +47028,7 @@ ${left}`;
     const fill = (count2) => {
       const cut = new Set(shortenableIndexes.slice(0, count2));
       const parts = [[]];
+      const arrivals = [[]];
       let room = roomOf2(1);
       let unshown = 0;
       let shortened = 0;
@@ -47020,6 +47036,7 @@ ${left}`;
         const line2 = cut.has(i) ? short[i] : whole2;
         while (unshown === 0 && line2.length + 1 > room && parts.length < partCount) {
           parts.push([]);
+          arrivals.push([]);
           room = roomOf2(parts.length);
         }
         if (unshown > 0 || line2.length + 1 > room) {
@@ -47027,11 +47044,15 @@ ${left}`;
           continue;
         }
         parts[parts.length - 1].push(line2);
+        arrivals[arrivals.length - 1].push({ id: memories[i].id, how: cut.has(i) ? "short" : "index" });
         room -= line2.length + 1;
         if (cut.has(i)) shortened += 1;
       }
-      while (parts.length > 1 && parts[parts.length - 1].length === 0) parts.pop();
-      return { parts, unshown, shortened };
+      while (parts.length > 1 && parts[parts.length - 1].length === 0) {
+        parts.pop();
+        arrivals.pop();
+      }
+      return { parts, unshown, shortened, arrivals };
     };
     let result = fill(0);
     if (result.unshown > 0) {
@@ -47058,18 +47079,18 @@ ${left}`;
     if (i === 0 && notices !== "") sections.push(notices);
     return sections.join("\n\n");
   };
-  const render = ({ parts, unshown, shortened }, notices) => {
+  const render = ({ parts, unshown, shortened, arrivals }, notices) => {
     const texts = parts.map((_, i) => textOf(parts, i, unshown, notices));
-    if (left === "") return { parts: texts, shortened, unshown };
+    if (left === "") return { parts: texts, shortened, unshown, arrivals };
     const cap = Math.min(INDEX_PART_BUDGETS[0], budget);
     const first2 = [...parts[0]];
     for (let moved = 0; ; moved += 1) {
       const text = textOf([first2, ...parts.slice(1)], 0, unshown, withLeft(notices), moved);
       if (text.length <= cap) {
         texts[0] = text;
-        return { parts: texts, shortened, unshown: unshown + moved };
+        return { parts: texts, shortened, unshown: unshown + moved, arrivals: [arrivals[0].slice(0, first2.length), ...arrivals.slice(1)] };
       }
-      if (first2.length === 0) return { parts: texts, shortened, unshown };
+      if (first2.length === 0) return { parts: texts, shortened, unshown, arrivals };
       first2.pop();
     }
   };
@@ -47079,9 +47100,6 @@ ${left}`;
   }
   const second = fillWith(longestSection(LONGEST_CROWD));
   return render(second, sectionOf(noticeLines(input2, options, { shortened: second.shortened, unshown: second.unshown })));
-}
-function buildIndex(input2, budget = HOOK_CAP, part = 1, options = NO_PLACE) {
-  return indexParts(input2, budget, options)[part - 1] ?? "";
 }
 function refreshContext(input2, place, proposals) {
   const { active, byId } = input2.resolution;
@@ -47140,12 +47158,16 @@ function fullFit(kinds, active, byId, budget = HOOK_CAP, options = {}) {
 }
 function fullParts(kinds, active, byId, budgets, options = {}) {
   const edit = options.edit ?? NO_FILE;
-  const warnings = [...filesWarnings(kinds, active, edit), brokenWarning(kinds, options.problems ?? [])].filter((warning) => warning !== "");
+  const named = [];
+  const warnings = [...filesWarnings(kinds, active, edit, named), brokenWarning(kinds, options.problems ?? [], named)].filter((warning) => warning !== "");
   const lead = warnings.join("\n\n");
   const rooms = budgets.map((budget, i) => i > 0 || lead === "" ? budget : Math.max(0, budget - lead.length - 2 * warnings.length));
   const brought = kinds.includes("edit") ? active.filter((memory) => memory.delivery !== "edit" || arrivesAtEdit(memory, edit)) : active;
   const { parts, notFit, kept } = fullText(kinds, brought, byId, rooms, options.priority ?? kinds);
-  return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat() };
+  return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat(), placedParts: kept, named };
+}
+function fullArrivals(fill, part = 1) {
+  return arrivalsOf(fill.placedParts[part - 1] ?? [], "full", part === 1 ? fill.named : []);
 }
 var MOMENT_FILLS = {
   startup: { kinds: ["startup"], budgets: FULL_PART_BUDGETS },
@@ -47300,13 +47322,15 @@ function laterLine(later, first, parts) {
   const where = first === parts ? `startup part ${first}` : `startup parts ${first} to ${parts}`;
   return `${later.length} startup ${later.length === 1 ? "memory is" : "memories are"} in ${where}, not this part: ${listed2(later.map(namedInWarning))}. If ${later.length === 1 ? "its text is" : "their text is"} not in context, say so before answering; get_memory shows the text.`;
 }
-function sessionContext(input2, options = NO_PLACE) {
+function sessionDelivered(input2, options = NO_PLACE) {
   const { active, byId } = input2.resolution;
-  const fullText2 = buildFull(["startup"], active, byId, LEGACY_FULL_SHARE);
-  const index = buildIndex(input2, HOOK_CAP - (fullText2 === "" ? 0 : fullText2.length + 2), 1, { ...options, parts: 1 });
-  return fullText2 === "" ? index : `${index}
+  const full = fullParts(["startup"], active, byId, [LEGACY_FULL_SHARE]);
+  const fullText2 = full.parts[0];
+  const fill = indexFill(input2, HOOK_CAP - (fullText2 === "" ? 0 : fullText2.length + 2), { ...options, parts: 1 });
+  const index = fill.parts[0] ?? "";
+  return { text: fullText2 === "" ? index : `${index}
 
-${fullText2}`;
+${fullText2}`, arrived: [...fill.arrivals[0] ?? [], ...fullArrivals(full)] };
 }
 async function loadDelivery(store2, session, now, current = CURRENT_FORMAT, here = UNKNOWN_HERE) {
   return deliveryOf(await store2.load(visibleScopes(session)), store2.location, session, now, current, here);
@@ -47349,10 +47373,10 @@ function fullBlock(memory, byId) {
   if (memory.body !== "") lines.push(memory.body);
   return lines.join("\n");
 }
-function filesWarnings(kinds, active, edit) {
+function filesWarnings(kinds, active, edit, into) {
   if (!kinds.includes("edit")) return [];
   const edits = active.filter((memory) => kinds.includes(memory.delivery));
-  const named = namedWithFiles;
+  const named = (memories, patterns) => namedWithFiles(memories, patterns, into);
   if (edit.kind === "no-file") {
     const conditioned = edits.filter((memory) => editFiles(memory).state !== "none");
     if (conditioned.length === 0) return [];
@@ -47374,12 +47398,14 @@ function filesWarnings(kinds, active, edit) {
     );
   }
   const broken = edits.filter(hasUnusable);
-  if (broken.length > 0) warnings.push(unusableWarning(broken));
+  if (broken.length > 0) warnings.push(unusableWarning(broken, into));
   return warnings;
 }
 var FILES_WARNING_NAMED = 5;
-function namedWithFiles(memories, patterns = () => []) {
-  return memories.slice(0, FILES_WARNING_NAMED).map((memory) => {
+function namedWithFiles(memories, patterns = () => [], into) {
+  const shownOnes = memories.slice(0, FILES_WARNING_NAMED);
+  into?.push(...shownOnes.map((memory) => memory.id));
+  return shownOnes.map((memory) => {
     const shown2 = patterns(memory);
     return `"${shownCut(memory.title, 80)}" (${shortId(memory.id)})${shown2.length === 0 ? "" : ` ${shownCut(shown2.join(", "), 80)}`}`;
   }).join(", ") + (memories.length > FILES_WARNING_NAMED ? ` and ${memories.length - FILES_WARNING_NAMED} more` : "");
@@ -47388,21 +47414,22 @@ function hasUnusable(memory) {
   const files = editFiles(memory);
   return files.state === "judged" && files.unusable.length > 0;
 }
-function unusableWarning(broken) {
+function unusableWarning(broken, into) {
   const one = broken.length === 1;
   const patterns = (memory) => {
     const files = editFiles(memory);
     return files.state === "judged" ? files.unusable : [];
   };
-  return `WARNING: ${broken.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot use, which matches no file: ${namedWithFiles(broken, patterns)}. Say so before answering; ${one ? "the pattern needs" : "the patterns need"} a repair.`;
+  return `WARNING: ${broken.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot use, which matches no file: ${namedWithFiles(broken, patterns, into)}. Say so before answering; ${one ? "the pattern needs" : "the patterns need"} a repair.`;
 }
-function readText(active, byId, problems, target, claim2 = claimAll(readAsk(active, target))) {
-  const warnings = [...readWarnings(active, target, claim2), brokenWarning(["edit"], problems)].filter((warning) => warning !== "");
+function readDelivered(active, byId, problems, target, claim2 = claimAll(readAsk(active, target))) {
+  const named = [];
+  const warnings = [...readWarnings(active, target, claim2, named), brokenWarning(["edit"], problems, named)].filter((warning) => warning !== "");
   const lead = warnings.join("\n\n");
   const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
   const brought = active.filter((memory) => memory.delivery === "edit" && claim2.seen.has(memory.id));
-  const { parts } = fullText(["edit"], brought, byId, [room], ["edit"]);
-  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+  const { parts, kept } = fullText(["edit"], brought, byId, [room], ["edit"]);
+  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
 }
 function failureAsk(active, problems, call) {
   if (call.tool === "") return { seen: [], named: [] };
@@ -47416,14 +47443,15 @@ function filesHoldAtFailure(memory, call) {
   const path = call.filePath;
   return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
 }
-function failureText(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call))) {
+function failureDelivered(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call))) {
+  const named = [];
   const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
-  const warnings = [problemWarning(naming)].filter((warning) => warning !== "");
+  const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
   const lead = warnings.join("\n\n");
   const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
   const brought = active.filter((memory) => memory.failure !== void 0 && claim2.seen.has(memory.id));
-  const { parts } = fillChosen(brought, byId, [room], [], null, fullBlock);
-  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+  const { parts, kept } = fillChosen(brought, byId, [room], [], null, fullBlock);
+  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
 }
 var NO_INPUT = { kind: "call", tool: "", calls: [] };
 var CHANGES_NOTHING = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob"]);
@@ -47443,33 +47471,35 @@ function filesHoldAtInput(memory, call) {
   return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
 }
 var REFUSAL_LEAD = "NeoCortex refuses this call once, on purpose: a memory you saved is about this call, and its rule is below. Read it, then make the call again, changed to follow it or as it is; it will run.";
-function inputText(active, byId, problems, call = NO_INPUT, claim2 = claimAll(inputAsk(active, problems, call))) {
+function inputDelivered(active, byId, problems, call = NO_INPUT, claim2 = claimAll(inputAsk(active, problems, call))) {
+  const named = [];
   const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
-  const warnings = [problemWarning(naming)].filter((warning) => warning !== "");
+  const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
   const lead = warnings.join("\n\n");
   const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
   const brought = active.filter((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
-  const { parts } = fillChosen(brought, byId, [room], [], null, fullBlock);
-  return [lead, parts[0]].filter((text) => text !== "").join("\n\n");
+  const { parts, kept } = fillChosen(brought, byId, [room], [], null, fullBlock);
+  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
 }
 function inputAnswer(active, byId, problems, call, claim2) {
-  const text = inputText(active, byId, problems, call, claim2);
-  if (text === "" || call === "unjudged") return { text, deny: false };
+  const { text, arrived } = inputDelivered(active, byId, problems, call, claim2);
+  if (text === "" || call === "unjudged") return { text, deny: false, arrived };
   const brought = active.some((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
   return { text: brought && claim2.recorded && refusesAt(call.tool) ? `${REFUSAL_LEAD}
 
-${text}` : text, deny: brought && claim2.recorded && refusesAt(call.tool) };
+${text}` : text, deny: brought && claim2.recorded && refusesAt(call.tool), arrived };
 }
 function unjudgedInputWarning(missing) {
   return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
 }
-function problemWarning(problems) {
+function problemWarning(problems, into) {
   if (problems.length === 0) return "";
+  into?.push(...problems.slice(0, MAX_LISTED).flatMap((problem) => problem.id === void 0 ? [] : [problem.id]));
   const one = problems.length === 1;
   const records = problems.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${problems.length} NeoCortex memory ${one ? "record" : "records"} did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (problems.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
-function readWarnings(active, target, claim2) {
+function readWarnings(active, target, claim2, into) {
   const rules = active.filter((memory) => memory.delivery === "edit");
   if (target.kind === "no-target") {
     return rules.some((memory) => editFiles(memory).state !== "none") ? [
@@ -47485,16 +47515,17 @@ function readWarnings(active, target, claim2) {
       return files.state === "unjudged" ? files.patterns : [];
     };
     warnings.push(
-      `WARNING: ${unjudged.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot judge yet, a folder or a project memory's, so ${one ? "it arrived" : "they arrived"} at this read or search without NeoCortex checking whether ${one ? "it is" : "they are"} about this file: ${namedWithFiles(unjudged, patterns)}. Say so before answering.`
+      `WARNING: ${unjudged.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot judge yet, a folder or a project memory's, so ${one ? "it arrived" : "they arrived"} at this read or search without NeoCortex checking whether ${one ? "it is" : "they are"} about this file: ${namedWithFiles(unjudged, patterns, into)}. Say so before answering.`
     );
   }
   const broken = rules.filter((memory) => claim2.named.has(memory.id) && hasUnusable(memory));
-  if (broken.length > 0) warnings.push(unusableWarning(broken));
+  if (broken.length > 0) warnings.push(unusableWarning(broken, into));
   return warnings;
 }
-function brokenWarning(kinds, problems) {
+function brokenWarning(kinds, problems, into) {
   const ours = problems.filter((p) => p.delivery !== void 0 && kinds.includes(p.delivery));
   if (ours.length === 0) return "";
+  into?.push(...ours.slice(0, MAX_LISTED).flatMap((problem) => problem.id === void 0 ? [] : [problem.id]));
   const one = ours.length === 1;
   const records = ours.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${ours.length} NeoCortex memory ${one ? "record" : "records"} for this moment did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (ours.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
@@ -47676,28 +47707,43 @@ function looksLikeShortQuestion(prompt) {
   return words.length > 0 && words.length <= MAX_QUESTION_WORDS && QUESTION_RE.test(prompt);
 }
 function contextFor(command, event, input2, extra) {
+  return deliveryFor(command, event, input2, extra).text;
+}
+function deliveryFor(command, event, input2, extra) {
   const { active, byId } = input2.resolution;
   const { problems } = input2;
+  const full = (kinds, options) => {
+    const fill = fullParts(kinds, active, byId, [HOOK_CAP], options);
+    return { text: fill.parts[0], arrived: fullArrivals(fill) };
+  };
   switch (command) {
-    case "index":
-      return indexMoment(event, input2, extra.place, extra.proposals, extra.onceReset).parts[extra.part - 1] ?? "";
-    case "full":
-      return startupFull(input2).parts[extra.part - 1] ?? "";
+    case "index": {
+      const fill = indexMoment(event, input2, extra.place, extra.proposals, extra.onceReset, extra.conversation);
+      return { text: fill.parts[extra.part - 1] ?? "", arrived: fill.arrivals[extra.part - 1] ?? [], ...extra.part === 1 ? { parts: fill.parts.length } : {} };
+    }
+    case "full": {
+      const fill = startupFull(input2);
+      const made = Math.max(1, fill.placedParts.filter((part) => part.length > 0).length);
+      return { text: fill.parts[extra.part - 1] ?? "", arrived: fullArrivals(fill, extra.part), ...extra.part === 1 ? { parts: made } : {} };
+    }
     case "startup":
-      return sessionContext(input2, indexOptions(command, event, extra.place, extra.proposals, extra.onceReset));
+      return sessionDelivered(input2, indexOptions(command, event, extra.place, extra.proposals, extra.onceReset, extra.conversation));
     case "subagent":
-      return buildFull(["subagent"], active, byId, HOOK_CAP, { problems });
+      return full(["subagent"], { problems });
     case "prompt":
-      return event === "UserPromptSubmit" && looksLikeShortQuestion(extra.prompt) ? buildFull(["question", "prompt"], active, byId, HOOK_CAP, { problems, priority: ["prompt", "question"] }) : buildFull(["prompt"], active, byId, HOOK_CAP, { problems });
+      return event === "UserPromptSubmit" && looksLikeShortQuestion(extra.prompt) ? full(["question", "prompt"], { problems, priority: ["prompt", "question"] }) : full(["prompt"], { problems });
     case "edit":
-      return buildFull(["edit"], active, byId, HOOK_CAP, { problems, edit: extra.edit ?? NO_FILE });
+      return full(["edit"], { problems, edit: extra.edit ?? NO_FILE });
     case "read":
     case "search":
-      return readText(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
+      return readDelivered(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
     case "failure":
-      return failureText(active, byId, problems, extra.failure ?? NO_FAILURE, extra.failure?.claim);
-    case "input":
-      return extra.input === void 0 ? "" : inputAnswer(active, byId, problems, extra.input.call, extra.input.claim).text;
+      return failureDelivered(active, byId, problems, extra.failure ?? NO_FAILURE, extra.failure?.claim);
+    case "input": {
+      if (extra.input === void 0) return { text: "", arrived: [] };
+      const { text, arrived } = inputAnswer(active, byId, problems, extra.input.call, extra.input.claim);
+      return { text, arrived };
+    }
   }
 }
 var NO_SEARCH = { kind: "search", patterns: [] };
@@ -47730,14 +47776,24 @@ function editOf(file2, folder) {
 function startupFull(input2) {
   return fullParts(["startup"], input2.resolution.active, input2.resolution.byId, FULL_PART_BUDGETS, { problems: input2.problems });
 }
-function indexMoment(event, input2, place, proposals, onceReset) {
-  return indexFill(input2, HOOK_CAP, indexOptions("index", event, place, proposals, onceReset));
+function indexMoment(event, input2, place, proposals, onceReset, conversation) {
+  return indexFill(input2, HOOK_CAP, indexOptions("index", event, place, proposals, onceReset, conversation));
 }
-function indexOptions(command, event, place, proposals, onceReset) {
+function indexOptions(command, event, place, proposals, onceReset, conversation) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
   const main = event === "SessionStart";
   const parts = eventsDelivering(command, event);
-  return { place, firstVisit: main, unsorted: main, proposals: main ? proposals : void 0, parts, crowded: main, ...onceReset === void 0 ? {} : { onceReset } };
+  return {
+    place,
+    firstVisit: main,
+    unsorted: main,
+    proposals: main ? proposals : void 0,
+    parts,
+    crowded: main,
+    ...onceReset === void 0 ? {} : { onceReset },
+    // #468 How line 17: the conversation part 1's header names, only where a note is kept.
+    ...conversation === void 0 ? {} : { conversation }
+  };
 }
 function eventsDelivering(command, event) {
   return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
@@ -49358,6 +49414,15 @@ function sameLines(a, b) {
 }
 
 // src/server.ts
+var TRACK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+var TRACK_WRITE_MS = 500;
+var TRACK_LOST_LINE = "NOTE: NeoCortex could not note this delivery in its track record, so memories_in_play will report some deliveries of this conversation as unknown.";
+var IN_PLAY_SCOPE = "This names what NeoCortex delivered into this conversation, not memories Claude fetched itself with get_memory or search_memories.";
+var IN_PLAY_DESCRIPTION = 'Which NeoCortex memories had reached this conversation, each with the moment it arrived, whether in full, as its index line or named in a warning, and whether it changed since. Call it when the user asks why you did something or which memories were in play. conversation is what the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line); until, an ISO time, names only what had arrived by then. It covers what NeoCortex delivered, not what you fetched yourself; say so.';
+var IN_PLAY_INPUT = {
+  conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
+  until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
+};
 var ID = external_exports.string().min(8).describe("Memory id, or its first 8 characters as shown in the index");
 var LINK_IDS = external_exports.array(external_exports.string()).describe("Memory ids, or their first 8 characters");
 var OWN_TOOL_RE = /^mcp__(plugin_neocortex_neocortex|neocortex)__/;
@@ -49651,6 +49716,40 @@ function createServer(deps) {
     () => void 0
   );
   const claimed = (key, ask) => deps.once === void 0 || key.session === "" ? Promise.resolve(claimAll(ask)) : deps.once.claim(key, ask);
+  const trackLost = /* @__PURE__ */ new Map();
+  const settledInTime = (work) => new Promise((resolve5) => {
+    const timer = setTimeout(() => resolve5(false), TRACK_WRITE_MS);
+    Promise.resolve().then(work).then(
+      () => {
+        clearTimeout(timer);
+        resolve5(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve5(false);
+      }
+    );
+  });
+  const noteAnswer = async (track, who, fields, arrived, revisions, mayTell, text) => {
+    const key = `${who.session}/${who.agent}`;
+    const state = trackLost.get(key) ?? { told: false, count: 0 };
+    trackLost.set(key, state);
+    const memories = arrived.map(({ id, how }) => {
+      const revision = revisions.get(id);
+      return { id, how, ...revision === void 0 ? {} : { revision } };
+    });
+    const note = { time: now().toISOString(), ...fields, agent: who.agent, ...state.count > 0 ? { lostBefore: state.count } : {}, memories };
+    if (await settledInTime(() => track.note(who.session, note))) {
+      state.count = 0;
+      return text;
+    }
+    state.count += 1;
+    if (state.told || !mayTell) return text;
+    state.told = true;
+    return text === "" ? TRACK_LOST_LINE : `${text}
+
+${TRACK_LOST_LINE}`;
+  };
   let dreamStarted = false;
   const dreamOnce = (event) => {
     if (dreamStarted || deps.dream === void 0 || event === "SessionStart") return;
@@ -50392,12 +50491,25 @@ function createServer(deps) {
         input: external_exports.string().optional(),
         // The interrupt flag, which substitutes the STRING 'true' or 'false' and never a boolean (measured at gate 2):
         // 'true' is an abort, and anything else, the empty string included, is an error the tool reported (S8, S9, S24).
-        interrupted: external_exports.string().optional()
+        interrupted: external_exports.string().optional(),
+        // #468 How line 15: the SessionStart input's source (startup, clear, compact), which the start client passes; it
+        // is kept on a start's note, so a compaction is a boundary in memories_in_play's answer and a /clear is named.
+        source: external_exports.string().optional()
       }
     },
-    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted }) => {
+    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted, source }) => {
       try {
         const key = onceKeyOf(session, agent);
+        const trackAgent = given(agent) ?? "";
+        const trackSession = given(session);
+        const tracked = deps.track !== void 0 && trackSession !== void 0 && TRACK_ID_RE.test(trackSession) && (trackAgent === "" ? event !== "SubagentStart" : TRACK_ID_RE.test(trackAgent)) ? { session: trackSession, agent: trackAgent } : void 0;
+        const conversation = tracked === void 0 ? void 0 : tracked.agent === "" ? tracked.session : `${tracked.session}/${tracked.agent}`;
+        const startPart = moment === "index" || moment === "full" || moment === "startup";
+        const firstStartPart = moment === "index" && part === 1 || moment === "startup";
+        if (deps.track !== void 0 && event === "SessionStart" && firstStartPart) {
+          const track = deps.track;
+          await settledInTime(() => track.sweep());
+        }
         let onceReset;
         if (event === "SessionStart" && deps.once !== void 0 && key.session !== "") {
           await deps.once.clearMain(key.session).catch((error62) => {
@@ -50429,7 +50541,7 @@ function createServer(deps) {
         const inputCase = callInput === void 0 ? void 0 : callInput;
         const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase));
         const inputAnswerHere = inputCase === void 0 || inputClaim === void 0 ? void 0 : inputAnswer(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, inputClaim);
-        const text = inputAnswerHere?.text ?? contextFor(moment, event, delivery, {
+        const answer = inputAnswerHere ?? deliveryFor(moment, event, delivery, {
           prompt,
           part,
           place,
@@ -50437,16 +50549,64 @@ function createServer(deps) {
           ...edit === void 0 ? {} : { edit },
           ...read2 === void 0 ? {} : { read: read2 },
           ...failure2 === void 0 ? {} : { failure: failure2 },
-          ...onceReset === void 0 ? {} : { onceReset }
+          ...onceReset === void 0 ? {} : { onceReset },
+          ...conversation === void 0 ? {} : { conversation }
         });
+        let text = answer.text;
         if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
         dreamOnce(event);
         const deny = inputAnswerHere?.deny === true;
+        if (deps.track !== void 0 && tracked !== void 0 && (startPart || answer.arrived.length > 0)) {
+          const revisions = new Map(view.loaded.memories.map((stored) => [stored.memory.id, stored.revision]));
+          const toolName = given(tool);
+          const startSource = given(source);
+          const parts = "parts" in answer ? answer.parts : void 0;
+          text = await noteAnswer(
+            deps.track,
+            tracked,
+            {
+              moment,
+              event,
+              part,
+              ...startPart && startSource !== void 0 ? { source: startSource } : {},
+              ...(moment === "input" || moment === "failure") && toolName !== void 0 ? { tool: toolName } : {},
+              ...parts === void 0 ? {} : { parts }
+            },
+            answer.arrived,
+            revisions,
+            // Point 10: a session start tells only in index part 1 (or the legacy startup command), as systemMessageFor.
+            event !== "SessionStart" || firstStartPart,
+            text
+          );
+        }
         return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place), deny) }] };
       } catch (error62) {
         return { content: [{ type: "text", text: hookFailure(moment, event, message(error62)) }] };
       }
     }
+  );
+  server.registerTool(
+    "memories_in_play",
+    { title: "Which NeoCortex memories were in play in this conversation", description: IN_PLAY_DESCRIPTION, inputSchema: IN_PLAY_INPUT },
+    ({ conversation, until }) => guarded(async () => {
+      const [session, agent = "", ...rest] = conversation.trim().split("/");
+      if (rest.length > 0 || !TRACK_ID_RE.test(session) || agent !== "" && !TRACK_ID_RE.test(agent)) {
+        return fail('conversation must be what the "Track record: conversation" line of your NeoCortex index names: <session> or <session>/<agent>');
+      }
+      const cut = until === void 0 ? void 0 : Date.parse(until);
+      if (cut !== void 0 && Number.isNaN(cut)) return fail("until must be an ISO date and time, such as 2026-11-14T10:30:00Z");
+      const place = placeName(placeRefOf(deps.session.place));
+      if (deps.track === void 0) {
+        return { content: [{ type: "text", text: `${IN_PLAY_SCOPE} This NeoCortex server keeps no track record (${place}), so it cannot say which memories were in play; that does not mean none were.` }] };
+      }
+      const record2 = await deps.track.read(session);
+      const today = await reader.load(visibleScopes(deps.session)).then(
+        ({ memories, problems }) => ({ memories, problems }),
+        () => void 0
+      );
+      const pending = trackLost.get(`${session}/${agent}`)?.count ?? 0;
+      return { content: [{ type: "text", text: inPlayAnswer({ conversation: conversation.trim(), agent, place, record: record2, today, pending, ...cut === void 0 ? {} : { until: cut } }) }] };
+    })
   );
   const deleteCall = async ({ id, revision }, confirmation) => {
     const { stored, memories, problems, resolution } = await load();
@@ -51076,6 +51236,106 @@ function entryOf(memory) {
     why: memory.why,
     ...shownCondition(memory)
   };
+}
+var START_MOMENTS = ["index", "full", "startup"];
+var HOW_WORDS = {
+  full: "in full",
+  index: "as its index line",
+  short: "as its index line cut to its title",
+  named: "named in a warning, not as its text"
+};
+var MOMENT_WORDS = {
+  prompt: "a prompt",
+  edit: "an edit",
+  read: "a read",
+  search: "a search",
+  failure: "a failed call",
+  input: "a call"
+};
+function momentWords2(note) {
+  if (note.event === "SubagentStart") return "the subagent start";
+  if (START_MOMENTS.includes(note.moment)) return note.source === "compact" ? "the session start after a compaction" : note.source === "clear" ? "the session start after a /clear" : "the session start";
+  const words = MOMENT_WORDS[note.moment] ?? note.moment;
+  return note.tool === void 0 ? words : `${words} (${shownCut(note.tool, 80)})`;
+}
+function inPlayAnswer(input2) {
+  const { record: record2, agent, today, until } = input2;
+  const by = until === void 0 ? "" : ` by ${new Date(until).toISOString()}`;
+  const lines = [`Conversation ${input2.conversation}, ${input2.place}${until === void 0 ? "" : `, until ${new Date(until).toISOString()}`}.`, IN_PLAY_SCOPE];
+  const nothing = `Nothing is noted for this conversation${by}: nothing has been delivered yet, or its notes passed the 24 hours they are kept.`;
+  if (record2.state === "newer") {
+    lines.push("Its notes were written by a newer NeoCortex, which this one cannot read; that does not mean no memory was in play. Update NeoCortex on this machine.");
+    return lines.join("\n");
+  }
+  if (record2.state === "unreadable") {
+    lines.push("Its notes cannot be read now; that does not mean no memory was in play.");
+    return lines.join("\n");
+  }
+  const notes = record2.state === "none" ? [] : record2.notes.filter((note) => note.agent === agent && (until === void 0 || Date.parse(note.time) <= until));
+  const unknown2 = [];
+  const damaged = record2.state === "read" ? record2.damaged : 0;
+  const expired = record2.state === "read" ? record2.expired.filter((note) => note.agent === agent && (until === void 0 || Date.parse(note.time) <= until)) : [];
+  const gone = `${expired.length} ${expired.length === 1 ? "note" : "notes"} of this conversation passed the 24 hours NeoCortex keeps them, so what ${expired.length === 1 ? "it named is" : "they named is"} no longer kept.`;
+  if (damaged > 0) unknown2.push(`${damaged} ${damaged === 1 ? "note" : "notes"} of this session cannot be read, so what ${damaged === 1 ? "it names is" : "they name is"} unknown.`);
+  const lost = notes.reduce((sum, note) => sum + (note.lostBefore ?? 0), 0) + input2.pending;
+  if (lost > 0) unknown2.push(`${lost} ${lost === 1 ? "delivery" : "deliveries"} of this conversation could not be noted, so what ${lost === 1 ? "it" : "they"} brought is unknown.`);
+  if (notes.length === 0) {
+    lines.push(nothing, ...unknown2);
+    return lines.join("\n");
+  }
+  if (agent === "" && notes.find((note) => note.event === "SessionStart")?.source === "clear") {
+    lines.push("This conversation began with a /clear: only what arrived since is named, and nothing from before it.");
+  }
+  let boundary = -1;
+  notes.forEach((note, i) => {
+    if (note.event === "SessionStart" && note.source === "compact" && (i === 0 || notes[i - 1].event !== "SessionStart")) boundary = i;
+  });
+  for (let i = 0; i < notes.length; ) {
+    if (notes[i].event !== "SessionStart" && notes[i].event !== "SubagentStart") {
+      i += 1;
+      continue;
+    }
+    let end = i;
+    while (end < notes.length && notes[end].event === notes[i].event) end += 1;
+    const group = notes.slice(i, end);
+    if (!group.some((note) => note.moment === "startup")) {
+      const missing = [];
+      for (const moment of ["index", "full"]) {
+        const first = group.find((note) => note.moment === moment && note.part === 1);
+        const count2 = first?.parts ?? 1;
+        for (let part = 1; part <= count2; part += 1) if (!group.some((note) => note.moment === moment && note.part === part)) missing.push(`${moment} part ${part}`);
+      }
+      const words = momentWords2(group[0]);
+      if (missing.length > 0) unknown2.push(`${words[0].toUpperCase()}${words.slice(1)} at ${group[0].time} left no note for ${missing.join(", ")}, so what ${missing.length === 1 ? "it" : "they"} delivered is unknown.`);
+    }
+    i = end;
+  }
+  const latest = /* @__PURE__ */ new Map();
+  notes.forEach((note, at) => {
+    for (const { id, how, revision } of note.memories) {
+      latest.set(id, { note, how, at, count: (latest.get(id)?.count ?? 0) + 1, ...revision === void 0 ? {} : { revision } });
+    }
+  });
+  const stored = new Map(today?.memories.map((one) => [one.memory.id, one]) ?? []);
+  const lineOf = (id, entry) => {
+    const loaded = stored.get(id);
+    const title = loaded === void 0 ? "" : ` "${shownCut(loaded.memory.title, 80)}"`;
+    const times = entry.count > 1 ? `, ${entry.count} times in all` : "";
+    const since = today === void 0 ? "" : loaded !== void 0 ? entry.revision !== void 0 && loaded.revision !== entry.revision ? "; changed since it arrived, so its text now is not what Claude read" : "" : today.problems.some((problem) => problem.id === id) ? "; its record cannot be read now" : "; deleted since it arrived, or no longer loading here";
+    return `- ${shortId(id)}${title}: ${HOW_WORDS[entry.how]} at ${momentWords2(entry.note)}, ${entry.note.time}${times}${since}`;
+  };
+  const entries = [...latest.entries()].sort((a, b) => a[1].at - b[1].at);
+  const current = entries.filter(([, entry]) => entry.at >= boundary);
+  const before = entries.filter(([, entry]) => entry.at < boundary);
+  const none = boundary >= 0 ? "No memory is noted since the last compaction." : "No memory is noted for this conversation yet.";
+  lines.push(...current.length === 0 ? [none] : current.map(([id, entry]) => lineOf(id, entry)));
+  if (before.length > 0) {
+    lines.push(`Arrived before the compaction at ${notes[boundary].time} and no longer in context in full:`, ...before.map(([id, entry]) => lineOf(id, entry)));
+  }
+  if (today === void 0) lines.push("Whether these memories changed since they arrived cannot be checked now: the store could not be read.");
+  if (expired.length > 0) lines.push(gone);
+  lines.push(...unknown2);
+  return lines.join("\n");
 }
 function overridesOf(memory) {
   return memory.overrides.length > 0 ? { overrides: memory.overrides.map(shortId) } : {};
@@ -52446,6 +52706,129 @@ async function isGone(path) {
   }
 }
 
+// src/track.ts
+import { appendFile, mkdir as mkdir3, readFile as readFile4, readdir as readdir3, rm as rm3, stat as stat4 } from "node:fs/promises";
+import { join as join5 } from "node:path";
+var TRACK_FORMAT = 1;
+var TRACK_KEEP_MS = 24 * 60 * 60 * 1e3;
+var TRACK_SESSION_RE = /^[A-Za-z0-9_-]{1,128}$/;
+var codeOf4 = (error62) => error62?.code;
+var FILE_RE2 = /^([A-Za-z0-9_-]{1,128})\.v(\d+)\.jsonl$/;
+function noteOf(line) {
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return void 0;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const note = value;
+  if (typeof note.time !== "string" || typeof note.moment !== "string" || typeof note.event !== "string" || typeof note.agent !== "string") return void 0;
+  if (typeof note.part !== "number" || !Array.isArray(note.memories)) return void 0;
+  const memories = note.memories.filter(
+    (one) => typeof one === "object" && one !== null && typeof one.id === "string" && ["full", "index", "short", "named"].includes(one.how)
+  );
+  if (memories.length !== note.memories.length) return void 0;
+  return value;
+}
+function keptPeriod(notes, now) {
+  let start = 0;
+  let previous;
+  for (const [i, note] of notes.entries()) {
+    const time3 = Date.parse(note.time);
+    if (Number.isNaN(time3)) continue;
+    if (previous !== void 0 && time3 - previous > TRACK_KEEP_MS) start = i;
+    previous = time3;
+  }
+  if (previous !== void 0 && now - previous > TRACK_KEEP_MS) start = notes.length;
+  return {
+    notes: notes.slice(start),
+    expired: notes.slice(0, start).map((note) => ({ time: note.time, agent: note.agent }))
+  };
+}
+var FileTrack = class {
+  folder;
+  now;
+  appendText;
+  readText;
+  constructor(options) {
+    this.folder = options.folder;
+    this.now = options.now ?? (() => Date.now());
+    this.appendText = options.appendText ?? ((path, text) => appendFile(path, text, "utf8"));
+    this.readText = options.readText ?? ((path) => readFile4(path, "utf8"));
+  }
+  path(session, format = TRACK_FORMAT) {
+    return join5(this.folder, `${session}.v${format}.jsonl`);
+  }
+  /** Appends one note as one line; any failure throws, and the caller counts the note as lost (How line 9). */
+  async note(session, note) {
+    if (!TRACK_SESSION_RE.test(session)) throw new Error("the session id cannot name a track record");
+    await mkdir3(this.folder, { recursive: true });
+    await this.appendText(this.path(session), `${JSON.stringify(note)}
+`);
+  }
+  /**
+   * The notes of one session: none for a missing file; `newer` when a newer NeoCortex's file of this session lies beside
+   * it (S42), checked first so this version never answers from a record a newer one took over; `unreadable` for a file
+   * that cannot be read (S24). Lines that do not parse are counted, never named.
+   */
+  async read(session) {
+    if (!TRACK_SESSION_RE.test(session)) return { state: "none" };
+    let names;
+    try {
+      names = await readdir3(this.folder);
+    } catch (error62) {
+      if (codeOf4(error62) === "ENOENT") return { state: "none" };
+      return { state: "unreadable" };
+    }
+    if (names.some((name) => {
+      const match = FILE_RE2.exec(name);
+      return match !== null && match[1] === session && Number(match[2]) > TRACK_FORMAT;
+    })) return { state: "newer" };
+    let text;
+    try {
+      text = await this.readText(this.path(session));
+    } catch (error62) {
+      return codeOf4(error62) === "ENOENT" ? { state: "none" } : { state: "unreadable" };
+    }
+    const written = [];
+    let damaged = 0;
+    for (const line of text.split("\n")) {
+      if (line.trim() === "") continue;
+      const note = noteOf(line);
+      if (note === void 0) damaged += 1;
+      else written.push(note);
+    }
+    const { notes, expired } = keptPeriod(written, this.now());
+    return { state: "read", notes, damaged, expired };
+  }
+  /**
+   * Removes every file of this format not written for TRACK_KEEP_MS (How line 21, AC9); a file of another format, or of
+   * no record's name, is never touched. A file that cannot be judged or removed stays for the next sweep.
+   */
+  async sweep() {
+    let names;
+    try {
+      names = await readdir3(this.folder);
+    } catch {
+      return;
+    }
+    const cut = this.now() - TRACK_KEEP_MS;
+    for (const name of names) {
+      const match = FILE_RE2.exec(name);
+      if (match === null || Number(match[2]) !== TRACK_FORMAT) continue;
+      const path = join5(this.folder, name);
+      try {
+        if ((await stat4(path)).mtimeMs < cut) await rm3(path, { force: true });
+      } catch {
+      }
+    }
+  }
+};
+function trackFolder(home) {
+  return join5(home, ".neocortex", "track");
+}
+
 // src/mcp.ts
 var args = process.argv.slice(2);
 var move = args[0] === "move-folder-memories" && (args.length === 3 || args.length === 4 && args[3] === "--apply");
@@ -52492,7 +52875,8 @@ if (move) {
     console.error(`NeoCortex: the upgrade of stored memories stopped (${error62 instanceof Error ? error62.message : String(error62)}); the next session tries again.`);
   });
   const once = new FileOnce({ folder: onceFolder(homedir2()) });
-  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  const track = new FileTrack({ folder: trackFolder(homedir2()) });
+  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, track, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }

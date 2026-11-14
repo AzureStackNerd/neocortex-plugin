@@ -42,7 +42,9 @@
             "input": {
               "moment": "prompt",
               "event": "${hook_event_name}",
-              "prompt": "${prompt}"
+              "prompt": "${prompt}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           }
         ]
@@ -219,7 +221,9 @@
             "input": {
               "moment": "index",
               "part": 1,
-              "event": "${hook_event_name}"
+              "event": "${hook_event_name}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           },
           {
@@ -228,7 +232,9 @@
             "tool": "hook_context",
             "input": {
               "moment": "full",
-              "event": "${hook_event_name}"
+              "event": "${hook_event_name}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           },
           {
@@ -238,7 +244,9 @@
             "input": {
               "moment": "full",
               "part": 2,
-              "event": "${hook_event_name}"
+              "event": "${hook_event_name}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           }
         ]
@@ -251,7 +259,9 @@
             "tool": "hook_context",
             "input": {
               "moment": "subagent",
-              "event": "${hook_event_name}"
+              "event": "${hook_event_name}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           },
           {
@@ -260,7 +270,9 @@
             "tool": "hook_context",
             "input": {
               "moment": "prompt",
-              "event": "${hook_event_name}"
+              "event": "${hook_event_name}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
             }
           }
         ]

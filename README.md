@@ -310,6 +310,26 @@ the allow rule (see [Permissions](#permissions)). A deleted memory moves to the 
 under the same path, from where you can put it back by hand. When that folder already holds a deleted copy of the same
 memory, the later one is `<id>.2.md`, then `<id>.3.md`; rename it to `<id>.md` when you put it back.
 
+### Which memories were in play
+
+Ask Claude "why did you do that?" or "which memories were in play?" and the tool's description tells it to call
+`memories_in_play` (that it does so on such a question was not checked in a session), which names every
+memory NeoCortex delivered into this conversation by then: each once, with the moment it last arrived (the session
+start, a prompt, an edit, a read, a search, a call or a failed call), its time, whether it came in full, as its index
+line or only named in a warning, and how many times. A memory changed since it arrived says so, so you do not judge
+today's text as what Claude read; one deleted or no longer loading here says that too. After a compaction it names
+apart the memories that arrived before it and are no longer in context in full; after a `/clear` it names only what
+arrived since. A subagent's memories are its own. It covers what NeoCortex delivered, not a memory Claude fetched itself
+with `get_memory` or `search_memories`, and it says so.
+
+Index part 1 names the conversation in a `Track record: conversation` line, which is what Claude passes. The notes
+behind it are one file per session in `.neocortex/track` in your home folder, on this machine only, removed 24 hours
+after their last write. Notes older than the 24 hours they are kept are no longer named, so a session you resume after a
+long gap answers with the notes since it, never with the ones from before. A note holds the moment, the tool's name, the
+time and the memory ids: never a memory's, prompt's, call's or error's text, and no file or folder path. When a note
+cannot be written, the delivery still arrives as before, Claude is told once, and the answer names those deliveries as
+unknown rather than as no memory.
+
 ### Tidying your store: the Dreamer
 
 The Dreamer looks for the memories that are worth cleaning up and proposes what to do with each, one proposal at a
@@ -362,7 +382,8 @@ budget stopped it -- `dream_proposals`, which
 lists the Dreamer's proposals that wait in this session and changes nothing, `dream_decide`, which records the user's
 answer to one of them -- reject and keep-both change no memory, accept writes the clean-up the proposal describes --
 `dream_decide_rule`, its confirmed twin for an accept whose writes change which rules load, which carries the text such
-a write makes load, and `hook_context`, which
+a write makes load, `memories_in_play`, which names the memories NeoCortex delivered into this conversation and
+changes nothing (see [Which memories were in play](#which-memories-were-in-play)), and `hook_context`, which
 is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
 memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule

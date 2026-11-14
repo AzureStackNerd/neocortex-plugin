@@ -2,6 +2,22 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.18 - 2026-11-14
+
+- New: ask Claude "which memories were in play?" and the new tool `memories_in_play` names every memory NeoCortex
+  delivered into this conversation so far, each with the moment it last arrived (the session start, a prompt, an edit,
+  a read, a search, a call or a failed call), its time and whether it came in full or as its index line. A memory
+  changed or deleted since it arrived says so. After a compaction it names apart what arrived before it; after a
+  `/clear` it names only what arrived since. A subagent's memories are its own. It covers what NeoCortex delivered,
+  not memories Claude fetched itself, and says so.
+- New: index part 1 carries a `Track record: conversation` line, the id Claude passes to the tool.
+- New: the notes behind it are one file per session in `.neocortex/track` in your home folder, on this machine only,
+  removed 24 hours after their last write. A note holds the moment, the tool's name, the time and the memory ids:
+  never a memory's, prompt's, call's or error's text, and no file or folder path. A note that cannot be written never
+  costs a delivery.
+- Changed: a clone install needs its prompt and `SubagentStart` hook entries to pass the session and agent; the
+  plugin's own hooks.json has them, and `node scripts/update-clone-hooks.ts` lists them.
+
 ## 0.5.17 - 2026-11-14
 
 - New: mark a memory about a call's own input, such as `callInput: {tool: 'Bash', pattern: 'git push*'}`, and it

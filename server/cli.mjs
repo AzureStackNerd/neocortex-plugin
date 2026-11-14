@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.17",
+  version: "0.5.18",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18455,7 +18455,7 @@ var configured = Number(process.env.NEOCORTEX_HOOK_TIMEOUT_MS);
 var TIMEOUT_MS = Number.isFinite(configured) && configured > 0 ? configured : 1e4;
 function fieldsOf(moment, input) {
   const tool = typeof input.tool_input === "object" && input.tool_input !== null ? input.tool_input : {};
-  const named = { session: input.session_id, agent: input.agent_id };
+  const named = { session: input.session_id, agent: input.agent_id, source: input.source };
   if (moment === "read") named["file"] = tool.file_path;
   if (moment === "search") Object.assign(named, { path: tool.path, glob: tool.glob, type: tool.type, ...input.tool_name === "Glob" ? { pattern: tool.pattern } : {} });
   return Object.fromEntries(Object.entries(named).filter((entry) => typeof entry[1] === "string"));
