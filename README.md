@@ -159,8 +159,8 @@ first call in each agent's context whose own input the tool and pattern are abou
 compaction or `/clear`. The pattern judges what the call is about to do: a shell's command, a `Write`'s content, an
 `Edit`'s new text and never what it removes, a notebook's new source, a path, or any other tool's whole input. A call
 that cannot be taken back — a shell command, an MCP tool, an agent spawn, a web fetch — is **refused once** with the
-memory as the reason, before it runs, and the same call then runs; a write, an edit, a read or a search gets the memory
-beside its result, so Claude can correct the file. Its `tool` may name several tools separated by `|`, such as
+memory as the reason, before it runs, and the same call then runs; a write, an edit, a read, a search or a skill gets the
+memory beside its result, so Claude can correct the file or follow the memory while doing what the skill says. Its `tool` may name several tools separated by `|`, such as
 `Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
 merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry
 one yet.

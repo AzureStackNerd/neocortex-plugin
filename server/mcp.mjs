@@ -45991,7 +45991,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.20",
+  version: "0.5.21",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47464,7 +47464,7 @@ function failureDelivered(active, byId, problems, call = NO_FAILURE, claim2 = cl
   return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
 }
 var NO_INPUT = { kind: "call", tool: "", calls: [] };
-var CHANGES_NOTHING = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob"]);
+var CHANGES_NOTHING = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "Skill"]);
 function refusesAt(tool) {
   return !CHANGES_NOTHING.has(tool.trim());
 }
@@ -49468,7 +49468,7 @@ var markSchema2 = (patternWords) => external_exports.strictObject({
 var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
-var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. Before a command, a tool call, an agent spawn or a web fetch that cannot be taken back, NeoCortex refuses that call once with this memory as the reason; beside the result of a write, an edit or a read. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. Before a command, a tool call, an agent spawn or a web fetch that cannot be taken back, NeoCortex refuses that call once with this memory as the reason; beside the result of a write, an edit, a read or a skill. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
 var USER_WORDS_MAX = 2e3;
 var userWordsInput = external_exports.array(textInputSchema.superRefine((entry, ctx) => {
   const character = unshownCharOf(entry);

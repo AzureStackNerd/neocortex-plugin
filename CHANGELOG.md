@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.21 - 2026-11-15
+
+- Fixed: a memory about a skill now arrives beside the skill's own text when Claude loads it, instead of refusing
+  the first load in every session. Since 0.5.17 that refusal showed as a red "PreToolUse:Skill hook error" before
+  the skill ran on the second try. Loading a skill changes nothing that cannot be taken back, so it is answered like
+  a write, a read or a search; a shell command, an MCP tool, an agent spawn or a web fetch is still refused once.
+
 ## 0.5.20 - 2026-11-15
 
 - Fixed: a memory about a call now arrives when the command or the text being written holds `${`, such as a shell
