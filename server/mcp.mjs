@@ -35924,17 +35924,20 @@ var FIELDS_1_0 = [
 var FIELDS_2_0 = [...FIELDS_1_0, "appliesWhen"];
 var FIELDS_2_1 = [...FIELDS_2_0, "failure"];
 var FIELDS_2_2 = [...FIELDS_2_1, "callInput"];
+var FIELDS_2_3 = [...FIELDS_2_2, "userWords"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
     { version: "2.0", fields: FIELDS_2_0 },
     { version: "2.1", fields: FIELDS_2_1 },
-    { version: "2.2", fields: FIELDS_2_2 }
+    { version: "2.2", fields: FIELDS_2_2 },
+    { version: "2.3", fields: FIELDS_2_3 }
   ],
   // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
   // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means. Nor
-  // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means.
-  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields }
+  // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means. Nor a 2.2
+  // record: no kept words is what every record before #467 means, and its why may hold words nobody marked (S18).
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -36609,7 +36612,11 @@ var frontmatterSchema = external_exports.strictObject({
   failure: markSchema.optional(),
   // #466, format 2.2: the mark about a call's own input, the same shape and its own field for the same reasons. Strict
   // too: a part this server does not know in it is a load problem naming callInput.
-  callInput: markSchema.optional()
+  callInput: markSchema.optional(),
+  // #467 half 1, format 2.3: the user's own words, a list of entries with no dates (How line 1). A stored one is never
+  // refused for what it changed to: it loads and shows through shownText, as a stored title and summary do (#322, #345),
+  // so a save's own refusal of a character does not make a stored memory unloadable (S50).
+  userWords: external_exports.array(external_exports.string()).optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36764,6 +36771,7 @@ function toFrontmatter(memory) {
   const canonical = canonicalCondition(memory.appliesWhen);
   const mark = canonicalMark(memory.failure, "failure");
   const callMark = canonicalMark(memory.callInput, "callInput");
+  const words = (memory.userWords ?? []).map((entry) => entry.trim()).filter((entry) => entry !== "");
   return {
     id: memory.id,
     title: memory.title,
@@ -36785,7 +36793,9 @@ function toFrontmatter(memory) {
     // #459: absent when the memory is about no failure, so a record without a mark keeps exactly the keys it had.
     ...mark === void 0 ? {} : { failure: mark },
     // #466: the same for the mark about a call, so a record with neither keeps exactly the 2.0 keys.
-    ...callMark === void 0 ? {} : { callInput: callMark }
+    ...callMark === void 0 ? {} : { callInput: callMark },
+    // #467: absent when no words are kept, so a record without them keeps exactly the 2.2 keys.
+    ...words.length === 0 ? {} : { userWords: words }
   };
 }
 function issueMessages(issues) {
@@ -45981,7 +45991,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.18",
+  version: "0.5.19",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48020,7 +48030,7 @@ function wordsIn(text) {
   return words;
 }
 function memoryText(memory) {
-  return [memory.title, memory.summary, memory.body].join(String.fromCharCode(10));
+  return [memory.title, memory.summary, memory.body, ...memory.userWords ?? []].join(String.fromCharCode(10));
 }
 function leaks(text, names) {
   const words = wordsIn(text);
@@ -48903,7 +48913,7 @@ Do not save: what the repository records (code, docs, git history, CLAUDE.md), p
 How to save:
 1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision everywhere, set supersedes.
 2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
-3. why is required: the reason, the incident or the user's words. The body holds the detail.
+3. why is required: the reason or incident. userWords: the user's words. The body: the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels, reuse a label, never invent a near-duplicate.
 5. Use scope project when it only applies here, scope user when everywhere. A memory about a failure takes failure: {tool, pattern}; one about a call's input callInput: {tool, pattern}.
 6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving a memory to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
@@ -49444,6 +49454,21 @@ var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
 var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. Before a command, a tool call, an agent spawn or a web fetch that cannot be taken back, NeoCortex refuses that call once with this memory as the reason; beside the result of a write, an edit or a read. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var USER_WORDS_MAX = 2e3;
+var userWordsInput = external_exports.array(textInputSchema.superRefine((entry, ctx) => {
+  const character = unshownCharOf(entry);
+  if (character !== null) ctx.addIssue({ code: "custom", message: `holds the invisible or control character ${character}; remove it` });
+  const secret = secretShape(entry);
+  if (secret !== null) ctx.addIssue({ code: "custom", message: `holds what looks like a ${secret}; remove it and save again with the sentences the rule rests on` });
+})).refine((entries) => entries.reduce((total, entry) => total + entry.length, 0) <= USER_WORDS_MAX, {
+  message: `the words are longer than the ${USER_WORDS_MAX} characters one memory keeps; keep only the sentences the rule rests on`
+});
+var USER_WORDS_WORDS = "The words the user themselves used, copied as they said or wrote them, one entry per sentence or message, beside your reading of them in the rule. Pass every entry this memory keeps: on an update the new ones join the stored ones, so a correction keeps the trail of what was said and what changed. Not what you concluded and not a paraphrase: if you cannot quote the user, leave this out. Not on a memory that came from no words of theirs (your own finding, a handoff, an import).";
+var READING_WORDS = 'Only when the rule rests on your reading of what the user meant rather than on their words: the one short question you would ask them, in their words. The four kinds: who acts (the user wrote "you" where they meant themself, or "I" for anyone), which roles or things the rule covers, where it applies, or what a short yes decided. The save is refused once so you can ask it; then save again with their answer added to userWords and no reading, or, when nobody can answer, save again unchanged. Leave it out when the rule only restates what they said.';
+var USER_WORDS_NOTE = "The user's own words, as Claude quoted them; they are no part of the rule that loads.";
+var USER_WORDS_SHOW_NEXT = "Show the user the rule you saved beside these words of theirs, exactly as they said them, in your reply: if the rule reads them differently than they meant, they can correct it now.";
+var USER_WORDS_SUMMARY_NEXT = "Your new words were added but the summary did not change: check that it still says what they said.";
+var readingRefusal = (question) => `ask the user this before saving, then call again: ${question} Save again with their answer added to userWords and no reading; if nobody can answer (a subagent, a run without them), save again unchanged and the memory is kept as you read it.`;
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
   title: titleInputSchema,
@@ -49465,7 +49490,9 @@ var SAVE_INPUT = {
   expires: external_exports.string().regex(DATE_RE).optional().describe("YYYY-MM-DD after which the memory no longer loads"),
   appliesWhen: CONDITION.optional().describe(CONDITION_WORDS),
   failure: FAILURE_MARK.optional().describe(FAILURE_WORDS),
-  callInput: CALL_MARK.optional().describe(CALL_INPUT_WORDS)
+  callInput: CALL_MARK.optional().describe(CALL_INPUT_WORDS),
+  userWords: userWordsInput.optional().describe(USER_WORDS_WORDS),
+  reading: external_exports.string().trim().min(1).optional().describe(READING_WORDS)
 };
 var MISSING_REVISION = "revision is required: pass the revision from the last response that showed this memory (get_memory, search_memories, save_memory or update_memory), or call get_memory first";
 var REVISION = external_exports.string({ error: MISSING_REVISION }).min(1).describe("The revision of this memory from the last response that showed it; read a memory you know only from the index with get_memory first");
@@ -49487,7 +49514,11 @@ var UPDATE_INPUT = {
   expires: external_exports.string().regex(DATE_RE).nullable().optional(),
   appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`),
   failure: FAILURE_MARK.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
-  callInput: CALL_MARK.nullable().optional().describe(`${CALL_INPUT_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`)
+  callInput: CALL_MARK.nullable().optional().describe(`${CALL_INPUT_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
+  // #467: the new words join the stored ones, so the stored trail survives a correction (point 4 (a)); left out, the
+  // stored words stay, as a mark does.
+  userWords: userWordsInput.optional().describe(`${USER_WORDS_WORDS} Left out, the stored words stay; a value joins them.`),
+  reading: external_exports.string().trim().min(1).optional().describe(`${READING_WORDS} An update takes it too, for a correction that rests on a reading.`)
 };
 var DELETE_INPUT = { id: ID, revision: REVISION };
 var AFFECTS = external_exports.array(external_exports.string()).describe("The lines the refusal of save_memory, update_memory or delete_memory listed, exactly: each rule this call makes start, stop or change loading. The user reads them in the prompt");
@@ -49661,9 +49692,42 @@ var PREVIEW_SUMMARY_MAX = 120;
 var PREVIEW_TEXT_MAX = 80;
 var PREVIEW_PATH_MAX = 260;
 var UNIT_ID_LENGTH = 8;
+var ASKED_MS = 24 * 60 * 60 * 1e3;
+var AskedMap = class {
+  entries = /* @__PURE__ */ new Map();
+  now;
+  constructor(now) {
+    this.now = now;
+  }
+  /** The key of one question: whose conversation, which memory, and the question asked. */
+  static key(session, memory, question) {
+    return `${session}\0${memory}\0${question.trim()}`;
+  }
+  /** True when this question was asked before, false when it is new — and it is remembered either way, so it asks once. */
+  claimed(key) {
+    const askedBefore = this.entries.has(key);
+    this.forgetOld();
+    this.entries.set(key, this.now().getTime());
+    return askedBefore;
+  }
+  /** A test's window on what the map holds, so a row can show it is emptied by nothing but age. */
+  size() {
+    return this.entries.size;
+  }
+  forgetOld() {
+    const cut = this.now().getTime() - ASKED_MS;
+    for (const [key, at] of this.entries) if (at < cut) this.entries.delete(key);
+  }
+};
 function createServer(deps) {
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   const newId = deps.newId ?? randomUUID2;
+  const asked = new AskedMap(now);
+  let conversation = { session: "", agent: "" };
+  const noteConversation = (session, agent) => {
+    const seen2 = given(session);
+    if (seen2 !== void 0) conversation = { session: seen2, agent: given(agent) ?? "" };
+  };
   const hereNow = () => deps.here !== void 0 ? Promise.resolve(deps.here) : readHere();
   const hereFrom = (read2) => {
     const inRepo = deps.placeDir === void 0 ? "unknown" : insideRepo(deps.placeDir);
@@ -49965,6 +50029,9 @@ ${TRACK_LOST_LINE}`;
     return { view, delivery: { ...deliveryOf(view.loaded, reader.location, deps.session, now(), void 0, here), ...pass } };
   };
   const saveCall = async (args2, confirmation) => {
+    if (args2.reading !== void 0 && !asked.claimed(AskedMap.key(conversation.session, `save:${args2.scope}:${args2.title}`, args2.reading))) {
+      return fail(readingRefusal(args2.reading));
+    }
     const { memories, problems, resolution, here } = await load();
     const supersedes = resolveIds(memories, problems, args2.supersedes);
     const overrides = resolveIds(memories, problems, args2.overrides);
@@ -49993,7 +50060,10 @@ ${TRACK_LOST_LINE}`;
       updated: stamp,
       ...condition === void 0 ? {} : { appliesWhen: condition },
       ...mark === void 0 ? {} : { failure: mark },
-      ...callMark === void 0 ? {} : { callInput: callMark }
+      ...callMark === void 0 ? {} : { callInput: callMark },
+      // #467: a save takes the words as its call gives them, trimmed, with no empty entry. The reading is never stored:
+      // its question is the refusal's, and its answer arrives as an entry of userWords (How lines 5 and 6).
+      ...keptWords(args2.userWords) === void 0 ? {} : { userWords: keptWords(args2.userWords) }
     };
     const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0), ...unusableMarkProblems(args2), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
@@ -50009,6 +50079,8 @@ ${TRACK_LOST_LINE}`;
     const near = nearDuplicatesOf(memory, resolution);
     const id = shortId(memory.id);
     const next = [
+      // #467 AC2, S38: what Claude shows the user in its own reply, so a misreading is caught at the save itself.
+      ...keptWords(memory.userWords) === void 0 ? [] : [USER_WORDS_SHOW_NEXT],
       ...related.length > 0 ? [
         `A related memory shows only its title: read it with get_memory before you set supersedes or overrides on it. If the new memory replaces a related one everywhere, call update_memory with id ${id} and supersedes set to the related id; if it is an exception to one, for this project or where its appliesWhen holds, call update_memory with id ${id}, overrides and overrideReason.`
       ] : [],
@@ -50019,7 +50091,7 @@ ${TRACK_LOST_LINE}`;
     return ok({
       // The revision, so the update its next suggests needs no read (design 7.3); a related entry carries none. The
       // memories it is an exception to, so Claude can show the rule it hides (#443 S1, S12).
-      saved: { ...entryOf(memory), ...overridesOf(memory), revision },
+      saved: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), revision },
       related: related.map(entryHere),
       nearDuplicates: near.map(({ memory: match, score }) => ({ ...entryHere(match), score })),
       next: next.length > 0 ? next.join(" ") : void 0,
@@ -50042,6 +50114,9 @@ ${TRACK_LOST_LINE}`;
     ({ affects, ...args2 }) => guarded(() => saveCall(args2, { affects }))
   );
   const updateCall = async (args2, confirmation) => {
+    if (args2.reading !== void 0 && !asked.claimed(AskedMap.key(conversation.session, `update:${args2.id}`, args2.reading))) {
+      return fail(readingRefusal(args2.reading));
+    }
     const { stored, memories, problems, resolution } = await load();
     const found = lookup(memories, problems, args2.id);
     if ("error" in found) return fail("missing" in found ? CHANGE_TEXT.gone(shortId(found.wanted)) : found.error);
@@ -50075,10 +50150,16 @@ ${TRACK_LOST_LINE}`;
       updated: now().toISOString(),
       ...condition === void 0 ? {} : { appliesWhen: condition },
       ...mark === void 0 ? {} : { failure: mark },
-      ...callMark === void 0 ? {} : { callInput: callMark }
+      ...callMark === void 0 ? {} : { callInput: callMark },
+      // #467: left out, the stored words stay; new ones join them (How line 3), so a correction keeps the trail (S15).
+      ...joinedWords(previous.userWords, args2.userWords) === void 0 ? {} : { userWords: joinedWords(previous.userWords, args2.userWords) }
     };
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
+    if (keptWords(args2.userWords) !== void 0) {
+      const over = wordsOver(joinedWords(previous.userWords, args2.userWords));
+      if (over !== void 0) return fail(over);
+    }
     const errors = [
       ...conditionProblems(memory, previous, resolution.current, memories),
       ...markProblems(memory, previous),
@@ -50099,16 +50180,24 @@ ${TRACK_LOST_LINE}`;
       return fail(refused);
     }
     const bodyOnly = args2.body !== void 0 && args2.body !== previous.body && args2.summary === void 0;
+    const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0;
     const hidden = ["title", "summary"].filter(
       (field) => args2[field] === void 0 && (unshownCharOf(previous[field]) !== null || loneSurrogateOf(previous[field]) !== null)
     );
     const both = hidden.length === 2;
     const warnings = [
       ...bodyOnly ? ["The body changed but the summary did not; check that the summary still states the rule."] : [],
+      ...wordsOnly ? [USER_WORDS_SUMMARY_NEXT] : [],
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
       ...kept.map((link2) => link2.line)
     ];
-    return ok({ updated: { ...entryOf(memory), ...overridesOf(memory), revision }, warning: warnings.length > 0 ? warnings.join("\n") : void 0, affects: confirmation?.affects });
+    const showNext = keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT;
+    return ok({
+      updated: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), revision },
+      warning: warnings.length > 0 ? warnings.join("\n") : void 0,
+      next: showNext,
+      affects: confirmation?.affects
+    });
   };
   server.registerTool(
     "update_memory",
@@ -50500,10 +50589,11 @@ ${TRACK_LOST_LINE}`;
     async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted, source }) => {
       try {
         const key = onceKeyOf(session, agent);
+        noteConversation(session, agent);
         const trackAgent = given(agent) ?? "";
         const trackSession = given(session);
         const tracked = deps.track !== void 0 && trackSession !== void 0 && TRACK_ID_RE.test(trackSession) && (trackAgent === "" ? event !== "SubagentStart" : TRACK_ID_RE.test(trackAgent)) ? { session: trackSession, agent: trackAgent } : void 0;
-        const conversation = tracked === void 0 ? void 0 : tracked.agent === "" ? tracked.session : `${tracked.session}/${tracked.agent}`;
+        const conversation2 = tracked === void 0 ? void 0 : tracked.agent === "" ? tracked.session : `${tracked.session}/${tracked.agent}`;
         const startPart = moment === "index" || moment === "full" || moment === "startup";
         const firstStartPart = moment === "index" && part === 1 || moment === "startup";
         if (deps.track !== void 0 && event === "SessionStart" && firstStartPart) {
@@ -50550,7 +50640,7 @@ ${TRACK_LOST_LINE}`;
           ...read2 === void 0 ? {} : { read: read2 },
           ...failure2 === void 0 ? {} : { failure: failure2 },
           ...onceReset === void 0 ? {} : { onceReset },
-          ...conversation === void 0 ? {} : { conversation }
+          ...conversation2 === void 0 ? {} : { conversation: conversation2 }
         });
         let text = answer.text;
         if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
@@ -50588,8 +50678,8 @@ ${TRACK_LOST_LINE}`;
   server.registerTool(
     "memories_in_play",
     { title: "Which NeoCortex memories were in play in this conversation", description: IN_PLAY_DESCRIPTION, inputSchema: IN_PLAY_INPUT },
-    ({ conversation, until }) => guarded(async () => {
-      const [session, agent = "", ...rest] = conversation.trim().split("/");
+    ({ conversation: conversation2, until }) => guarded(async () => {
+      const [session, agent = "", ...rest] = conversation2.trim().split("/");
       if (rest.length > 0 || !TRACK_ID_RE.test(session) || agent !== "" && !TRACK_ID_RE.test(agent)) {
         return fail('conversation must be what the "Track record: conversation" line of your NeoCortex index names: <session> or <session>/<agent>');
       }
@@ -50605,7 +50695,7 @@ ${TRACK_LOST_LINE}`;
         () => void 0
       );
       const pending = trackLost.get(`${session}/${agent}`)?.count ?? 0;
-      return { content: [{ type: "text", text: inPlayAnswer({ conversation: conversation.trim(), agent, place, record: record2, today, pending, ...cut === void 0 ? {} : { until: cut } }) }] };
+      return { content: [{ type: "text", text: inPlayAnswer({ conversation: conversation2.trim(), agent, place, record: record2, today, pending, ...cut === void 0 ? {} : { until: cut } }) }] };
     })
   );
   const deleteCall = async ({ id, revision }, confirmation) => {
@@ -51005,7 +51095,11 @@ function shownMemory({ memory, revision }, resolution, here) {
     overrideReason: memory.overrideReason,
     expires: memory.expires,
     created: memory.created,
-    updated: memory.updated
+    updated: memory.updated,
+    // #467 AC1, S34, S46: the user's own words beside the rule, marked for what they are. Absent when none are kept, so
+    // a memory saved before this version answers exactly as before (S18), and a search result and a delete show nothing
+    // because they go through entryOf, not through here (S47, S48).
+    ...shownWords(memory)
   };
 }
 function refusal(action, error62, memory) {
@@ -51342,6 +51436,24 @@ function overridesOf(memory) {
 }
 function blankToNull(value) {
   return value === void 0 || value === null || value.trim() === "" ? null : value.trim();
+}
+function keptWords(entries) {
+  const kept = (entries ?? []).map((entry) => entry.trim()).filter((entry) => entry !== "");
+  return kept.length === 0 ? void 0 : kept;
+}
+function wordsOver(words) {
+  const total = (words ?? []).reduce((sum, entry) => sum + entry.length, 0);
+  if (total <= USER_WORDS_MAX) return void 0;
+  return `userWords: this memory's words would hold ${total} characters, and one memory keeps at most ${USER_WORDS_MAX}; remove ${total - USER_WORDS_MAX} characters, or save this change without new words (a change that brings none is never refused)`;
+}
+function shownWords(memory) {
+  const words = keptWords(memory.userWords);
+  return words === void 0 ? {} : { userWords: words.map((entry) => shownText(entry)), userWordsNote: USER_WORDS_NOTE };
+}
+function joinedWords(stored, added) {
+  const kept = keptWords(stored) ?? [];
+  for (const entry of keptWords(added) ?? []) if (!kept.includes(entry)) kept.push(entry);
+  return kept.length === 0 ? void 0 : kept;
 }
 function ok(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };

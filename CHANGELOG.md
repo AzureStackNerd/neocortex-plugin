@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.19 - 2026-11-15
+
+- New: a memory saved from something you said keeps your own words beside the rule Claude wrote. Right after the
+  save, Claude shows you the rule beside your words, so you can catch a misreading at the moment it is saved;
+  `get_memory` and the answers of `save_memory` and `update_memory` show them too, marked as your words as Claude
+  quoted them. A correction adds its new words to the ones already kept.
+- New: when the rule rests on Claude's reading of what you meant (who acts, which roles or things, where it applies,
+  what a short "yes" decided), the save is refused once so Claude asks you one short question first, and your answer
+  is kept with your words. Nobody to ask (a subagent, a run without you): the memory is saved as Claude read it.
+- New: your words are refused rather than kept when they hold what looks like a token or a password, or when one
+  memory would hold more than 2,000 characters of them.
+- Changed: memory files are written as format 2.3. A machine still on 0.5.18 or another 2.x version reads them and
+  keeps your words, but does not show them.
+
 ## 0.5.18 - 2026-11-14
 
 - New: ask Claude "which memories were in play?" and the new tool `memories_in_play` names every memory NeoCortex
