@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.22 - 2026-11-15
+
+- Fixed: the plans dream_report recommends for a crowded start can now be applied as they stand. No plan cuts a
+  summary below 120 characters or rewrites one that is already that short; no plan rewrites or moves a handoff, and
+  the list of memories that may move never names one; memories that still arrive at a call or a failure of their
+  own are offered to move first, and each move says where it still arrives. A plan whose rewrites buy no move is no
+  longer named. When no plan fits, the report says why and advises only what can help: deleting or shortening a
+  high or enforced line with its own tool, then calling dream_report again.
+
 ## 0.5.21 - 2026-11-15
 
 - Fixed: a memory about a skill now arrives beside the skill's own text when Claude loads it, instead of refusing

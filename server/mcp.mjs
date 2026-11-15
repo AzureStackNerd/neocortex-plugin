@@ -36755,6 +36755,7 @@ function memoryProblems(memory) {
   return problems;
 }
 var KIND_LABELS = /* @__PURE__ */ new Set(["context", "feedback", "reference", "user"]);
+var HANDOFF_LABEL = "handoff";
 function shortId(id) {
   return id.slice(0, SHORT_ID_LENGTH);
 }
@@ -45991,7 +45992,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.21",
+  version: "0.5.22",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46451,13 +46452,13 @@ function waysOut(written, stored, existing) {
   const judged = /* @__PURE__ */ new Set([key(written), ...stored === void 0 ? [] : [key(stored)]]);
   const passing = [];
   for (const [delivery, enforced, deliveryWords] of deliveries) {
-    for (const [patterns, filesWords2] of files) {
+    for (const [patterns, filesWords3] of files) {
       for (const [scope, scopeWords2] of scopes) {
         const call = { ...withFiles(written, patterns), delivery, enforced, scope };
         if (judged.has(key(call))) continue;
         judged.add(key(call));
-        const parts = [deliveryWords, filesWords2, scopeWords2].flatMap((words) => words === "" ? [] : words.split(" and "));
-        if (wayPasses(call, stored, existing)) passing.push({ parts, call, files: filesWords2 !== "" });
+        const parts = [deliveryWords, filesWords3, scopeWords2].flatMap((words) => words === "" ? [] : words.split(" and "));
+        if (wayPasses(call, stored, existing)) passing.push({ parts, call, files: filesWords3 !== "" });
       }
     }
   }
@@ -46480,19 +46481,19 @@ var capCounts = (memory, target) => memory !== void 0 && memory.scope.kind === "
 var userRule = (memory) => memory !== void 0 && memory.scope.kind === "user" && isRule(memory);
 function capProblems(written, stored, existing, named = true) {
   const others = (target) => existing.filter((memory) => memory.id !== written.id && capCounts(memory, target));
-  const refused = (target, counted, k) => {
-    const gone = new Set(counted.slice(0, k));
-    return CONDITION_TEXT.capped(target, counted, k, named && wayPasses(written, stored, existing.filter((memory) => !gone.has(memory))));
+  const refused = (target, counted2, k) => {
+    const gone = new Set(counted2.slice(0, k));
+    return CONDITION_TEXT.capped(target, counted2, k, named && wayPasses(written, stored, existing.filter((memory) => !gone.has(memory))));
   };
   const problems = [];
   for (const target of written.overrides) {
     if (!capCounts(written, target) || capCounts(stored, target) || !userRule(existing.find((memory) => memory.id === target))) continue;
-    const counted = others(target);
-    if (counted.length >= EXCEPTIONS_MAX) problems.push(refused(target, counted, counted.length - EXCEPTIONS_MAX + 1));
+    const counted2 = others(target);
+    if (counted2.length >= EXCEPTIONS_MAX) problems.push(refused(target, counted2, counted2.length - EXCEPTIONS_MAX + 1));
   }
   if (userRule(written) && !userRule(stored)) {
-    const counted = others(written.id);
-    if (counted.length > EXCEPTIONS_MAX) problems.push(refused(written.id, counted, counted.length - EXCEPTIONS_MAX));
+    const counted2 = others(written.id);
+    if (counted2.length > EXCEPTIONS_MAX) problems.push(refused(written.id, counted2, counted2.length - EXCEPTIONS_MAX));
   }
   return problems;
 }
@@ -47005,6 +47006,35 @@ function conditionOf(memory) {
 }
 function shortenable(memory, whole2 = indexLine(memory), short = indexLine(memory, true)) {
   return !memory.enforced && memory.importance !== "high" && short.length < whole2.length;
+}
+function arrivingMarks(memory) {
+  const files = editFiles(memory);
+  const filesHold = files.state === "none" || files.state === "judged" && files.usable.length > 0;
+  const calls = canonicalMark(memory.callInput, "callInput");
+  const failure2 = canonicalMark(memory.failure, "failure");
+  const failures = failure2 !== void 0 && failure2.tool.includes("|") ? void 0 : failure2;
+  return filesHold ? { calls, failures } : { calls: void 0, failures: void 0 };
+}
+function hasOwnMoment(memory) {
+  const { calls, failures } = arrivingMarks(memory);
+  return calls !== void 0 || failures !== void 0;
+}
+var SEARCH_ONLY = "only when you search for it or read it by its id";
+function arrivalWords(memory) {
+  const { calls, failures } = arrivingMarks(memory);
+  const moments = [calls === void 0 ? "" : markWords(calls, "callInput", "a call", "every call"), failures === void 0 ? "" : markWords(failures, "failure", "a failed call", "every failed call")].filter((part) => part !== "");
+  if (moments.length === 0) return SEARCH_ONLY;
+  return moments.join(" and ") + filesWords(memory);
+}
+function markWords(mark, kind, one, every) {
+  const tools = toolsOf(mark, kind);
+  if (tools.length === 0) return "";
+  return mark.pattern === "" ? `${every} of ${tools.join(" or ")}` : `${one} of ${tools.join(" or ")} whose input matches "${shownCut(mark.pattern, 80)}"`;
+}
+function filesWords(memory) {
+  const files = editFiles(memory);
+  if (files.state !== "judged") return "";
+  return `, when the call names a file matching ${files.usable.map((pattern) => `"${shownCut(pattern, 80)}"`).join(" or ")}`;
 }
 function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
   return indexFill(input2, budget, options).parts;
@@ -47838,7 +47868,6 @@ function systemMessageFor(command, event, input2, part, place) {
 
 // src/dream/finder.ts
 var REPEAT_MIN_PLACES = 3;
-var HANDOFF_LABEL = "handoff";
 var LONG_PROMPT = "";
 var SHORT_QUESTION = "?";
 function placeMeasures(input2, place) {
@@ -48077,14 +48106,52 @@ function roundedSimilarity(a, b) {
 
 // src/dream/rebalance.ts
 var INDEX_BUDGET_MAX = 20;
+var SUMMARY_FLOOR = 120;
 var NO_PROPOSALS = { waiting: 0 };
+function blockersOf(memories) {
+  const index = memories.filter((memory) => memory.delivery === "index");
+  const handoff2 = (memory) => carriesLabel(memory, HANDOFF_LABEL);
+  const plain2 = index.filter((memory) => !memory.enforced && memory.importance !== "high" && !handoff2(memory));
+  const high = index.filter((memory) => !memory.enforced && memory.importance === "high" && !handoff2(memory));
+  const enforced = index.filter((memory) => memory.enforced && !handoff2(memory));
+  return {
+    enforced: enforced.length,
+    high: high.length,
+    handoff: index.filter(handoff2).length,
+    savesNothing: plain2.filter((memory) => !shortenable(memory)).length,
+    highCuttable: high.filter((memory) => keepsFloor(memory)).length,
+    enforcedCuttable: enforced.filter((memory) => keepsFloor(memory)).length
+  };
+}
+function adviceWords(blockers) {
+  const ways = [];
+  if (blockers.high > 0) ways.push(`delete a high line with delete_memory${blockers.highCuttable > 0 ? ", or shorten its summary with update_memory" : ""}`);
+  if (blockers.enforced > 0) ways.push(`delete an enforced rule with delete_rule${blockers.enforcedCuttable > 0 ? ", or shorten its summary with update_rule" : ""}`);
+  if (ways.length === 0) return "";
+  const advice = ways.length === 1 ? ways[0] : `${ways[0]}; or ${ways[1]}`;
+  return ` ${advice[0].toUpperCase()}${advice.slice(1)}, then call dream_report again, because a line changed this way may still leave moves to make.`;
+}
+function blockerWords(blockers) {
+  const one = (n) => n === 1;
+  const parts = [
+    blockers.enforced === 0 ? "" : `${counted(blockers.enforced, "index line")} ${one(blockers.enforced) ? "is" : "are"} enforced`,
+    blockers.high === 0 ? "" : `${counted(blockers.high, "index line")} ${one(blockers.high) ? "has" : "have"} importance high`,
+    blockers.handoff === 0 ? "" : `${counted(blockers.handoff, "handoff")} ${one(blockers.handoff) ? "stays at the start because the next session starts from it" : "stay at the start because the next session starts from them"}`,
+    blockers.savesNothing === 0 ? "" : `${counted(blockers.savesNothing, "line")} ${one(blockers.savesNothing) ? "saves" : "save"} no room without a summary`
+  ].filter((part) => part !== "");
+  return parts.join(", ").replace(/, ([^,]*)$/, " or $1");
+}
+function counted(n, singular, plural2 = `${singular}s`) {
+  return `${n} ${n === 1 ? singular : plural2}`;
+}
 var BUDGET_TEXT = {
   noIndex: "No memory here loads as an index line, so the start has no index line to move.",
-  noneMayMove: "Every index line here is enforced, has importance high, or saves no room without its summary, so no line may lose its summary to make room and nothing moves off the start without a change of its own.",
-  noneMayMoveOver: "The start is over its budget, and nothing here may lose its summary to make room: every index line is enforced, has importance high, or saves no room without it, so moving a memory cannot fit this place. Shorten a long line with update_memory, or delete a memory you no longer need.",
+  noneMayMove: (blockers) => `Nothing here may move off the start: ${blockerWords(blockers)}, so no line may lose its summary to make room and nothing moves off the start without a change of its own.`,
+  noneMayMoveOver: (blockers) => `The start is over its budget, and nothing here may move off it: ${blockerWords(blockers)}, so moving a memory cannot fit this place.${adviceWords(blockers)}`,
   fits: "The start already shows every index memory with its summary; no memory needs to move off it.",
-  tooShort: (moves) => `Moving all ${moves} index ${moves === 1 ? "memory" : "memories"} that may lose their summary still leaves the start short, because the enforced and high lines keep theirs: shorten the summary of a long line, or move a memory one at a time with update_memory and delivery on-demand, which delivery index undoes.`,
-  move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
+  /** The move list's own "no plan fits" text (#471 How line 7): one reason, shared with the plans' answer. */
+  tooShort: (moves, blockers) => `Moving all ${counted(moves, "index memory", "index memories")} that may lose their summary still leaves the start short: ${blockerWords(blockers)}.` + adviceWords(blockers),
+  move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. Each entry says where that memory still arrives once it is off the start. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
   // not name: moves beyond the list, not every candidate beyond it (plan D10).
   (moves <= listed3 ? "" : ` The list above shows the first ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it" : `${userScope} of them are user memories, so they`} leave the start of every project.`),
   /**
@@ -48094,27 +48161,29 @@ var BUDGET_TEXT = {
    * room without them, and then own demotions buy the rest), which costs no other place anything -- so the sentence says
    * "no user memory", never "nothing".
    */
-  defer: (moves, freed, userMoves) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- this place's own before the ones every project loads -- frees ${freed} characters, but ${userMoves === 1 ? "one of them is a user memory" : `${userMoves} of them are user memories`}, whose ${userMoves === 1 ? "line" : "lines"} every other place also loads at its start. The plan named below reaches the budget without moving a user memory: follow that one. A move is update_memory with delivery on-demand, one call per memory and only on the user's word, and the same call with delivery index puts it back on the start.`
+  defer: (moves, freed, userMoves) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, but ${userMoves === 1 ? "one of them is a user memory" : `${userMoves} of them are user memories`}, whose ${userMoves === 1 ? "line" : "lines"} every other place also loads at its start. The plan named below reaches the budget without moving a user memory: follow that one. A move is update_memory with delivery on-demand, one call per memory and only on the user's word, and the same call with delivery index puts it back on the start.`
 };
 function movableLines(memories) {
-  return memories.filter((memory) => shortenable(memory)).map((memory) => ({ memory, line: indexLine(memory).length })).sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id));
-}
-function ownFirstOrder(order) {
-  return [...order.filter((one) => one.memory.scope.kind !== "user"), ...order.filter((one) => one.memory.scope.kind === "user")];
+  return memories.filter((memory) => shortenable(memory) && !carriesLabel(memory, HANDOFF_LABEL)).map((memory) => ({ memory, line: indexLine(memory).length, moment: hasOwnMoment(memory) })).sort(
+    (a, b) => Number(b.moment) - Number(a.moment) || Number(a.memory.scope.kind === "user") - Number(b.memory.scope.kind === "user") || b.line - a.line || compareText3(a.memory.id, b.memory.id)
+  );
 }
 function indexBudget(input2, place, plans) {
   const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const candidates = ownFirstOrder(movableLines(memories)).map(({ memory }) => memory);
-  const listed3 = candidates.slice(0, INDEX_BUDGET_MAX);
+  const candidates = movableLines(memories).map(({ memory }) => memory);
+  const listed3 = candidates.slice(0, INDEX_BUDGET_MAX).map((memory) => ({ memory, arrivesAt: arrivalWords(memory) }));
   const others = candidates.length - listed3.length;
   const budgetOf = (toFit, freed2, next) => ({ candidates: listed3, others, toFit, freed: freed2, next });
   if (memories.length === 0) return budgetOf(0, 0, BUDGET_TEXT.noIndex);
   const fitsToday = today.unshown === 0 && today.shortened === 0;
-  if (candidates.length === 0) return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver);
+  if (candidates.length === 0) {
+    const blockers = blockersOf(memories);
+    return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove(blockers)) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockers));
+  }
   if (fitsToday) return budgetOf(0, 0, BUDGET_TEXT.fits);
   const fewest = fewestThatFits(input2, place, candidates);
-  if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length));
+  if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length, blockersOf(memories)));
   const moved = candidates.slice(0, fewest);
   const freed = freedBy(today.parts, moved);
   const userMoves = userScopeOf(moved);
@@ -48165,10 +48234,12 @@ var PLAN_TEXT = {
   fits: "The start already shows every index memory with its summary, so nothing needs to change.",
   /**
    * No rewrite and no demotion brings it under, and the walk was not cut short: it prices every rewrite count up to
-   * INDEX_PLANS_MAX in both orderings, and each count costs one probe at the shortest cut, at most a halving on the moves,
-   * and a cut bought only for the ways the answer names, so it always finishes (#420 re-review, #421, #422).
+   * INDEX_PLANS_MAX, and each count costs one probe at the floor cut, at most a halving on the moves, and a cut bought
+   * only for the ways the answer names, so it always finishes (#420 re-review, #421, #422). The reason is the start's own
+   * (#471 How line 7): moving every movable line fits whenever any plan does, since a move frees at least as much as a
+   * rewrite and the fill is monotone (#317), so what stops every plan is what stays on the start, never the floor.
    */
-  nothing: "No combination of shorter summaries and memories moved off the start takes it under its budget: nothing here buys enough room, because every index line is enforced, has importance high, or saves too little without its summary. Delete a memory you no longer need.",
+  nothing: (blockers) => `No combination of shorter summaries and memories moved off the start takes it under its budget: ${blockerWords(blockers)}.${adviceWords(blockers)}`,
   // `others` is how many more plans fit. The sentence says nothing about their counts: on every store measured they
   // share the recommendation's count, but nothing in the code guarantees it, and a false "changing N or more" is worse
   // than saying less (#420 re-review).
@@ -48205,7 +48276,7 @@ function describePlan(plan) {
   }
   if (plan.demote.length > 0) {
     parts.push(
-      `move ${plan.demote.length === 1 ? "one memory" : `${plan.demote.length} memories`} off the start with update_memory and delivery on-demand, one call per memory`
+      `move ${plan.demote.length === 1 ? "one memory" : `${plan.demote.length} memories`} off the start with update_memory and delivery on-demand, one call per memory (each entry's arrivesAt says where it still arrives)`
     );
   }
   return parts.join("; ");
@@ -48217,70 +48288,94 @@ function indexPlans(input2, place) {
   const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
   if (today.unshown === 0 && today.shortened === 0) return { today: todayParts, fitting: [], next: PLAN_TEXT.fits };
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const largest = movableLines(memories);
-  const ownFirst = ownFirstOrder(largest);
-  const rewritable = Math.min(largest.length, INDEX_PLANS_MAX);
+  const moves = movableLines(memories);
+  const rewrites = [...moves].sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id)).filter((one) => keepsFloor(one.memory));
+  const rewritable = Math.min(rewrites.length, INDEX_PLANS_MAX);
+  const movesFor = (rewritesOf) => {
+    const named2 = new Set(rewritesOf.map((memory) => memory.id));
+    const pool = rewritesOf.some((memory) => hasOwnMoment(memory)) ? moves.filter((one) => one.moment) : moves;
+    return pool.flatMap((one) => named2.has(one.memory.id) ? [] : [one.memory]);
+  };
   const found = [];
-  const planIn = (order, k, j, cap) => {
+  const atFloor = (k) => k === 0 ? 0 : floorCap(rewrites.slice(0, k));
+  const planIn = (k, j, cap) => {
     if (k + j === 0) return null;
-    const rewrite = order.slice(0, k).map((one) => one.memory);
-    const moves = order.slice(k, k + j).map((one) => one.memory);
-    const { fill, priced } = fillPlanned(input2, place, cap, rewrite, moves);
+    const rewrite = rewrites.slice(0, k).map((one) => one.memory);
+    const moved = movesFor(rewrite).slice(0, j);
+    const { fill, priced } = fillPlanned(input2, place, cap, rewrite, moved);
     if (fill.unshown > 0 || fill.shortened > 0) return null;
+    if (priced.some(({ summary }) => summary.length < SUMMARY_FLOOR)) return null;
     return {
       // Each length is read off the summary the fill above priced, never worked out again from the cap (#460).
       shorten: priced.map(({ memory, summary }) => ({ memory, summaryLength: { today: shownText(memory.summary).length, after: summary.length } })),
-      demote: moves,
+      demote: moved.map((memory) => ({ memory, arrivesAt: arrivalWords(memory) })),
       changes: k + j,
-      userScope: userScopeOf([...rewrite, ...moves]),
+      userScope: userScopeOf([...rewrite, ...moved]),
       // Only a demotion takes a memory off another place's start; a rewrite leaves it there, with the cut summary (#420).
-      elsewhere: userScopeOf(moves),
+      elsewhere: userScopeOf(moved),
       characters: charactersOf(fill)
     };
   };
-  for (const order of [largest, ownFirst]) {
-    const at = (k, j, cap) => planIn(order, k, j, cap);
-    const atLongestCap = (k, j) => k === 0 ? at(0, j, 0) : longestCap((kk, jj, cap) => at(kk, jj, cap), k, j, order[0].line) ?? at(k, j, 1);
-    const fewestMoves = (k) => {
-      if (k >= order.length || at(k, order.length - k, k === 0 ? 0 : 1) === null) return null;
-      let low = 0;
-      let high = order.length - k;
-      while (high - low > 1) {
-        const middle = Math.floor((low + high) / 2);
-        if (at(k, middle, k === 0 ? 0 : 1) !== null) high = middle;
-        else low = middle;
-      }
-      return high;
-    };
-    for (let k = 0; k <= rewritable; k += 1) {
-      const atShortest = at(k, 0, k === 0 ? 0 : 1);
-      if (atShortest !== null) {
-        found.push({ plan: atShortest, longestCut: () => atLongestCap(k, 0) });
-        continue;
-      }
-      const j = fewestMoves(k);
-      if (j === null) continue;
-      const plan = at(k, j, k === 0 ? 0 : 1);
-      if (plan !== null) found.push({ plan, longestCut: () => atLongestCap(k, j) });
+  const atLongestCap = (k, j) => k === 0 ? planIn(0, j, 0) : longestCap(planIn, k, j, atFloor(k), rewrites[0].line);
+  const fewestMoves = (k) => {
+    const available = movesFor(rewrites.slice(0, k).map((one) => one.memory)).length;
+    if (available === 0 || planIn(k, available, atFloor(k)) === null) return null;
+    let low = 0;
+    let high = available;
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2);
+      if (planIn(k, middle, atFloor(k)) !== null) high = middle;
+      else low = middle;
     }
+    return high;
+  };
+  for (let k = 0; k <= rewritable; k += 1) {
+    const atShortest = planIn(k, 0, atFloor(k));
+    if (atShortest !== null) {
+      found.push({ plan: atShortest, longestCut: () => atLongestCap(k, 0) });
+      continue;
+    }
+    const j = fewestMoves(k);
+    if (j === null) continue;
+    const plan = planIn(k, j, atFloor(k));
+    if (plan !== null) found.push({ plan, longestCut: () => atLongestCap(k, j) });
   }
-  const named = found.sort((a, b) => a.plan.elsewhere - b.plan.elsewhere || a.plan.changes - b.plan.changes || a.plan.shorten.length - b.plan.shorten.length).slice(0, INDEX_PLANS_SHOWN);
+  const dominated = (plan) => found.some(
+    (other) => other.plan !== plan && other.plan.changes < plan.changes && other.plan.elsewhere <= plan.elsewhere && other.plan.demote.length <= plan.demote.length
+  );
+  const undominated = found.filter(({ plan }) => !dominated(plan));
+  const named = undominated.sort((a, b) => a.plan.elsewhere - b.plan.elsewhere || a.plan.changes - b.plan.changes || a.plan.shorten.length - b.plan.shorten.length).slice(0, INDEX_PLANS_SHOWN);
   const ranked = named.map((one) => one.longestCut()).filter((plan) => plan !== null);
   return {
     today: todayParts,
     fitting: ranked,
-    next: ranked.length === 0 ? PLAN_TEXT.nothing : PLAN_TEXT.cheapest(ranked[0], ranked.length - 1) + PLAN_TEXT.elsewhere(ranked[0])
+    next: ranked.length === 0 ? PLAN_TEXT.nothing(blockersOf(memories)) : PLAN_TEXT.cheapest(ranked[0], ranked.length - 1) + PLAN_TEXT.elsewhere(ranked[0])
   };
 }
-function longestCap(planAt, k, j, longest) {
-  let fitsAt = 0;
-  let missesAt = longest;
+function longestCap(planAt, k, j, floor, longest) {
+  let fitsAt = floor;
+  let missesAt = Math.max(floor, longest);
   while (missesAt - fitsAt > 1) {
     const middle = Math.floor((fitsAt + missesAt) / 2);
     if (planAt(k, j, middle) !== null) fitsAt = middle;
     else missesAt = middle;
   }
   return planAt(k, j, fitsAt);
+}
+function floorCap(rewrites) {
+  return Math.max(
+    ...rewrites.map(({ memory }) => {
+      const shown2 = shownText(memory.summary);
+      const fixed = indexLine(memory).length - shown2.length;
+      for (let room = SUMMARY_FLOOR; room <= shown2.length; room += 1) {
+        if (shown2.slice(0, room).trimEnd().length >= SUMMARY_FLOOR) return fixed + room;
+      }
+      return fixed + shown2.length;
+    })
+  );
+}
+function keepsFloor(memory) {
+  return shownText(memory.summary).length > SUMMARY_FLOOR;
 }
 function fillPlanned(input2, place, cap, rewrites, moves) {
   const moved = new Set(moves.map((memory) => memory.id));
@@ -48335,9 +48430,9 @@ function judge(proposal, load, seen) {
 }
 function judgeAll(load, seen) {
   const unplaced = (problem) => problem.record === "proposal" || !load.proposals.some((proposal) => proposal.id === problem.proposal);
-  const counted = load.problems.filter(unplaced);
-  const newer = counted.filter((problem) => problem.newerFormat !== void 0).length;
-  return { judged: load.proposals.map((proposal) => judge(proposal, load, seen)), notRead: { unreadable: counted.length - newer, newerFormat: newer } };
+  const counted2 = load.problems.filter(unplaced);
+  const newer = counted2.filter((problem) => problem.newerFormat !== void 0).length;
+  return { judged: load.proposals.map((proposal) => judge(proposal, load, seen)), notRead: { unreadable: counted2.length - newer, newerFormat: newer } };
 }
 function waitingCount(judgement) {
   return judgement.judged.filter((one) => one.state === "waiting").length;
@@ -48612,15 +48707,15 @@ function propose(input2) {
       );
     }
   }
-  const counted = (memories) => memories.filter((memory) => !visibleOf(memory)).length;
+  const counted2 = (memories) => memories.filter((memory) => !visibleOf(memory)).length;
   return {
     drafts,
     blocked,
     unseen: {
       duplicates: input2.pairs.filter((pair) => pair.score >= NEAR_IDENTICAL_MIN && (!visibleOf(pair.a) || !visibleOf(pair.b))).length,
-      expired: counted(input2.dead.expired),
-      dangling: counted(input2.dead.dangling.map((one) => one.memory)),
-      oldHandoffs: counted(input2.dead.olderHandoffs)
+      expired: counted2(input2.dead.expired),
+      dangling: counted2(input2.dead.dangling.map((one) => one.memory)),
+      oldHandoffs: counted2(input2.dead.olderHandoffs)
     }
   };
 }
@@ -49250,7 +49345,7 @@ function differingText(text, memory) {
 }
 var PLACE_WORDS = { here: "here", elsewhere: "in other places", overriding: "in projects that override it" };
 var FILES_MARK_MAX = 80;
-function filesWords(memory) {
+function filesWords2(memory) {
   const files = editFiles(memory);
   if (files.state === "none") return "";
   const words = conditionWords({ files: files.state === "unjudged" ? files.patterns : [...files.usable, ...files.unusable] });
@@ -49332,7 +49427,7 @@ function affectsOf(effect, before, after, created, standing, pushed = []) {
   };
   const who = (id, shown2) => `${id === created ? "new" : shortId(id)} ${JSON.stringify(shownCut(shown2?.title ?? "", TITLE_MAX2))}${marked(id) ? " (enforced)" : ""}${filesMark(id)}`;
   const filesMark = (id) => {
-    const [was, will] = [beforeById.get(id), afterById.get(id)].map((memory) => memory === void 0 ? void 0 : filesWords(memory));
+    const [was, will] = [beforeById.get(id), afterById.get(id)].map((memory) => memory === void 0 ? void 0 : filesWords2(memory));
     if (was === void 0 || will === void 0 || was === will) {
       const one = will ?? was ?? "";
       return one === "" ? "" : ` (${shownCut(one, FILES_MARK_MAX)})`;
@@ -49569,7 +49664,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: this place's own before the ones every place loads, and it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter, or both \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every place loads; a handoff never moves, and each candidate carries where it still arrives once moved, arrivesAt; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
@@ -50389,7 +50484,7 @@ ${TRACK_LOST_LINE}`;
             shown: pairs.slice(0, DREAM_PAIRS_MAX).map(({ a, b, score }) => ({ a: relatedEntryOf(a), b: relatedEntryOf(b), score }))
           },
           indexBudget: {
-            candidates: budget.candidates.map(relatedEntryOf),
+            candidates: budget.candidates.map(moveEntryOf),
             others: budget.others,
             toFit: budget.toFit,
             freed: budget.freed,
@@ -51053,16 +51148,16 @@ function unloaded(memories, problems) {
   return problems.filter((problem) => !memories.some((memory) => problemNames(problem, memory.id)));
 }
 function unreadablePart(memories, problems, words, labels) {
-  const counted = unloaded(memories, problems);
-  if (counted.length === 0) return void 0;
+  const counted2 = unloaded(memories, problems);
+  if (counted2.length === 0) return void 0;
   const matches = (text) => {
     if (text === void 0) return false;
     const plain2 = text.toLowerCase();
     const asLabel = normalizeLabel(text);
     return words.every((word) => plain2.includes(word)) && labels.every((label) => asLabel.includes(label));
   };
-  const matching = counted.filter((problem) => matches(problem.text)).map(shownProblem);
-  const [n, total] = [matching.length, counted.length];
+  const matching = counted2.filter((problem) => matches(problem.text)).map(shownProblem);
+  const [n, total] = [matching.length, counted2.length];
   const next = n > 0 ? `${n} ${n === 1 ? "memory that matches" : "memories that match"} could not be read; do not save a duplicate; tell the user.` : `${total} ${total === 1 ? "memory" : "memories"} could not be read; none is known to match.`;
   return { total, matching: matching.slice(0, SEARCH_LIMIT), next };
 }
@@ -51325,12 +51420,15 @@ function markGoes(mark, what, judged, retiredId, survivorId) {
 function planOf(plan) {
   return {
     shorten: plan.shorten.map(({ memory, summaryLength }) => ({ ...relatedEntryOf(memory), summaryLength })),
-    demote: plan.demote.map(relatedEntryOf),
+    demote: plan.demote.map(moveEntryOf),
     changes: plan.changes,
     userScope: plan.userScope,
     elsewhere: plan.elsewhere,
     characters: plan.characters
   };
+}
+function moveEntryOf(entry) {
+  return { ...relatedEntryOf(entry.memory), arrivesAt: entry.arrivesAt };
 }
 function entryOf(memory) {
   return {
