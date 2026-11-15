@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.20 - 2026-11-15
+
+- Fixed: a memory about a call now arrives when the command or the text being written holds `${`, such as a shell
+  variable (`${HOME}`) or a template literal. Since 0.5.17 such a call got "no memory was judged at this call"
+  instead, and ran without its memory. The same holds for a failing command, and for a file path or search pattern
+  holding `${` (`templates/${name}.bicep`), which were read as naming no file.
+
 ## 0.5.19 - 2026-11-15
 
 - New: a memory saved from something you said keeps your own words beside the rule Claude wrote. Right after the

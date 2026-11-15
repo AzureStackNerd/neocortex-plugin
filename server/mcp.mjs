@@ -45991,7 +45991,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.19",
+  version: "0.5.20",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47757,9 +47757,24 @@ function deliveryFor(command, event, input2, extra) {
   }
 }
 var NO_SEARCH = { kind: "search", patterns: [] };
+var HOOK_PLACEHOLDERS = /* @__PURE__ */ new Set([
+  "${tool_input}",
+  "${tool_input.file_path}",
+  "${tool_input.notebook_path}",
+  "${tool_input.path}",
+  "${tool_input.glob}",
+  "${tool_input.type}",
+  "${tool_input.pattern}",
+  "${tool_name}",
+  "${session_id}",
+  "${agent_id}",
+  "${hook_event_name}",
+  "${prompt}",
+  "${is_interrupt}"
+]);
 function given(value) {
   const trimmed = value?.trim() ?? "";
-  return trimmed === "" || trimmed.includes("${") ? void 0 : trimmed;
+  return trimmed === "" || HOOK_PLACEHOLDERS.has(trimmed) ? void 0 : trimmed;
 }
 function pathOf(path, folder) {
   const slashed = path.replaceAll("\\", "/");
