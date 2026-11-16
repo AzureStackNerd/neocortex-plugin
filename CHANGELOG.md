@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.23 - 2026-11-16
+
+- Added: when you correct Claude, or ask afterwards whether a memory made it do what you corrected, Claude checks
+  the memories NeoCortex delivered into the conversation with the new correction_check tool. Its reply names a
+  memory that may have pointed it the other way, with your words as Claude quoted them, the rule, and when and how
+  the memory arrived, and asks whether to sharpen it, delete it or dismiss the flag. When the check cannot be made
+  (no notes, notes past the 24 hours they are kept, notes that cannot be read) the reply says so, never that no
+  memory pointed the other way. A word that looks like a secret is never shown back, and nothing of the correction
+  is kept after the reply.
+
 ## 0.5.22 - 2026-11-15
 
 - Fixed: the plans dream_report recommends for a crowded start can now be applied as they stand. No plan cuts a

@@ -45992,7 +45992,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.22",
+  version: "0.5.23",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46810,75 +46810,6 @@ function compareText(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// src/similar.ts
-function similarity(a, b) {
-  return wordSimilarity(wordsOf(a), wordsOf(b));
-}
-function wordSimilarity(left, right) {
-  let shared = 0;
-  for (const word of left) if (right.has(word)) shared += 1;
-  const either = left.size + right.size - shared;
-  return either === 0 ? 0 : shared / either;
-}
-var NEAR_DUPLICATE_MIN = 0.5;
-var NEAR_IDENTICAL_MIN = 0.8;
-var WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
-var STOP_WORDS = /* @__PURE__ */ new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "but",
-  "by",
-  "do",
-  "for",
-  "from",
-  "has",
-  "have",
-  "if",
-  "in",
-  "into",
-  "is",
-  "it",
-  "its",
-  "no",
-  "not",
-  "of",
-  "on",
-  "or",
-  "so",
-  "than",
-  "that",
-  "the",
-  "then",
-  "there",
-  "these",
-  "this",
-  "those",
-  "to",
-  "was",
-  "we",
-  "were",
-  "when",
-  "which",
-  "with",
-  "you",
-  "your"
-]);
-function wordsOf(memory) {
-  const words = /* @__PURE__ */ new Set();
-  const text = `${memory.title}
-${memory.summary}
-${memory.body}`;
-  for (const [word] of text.toLowerCase().matchAll(WORD_RE)) {
-    if (!STOP_WORDS.has(word) && !KIND_LABELS.has(word)) words.add(word);
-  }
-  return words;
-}
-
 // src/deliver.ts
 var HOOK_CAP = 1e4;
 var WARNING_RESERVE = 600;
@@ -46915,6 +46846,10 @@ function arrivalsOf(placed, how, named = []) {
 }
 function trackLine(conversation) {
   return `Track record: conversation ${conversation}`;
+}
+var CORRECTION_LINE = "Corrections: when the user corrects you, or asks whether a memory made you do what they corrected, call correction_check with their correcting words and any memory of those in play that may have pointed you the other way; with no suspect too, and say what it could not check.";
+function trackLines(conversation) {
+  return [trackLine(conversation), CORRECTION_LINE];
 }
 function onceResetNotice(reason) {
   return `WARNING: NeoCortex could not reset which rules for a kind of file this conversation already has (${truncateReason(reason, 120)}), so such a rule may not arrive again at a read or a search in this conversation. Say so before answering.`;
@@ -47043,7 +46978,7 @@ function indexFill(input2, budget = HOOK_CAP, options = NO_PLACE) {
   const { projectKey, location, resolution, problems } = input2;
   const line = placeLine(options.place);
   const track = options.conversation === void 0 ? "" : `
-${trackLine(options.conversation)}`;
+${trackLines(options.conversation).join("\n")}`;
   const header = `# NeoCortex \xB7 project ${projectKey}${line === null ? "" : `
 ${line}`}${track}`;
   const sectionOf = (notices) => notices.length > 0 ? ["## Notices", ...notices].join("\n") : "";
@@ -47735,6 +47670,312 @@ function truncateReason(reason, max) {
   const position = POSITION_RE2.exec(reason)?.[0];
   if (position === void 0 || position.length > max - 2) return truncate(reason, max);
   return `${truncate(reason.slice(0, -position.length), max - position.length)}${position}`;
+}
+
+// src/correction.ts
+var WORDS_MAX = 2e3;
+var PRIVATE_KEY_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+var SENTENCE_SPLIT = /(?<=[.!?。？！])(?=\s|$)/;
+var UNSHOWN_ALL = new RegExp(UNSHOWN_CHAR_RE2.source, "gu");
+var START_MOMENTS = ["index", "full", "startup"];
+var MOMENT_WORDS = {
+  prompt: "a prompt",
+  edit: "an edit",
+  read: "a read",
+  search: "a search",
+  failure: "a failed call",
+  input: "a call"
+};
+var HOW_WORDS = {
+  full: "in full",
+  index: "as its index line",
+  short: "as its index line cut to its title",
+  named: "named in a warning, not as its text"
+};
+function momentWords(note) {
+  if (note.event === "SubagentStart") return "the subagent start";
+  if (START_MOMENTS.includes(note.moment)) return note.source === "compact" ? "the session start after a compaction" : note.source === "clear" ? "the session start after a /clear" : "the session start";
+  const words = MOMENT_WORDS[note.moment] ?? note.moment;
+  return note.tool === void 0 ? words : `${words} (${shownCut(note.tool, 80)})`;
+}
+function deliveredOnes(record2, agent, pending, until) {
+  if (record2.state !== "read") return emptyDelivery(record2.state, pending);
+  const inTime = (time3) => until === void 0 || Date.parse(time3) <= until;
+  const notes = record2.notes.filter((note) => note.agent === agent && inTime(note.time));
+  const otherAgents = new Set(record2.notes.filter((note) => note.agent !== agent).map((note) => note.agent)).size;
+  const boundary = compactionBoundary(notes);
+  const arrived = /* @__PURE__ */ new Map();
+  const named = /* @__PURE__ */ new Map();
+  for (const [at, note] of notes.entries()) {
+    for (const memory of note.memories) {
+      const previous = arrived.get(memory.id);
+      const brought = memory.how === "named" ? void 0 : { how: memory.how, moment: momentWords(note), kind: note.moment, time: note.time };
+      arrived.set(memory.id, {
+        id: memory.id,
+        how: memory.how,
+        moment: momentWords(note),
+        kind: note.moment,
+        time: note.time,
+        count: (previous?.count ?? 0) + 1,
+        ...memory.revision === void 0 ? {} : { revision: memory.revision },
+        ...(brought ?? previous?.textArrival) === void 0 ? {} : { textArrival: brought ?? previous?.textArrival },
+        beforeCompaction: boundary >= 0 && at < boundary
+      });
+      named.set(memory.id, (named.get(memory.id) ?? true) && memory.how === "named");
+    }
+  }
+  return {
+    state: "read",
+    notes,
+    arrived,
+    onlyNamed: new Set([...named.entries()].filter(([, only]) => only).map(([id]) => id)),
+    damaged: record2.damaged,
+    lost: notes.reduce((sum, note) => sum + (note.lostBefore ?? 0), 0) + pending,
+    expired: record2.expired.filter((note) => note.agent === agent && inTime(note.time)).length,
+    boundary,
+    cleared: agent === "" && notes.find((note) => note.event === "SessionStart")?.source === "clear",
+    otherAgents,
+    missingParts: missingStartParts(notes)
+  };
+}
+function missingStartParts(notes) {
+  const out = [];
+  for (let at = 0; at < notes.length; ) {
+    const event = notes[at].event;
+    if (event !== "SessionStart" && event !== "SubagentStart") {
+      at += 1;
+      continue;
+    }
+    let end = at;
+    while (end < notes.length && notes[end].event === event) end += 1;
+    const group = notes.slice(at, end);
+    at = end;
+    if (group.some((note) => note.moment === "startup")) continue;
+    const missing = [];
+    for (const moment of ["index", "full"]) {
+      const first = group.find((note) => note.moment === moment && note.part === 1);
+      const count2 = first?.parts ?? 1;
+      for (let part = 1; part <= count2; part += 1) if (!group.some((note) => note.moment === moment && note.part === part)) missing.push(`${moment} part ${part}`);
+    }
+    if (missing.length > 0) out.push({ missing, first: group[0] });
+  }
+  return out;
+}
+function compactionBoundary(notes) {
+  let boundary = -1;
+  notes.forEach((note, i) => {
+    if (note.event === "SessionStart" && note.source === "compact" && (i === 0 || notes[i - 1].event !== "SessionStart")) boundary = i;
+  });
+  return boundary;
+}
+function emptyDelivery(state, pending) {
+  return {
+    state,
+    notes: [],
+    arrived: /* @__PURE__ */ new Map(),
+    onlyNamed: /* @__PURE__ */ new Set(),
+    damaged: 0,
+    lost: pending,
+    expired: 0,
+    boundary: -1,
+    cleared: false,
+    otherAgents: 0,
+    missingParts: []
+  };
+}
+var FULL_BLOCK_MOMENTS = /* @__PURE__ */ new Set(["failure", "input"]);
+function arrivalText(memory, byId, how, kind) {
+  if (how === "named") return "";
+  if (how === "index") return indexLine(memory);
+  if (how === "short") return indexLine(memory, true);
+  return FULL_BLOCK_MOMENTS.has(kind) ? fullBlock(memory, byId) : loadedText(memory, byId);
+}
+function flagWords(entries, max = WORDS_MAX) {
+  if (entries.some((entry) => PRIVATE_KEY_RE.test(entry))) return { words: [], note: "the correction holds what looks like a private key" };
+  const sentences = entries.flatMap((entry) => entry.split(/\r?\n/)).flatMap((line) => line.replace(/\t/g, " ").split(SENTENCE_SPLIT)).map((sentence) => sentence.replace(UNSHOWN_ALL, "").trim()).filter((sentence) => sentence !== "");
+  const kept = [];
+  let dropped;
+  let total = 0;
+  for (const sentence of sentences) {
+    const shape = secretShape(sentence);
+    if (shape !== null) {
+      dropped ??= shape;
+      continue;
+    }
+    if (total + sentence.length > max) break;
+    kept.push(sentence);
+    total += sentence.length;
+  }
+  const why = dropped === void 0 ? void 0 : `a sentence of the correction holds what looks like a ${dropped}`;
+  if (kept.length === 0) return { words: [], note: why ?? "the correction has no sentence within the limit" };
+  return why === void 0 ? { words: kept } : { words: kept, note: why };
+}
+var CHECK_SCOPE = "This covers what NeoCortex delivered into this conversation, not what Claude looked up itself with get_memory or search_memories.";
+var NOTHING_TO_SHOW = "Add nothing about memories to your reply to the user.";
+var NOTHING_CHECKED = "Say to the user, in your reply, what the check could not check and why (the reasons above); never say that no memory pointed the other way.";
+function nextWords(show, nothingElse) {
+  if (show.length === 0) return nothingElse ? NOTHING_TO_SHOW : NOTHING_CHECKED;
+  return `Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. Ask whether they want to sharpen it, delete it or dismiss the flag. Sharpen: update_memory or update_rule with only the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked.`;
+}
+async function correctionAnswer(input2) {
+  const { delivered, today, place } = input2;
+  const words = flagWords(input2.words);
+  const unknown2 = [];
+  const couldNotCheck = [CHECK_SCOPE];
+  const stored = new Map(today?.memories.map((one) => [one.memory.id, one]) ?? []);
+  const byId = new Map(today?.memories.map((one) => [one.memory.id, one.memory]) ?? []);
+  const readable = delivered.state === "read";
+  if (delivered.state === "newer") couldNotCheck.push("The notes of this conversation were written by a newer NeoCortex, which this one cannot read; update NeoCortex on this machine.");
+  else if (delivered.state === "unreadable") couldNotCheck.push("The notes of this conversation cannot be read now.");
+  else if (delivered.notes.length === 0) couldNotCheck.push("NeoCortex has nothing noted for this conversation: nothing has been delivered yet, or its notes passed the 24 hours they are kept.");
+  if (delivered.expired > 0) couldNotCheck.push(`${delivered.expired} ${delivered.expired === 1 ? "note" : "notes"} of this conversation passed the 24 hours NeoCortex keeps them, so what ${delivered.expired === 1 ? "it named" : "they named"} cannot be checked.`);
+  if (delivered.cleared) couldNotCheck.push("This conversation began with a /clear: only what arrived since can be checked.");
+  if (delivered.otherAgents > 0) couldNotCheck.push(`The notes of ${delivered.otherAgents} subagent ${delivered.otherAgents === 1 ? "conversation" : "conversations"} of this session are not checked.`);
+  for (const start of delivered.missingParts) {
+    const words2 = momentWords(start.first);
+    unknown2.push(`${words2[0].toUpperCase()}${words2.slice(1)} at ${start.first.time} left no note for ${start.missing.join(", ")}, so what ${start.missing.length === 1 ? "it" : "they"} delivered is unknown.`);
+  }
+  if (delivered.damaged > 0) unknown2.push(`${delivered.damaged} ${delivered.damaged === 1 ? "note" : "notes"} of this session cannot be read, so what ${delivered.damaged === 1 ? "it names is" : "they name is"} unknown.`);
+  if (delivered.lost > 0) unknown2.push(`${delivered.lost} ${delivered.lost === 1 ? "delivery" : "deliveries"} of this conversation could not be noted, so what ${delivered.lost === 1 ? "it" : "they"} brought is unknown.`);
+  const show = [];
+  for (const asked of input2.suspects) {
+    const deliveredId = matchId(asked, delivered.arrived);
+    const inToday = deliveredId === null ? matchId(asked, stored) : null;
+    const anywhere = deliveredId === null && inToday === null ? await recordOf(input2.recordOf, asked) : void 0;
+    const id = deliveredId ?? inToday ?? anywhere?.record?.memory.id ?? null;
+    if (id === null) {
+      if (anywhere?.unreadable === true) couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} cannot be looked up now: its record cannot be read, so whether it is a memory here cannot be checked.`);
+      else if (anywhere?.refused === true || input2.recordOf === void 0) couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} could not be looked up: the store could not be read now, so whether it is a memory here cannot be checked.`);
+      else couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} is no memory in this store (${place}), so nothing is named for it.`);
+      continue;
+    }
+    const arrival = deliveredId === null ? void 0 : delivered.arrived.get(deliveredId);
+    const loaded = stored.get(id) ?? (anywhere?.record?.memory.id === id ? anywhere.record : (await recordOf(input2.recordOf, id)).record);
+    const broken = (anywhere?.unreadable ?? false) || today !== void 0 && today.problems.some((problem) => problem.id === id && problem.copy !== true);
+    const title = loaded === void 0 ? "" : shownCut(loaded.memory.title, 80);
+    if (arrival === void 0) {
+      if (readable) couldNotCheck.push(`"${title}" (${shortId(id)}) was not delivered into this conversation, so it cannot have steered Claude here; see the scope above.`);
+      else couldNotCheck.push(`"${title}" (${shortId(id)}) is in this store, but whether it reached this conversation cannot be checked; see above.`);
+      continue;
+    }
+    if (delivered.onlyNamed.has(id)) {
+      couldNotCheck.push(`"${title}" (${shortId(id)}) arrived only as a name in a warning, so its text was never in Claude's context; look at the memory itself with get_memory.`);
+      continue;
+    }
+    const stillHere = stored.has(id);
+    if (today === void 0) {
+      couldNotCheck.push(`"${shortId(id)}" arrived in this conversation, but whether it changed since could not be checked: the store could not be read.`);
+    }
+    if (!stillHere && !broken && today !== void 0) {
+      couldNotCheck.push(`"${shortId(id)}" arrived in this conversation but is deleted since, or no longer loading here, so there is nothing left to sharpen.`);
+      continue;
+    }
+    const since = broken ? "unreadable" : stillHere && arrival.revision !== void 0 && loaded?.revision !== arrival.revision ? "changed" : void 0;
+    const brought = arrival.textArrival ?? { how: arrival.how, moment: arrival.moment, kind: arrival.kind, time: arrival.time };
+    show.push({
+      id,
+      shortId: shortId(id),
+      title,
+      ...loaded === void 0 ? {} : { rule: arrivalText(loaded.memory, byId, brought.how, brought.kind) },
+      // S46: the arrival named is the LATEST one, as memories_in_play names it; the rule beside it is the text arrival.
+      ...loaded === void 0 ? {} : { arrived: { how: arrival.how, moment: arrival.moment, time: arrival.time, count: arrival.count } },
+      // How line 4: beside the latest, the arrival that brought the rule, when a later one brought no text (F2).
+      ...loaded === void 0 || arrival.textArrival === void 0 || arrival.textArrival.time === arrival.time ? {} : { ruleArrived: { how: arrival.textArrival.how, moment: arrival.textArrival.moment, time: arrival.textArrival.time } },
+      ...since === void 0 ? {} : { since },
+      // S15: what arrived only before the last compaction is no longer in Claude's context in full.
+      ...arrival.beforeCompaction ? { beforeCompaction: true } : {}
+    });
+  }
+  const wordsNote = words.note;
+  const nothingElse = couldNotCheck.length === 1 && unknown2.length === 0;
+  return {
+    show,
+    words: words.words,
+    ...wordsNote === void 0 ? {} : { wordsNote },
+    unknown: unknown2,
+    couldNotCheck,
+    checked: readable ? "made" : "not made",
+    next: nextWords(show, nothingElse)
+  };
+}
+async function recordOf(ask, id) {
+  if (ask === void 0) return { record: void 0, unreadable: false, refused: false };
+  return ask(id).catch(() => ({ record: void 0, unreadable: false, refused: true }));
+}
+function matchId(asked, known) {
+  if (known.has(asked)) return asked;
+  const short = asked.trim().toLowerCase();
+  for (const id of known.keys()) if (shortId(id).toLowerCase() === short) return id;
+  return null;
+}
+
+// src/similar.ts
+function similarity(a, b) {
+  return wordSimilarity(wordsOf(a), wordsOf(b));
+}
+function wordSimilarity(left, right) {
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  const either = left.size + right.size - shared;
+  return either === 0 ? 0 : shared / either;
+}
+var NEAR_DUPLICATE_MIN = 0.5;
+var NEAR_IDENTICAL_MIN = 0.8;
+var WORD_RE = /[\p{L}\p{M}\p{N}]+/gu;
+var STOP_WORDS = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "do",
+  "for",
+  "from",
+  "has",
+  "have",
+  "if",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "no",
+  "not",
+  "of",
+  "on",
+  "or",
+  "so",
+  "than",
+  "that",
+  "the",
+  "then",
+  "there",
+  "these",
+  "this",
+  "those",
+  "to",
+  "was",
+  "we",
+  "were",
+  "when",
+  "which",
+  "with",
+  "you",
+  "your"
+]);
+function wordsOf(memory) {
+  const words = /* @__PURE__ */ new Set();
+  const text = `${memory.title}
+${memory.summary}
+${memory.body}`;
+  for (const [word] of text.toLowerCase().matchAll(WORD_RE)) {
+    if (!STOP_WORDS.has(word) && !KIND_LABELS.has(word)) words.add(word);
+  }
+  return words;
 }
 
 // src/hooks.ts
@@ -48475,17 +48716,17 @@ function planApply(proposal, records, context) {
   for (const id of idsOf3(proposal)) {
     if (records.filter((one) => recordId(one) === id).length > 1) return { refusal: { reason: "two-records", id } };
   }
-  const recordOf2 = (id) => records.find((one) => recordId(one) === id);
+  const recordOf3 = (id) => records.find((one) => recordId(one) === id);
   const restOf = (id) => proposal.rests.find((rest) => rest.id === id);
-  const survivor = intent.act === "supersede" ? recordOf2(intent.survivor) : void 0;
+  const survivor = intent.act === "supersede" ? recordOf3(intent.survivor) : void 0;
   const landed = intent.act === "supersede" && survivor !== void 0 && "stored" in survivor && survivor.stored.memory.supersedes.includes(intent.retired) ? intent.survivor : void 0;
   const refuse = (refusal2) => landed === void 0 ? { refusal: refusal2 } : { refusal: refusal2, landed };
-  const planned = planOfIntent(intent, recordOf2, restOf, context);
+  const planned = planOfIntent(intent, recordOf3, restOf, context);
   if (planned.refusal === void 0 && planned.steps.length === 0) return planned;
   const written = new Set(writtenIds(proposal));
   for (const rest of proposal.rests) {
     if (written.has(rest.id)) continue;
-    const record2 = recordOf2(rest.id);
+    const record2 = recordOf3(rest.id);
     if (record2 === void 0) return refuse({ reason: "moved", id: rest.id, how: "deleted" });
     if ("problem" in record2) return refuse({ reason: "unreadable", id: rest.id });
     if (rest.shown && !sameScope(record2.scope, rest.scope)) return refuse({ reason: "moved", id: rest.id, how: "scope" });
@@ -48493,10 +48734,10 @@ function planApply(proposal, records, context) {
   }
   return planned.refusal === void 0 ? planned : refuse(planned.refusal);
 }
-function planOfIntent(intent, recordOf2, restOf, context) {
+function planOfIntent(intent, recordOf3, restOf, context) {
   const { visible, stamp, userScope } = context;
   const stepOf = (id, done, write, retire = false) => {
-    const record2 = recordOf2(id);
+    const record2 = recordOf3(id);
     if (record2 === void 0) return retire ? null : { reason: "moved", id, how: "deleted" };
     if ("problem" in record2) return { reason: "unreadable", id };
     if (done(record2.stored.memory)) return null;
@@ -48508,7 +48749,7 @@ function planOfIntent(intent, recordOf2, restOf, context) {
   };
   const stillHere = () => false;
   if (intent.act === "supersede") {
-    const gone = recordOf2(intent.retired);
+    const gone = recordOf3(intent.retired);
     const retiredMemory = gone !== void 0 && "stored" in gone ? gone.stored.memory : void 0;
     const carry = (memory) => {
       const { carried, carriedCall } = supersedeMark(retiredMemory, memory);
@@ -48524,7 +48765,7 @@ function planOfIntent(intent, recordOf2, restOf, context) {
       base
     }));
     if (survivor !== null && "reason" in survivor) return { refusal: survivor };
-    if (survivor !== null && recordOf2(intent.retired) === void 0) return { refusal: { reason: "moved", id: intent.retired, how: "deleted" } };
+    if (survivor !== null && recordOf3(intent.retired) === void 0) return { refusal: { reason: "moved", id: intent.retired, how: "deleted" } };
     const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
     if (retired !== null && "reason" in retired) return { refusal: retired };
     return { steps: [survivor, retired].flatMap((one) => one === null ? [] : [one]) };
@@ -48535,7 +48776,7 @@ function planOfIntent(intent, recordOf2, restOf, context) {
     return { steps: retired === null ? [] : [retired] };
   }
   if (intent.act === "promote") {
-    const record2 = recordOf2(intent.record);
+    const record2 = recordOf3(intent.record);
     if (record2 !== void 0 && "stored" in record2) {
       const twin = twinIn(
         record2.stored.memory,
@@ -49403,13 +49644,13 @@ function roomOf(written, effect, before, after, session, today, problems, here =
   return { standing: (memory) => standingAt(memory, will.active, will.byId, problems), pushed: pushedOut(was, will, problems, own2) };
 }
 var PUSHED_NAMED = 5;
-var momentWords = (moments) => moments.length === 1 ? `the ${moments[0]} moment` : `the ${moments.slice(0, -1).join(", ")} and ${moments.at(-1)} moments`;
+var momentWords2 = (moments) => moments.length === 1 ? `the ${moments[0]} moment` : `the ${moments.slice(0, -1).join(", ")} and ${moments.at(-1)} moments`;
 function pushedLine(who, moments) {
-  return `${who} here: this write leaves it no room at ${momentWords(moments)}, so its text does not load there`;
+  return `${who} here: this write leaves it no room at ${momentWords2(moments)}, so its text does not load there`;
 }
 function pushedRestLine(count2, moments) {
   const [rules, them, their] = count2 === 1 ? ["rule", "it", "its"] : ["rules", "them", "their"];
-  return `${count2} more ${rules} here: this write leaves ${them} no room at ${momentWords(moments)}, so ${their} text does not load there`;
+  return `${count2} more ${rules} here: this write leaves ${them} no room at ${momentWords2(moments)}, so ${their} text does not load there`;
 }
 function affectsOf(effect, before, after, created, standing, pushed = []) {
   const beforeById = new Map(before.map((m) => [m.id, m]));
@@ -49542,6 +49783,14 @@ var IN_PLAY_DESCRIPTION = 'Which NeoCortex memories had reached this conversatio
 var IN_PLAY_INPUT = {
   conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
   until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
+};
+var CORRECTION_DESCRIPTION = "When the user corrects you, or asks whether a memory made you do what they corrected, call this with their correcting words and the memories you judge may have pointed you the other way. It answers each suspect with the evidence: the rule as you actually read it, when, at which moment and how it arrived, and whether it changed since; your words safe to show back; what it could not check; and what to say to the user. Call it at every correction you recognise, also when you name no suspect: the answer says what could not be checked, which you must say too, and never that no memory pointed the other way. It covers what NeoCortex delivered into this conversation, not what you looked up yourself. It writes nothing: the user sharpens, deletes or dismisses, and only they do.";
+var CORRECTION_INPUT = {
+  conversation: external_exports.string().describe(`The id the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line; use the main conversation's)`),
+  suspects: external_exports.array(external_exports.string()).default([]).describe(
+    "The ids (or 8-character short ids) of the memories you judge may have pointed you the other way, from those the memories in play name for this conversation. Empty when you judge that none did"
+  ),
+  words: external_exports.array(external_exports.string()).default([]).describe("The user's correcting words, copied exactly as they wrote them, one entry per sentence or message. Not your paraphrase; the answer shows them back marked as the user's own words")
 };
 var ID = external_exports.string().min(8).describe("Memory id, or its first 8 characters as shown in the index");
 var LINK_IDS = external_exports.array(external_exports.string()).describe("Memory ids, or their first 8 characters");
@@ -50785,14 +51034,20 @@ ${TRACK_LOST_LINE}`;
       }
     }
   );
+  const conversationOf = (conversation2) => {
+    const [session, agent = "", ...rest] = conversation2.trim().split("/");
+    if (rest.length > 0 || !TRACK_ID_RE.test(session) || agent !== "" && !TRACK_ID_RE.test(agent)) {
+      return { error: 'conversation must be what the "Track record: conversation" line of your NeoCortex index names: <session> or <session>/<agent>' };
+    }
+    return { session, agent };
+  };
   server.registerTool(
     "memories_in_play",
     { title: "Which NeoCortex memories were in play in this conversation", description: IN_PLAY_DESCRIPTION, inputSchema: IN_PLAY_INPUT },
     ({ conversation: conversation2, until }) => guarded(async () => {
-      const [session, agent = "", ...rest] = conversation2.trim().split("/");
-      if (rest.length > 0 || !TRACK_ID_RE.test(session) || agent !== "" && !TRACK_ID_RE.test(agent)) {
-        return fail('conversation must be what the "Track record: conversation" line of your NeoCortex index names: <session> or <session>/<agent>');
-      }
+      const who = conversationOf(conversation2);
+      if ("error" in who) return fail(who.error);
+      const { session, agent } = who;
       const cut = until === void 0 ? void 0 : Date.parse(until);
       if (cut !== void 0 && Number.isNaN(cut)) return fail("until must be an ISO date and time, such as 2026-11-14T10:30:00Z");
       const place = placeName(placeRefOf(deps.session.place));
@@ -50806,6 +51061,37 @@ ${TRACK_LOST_LINE}`;
       );
       const pending = trackLost.get(`${session}/${agent}`)?.count ?? 0;
       return { content: [{ type: "text", text: inPlayAnswer({ conversation: conversation2.trim(), agent, place, record: record2, today, pending, ...cut === void 0 ? {} : { until: cut } }) }] };
+    })
+  );
+  const recordOfId = async (id) => {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return { record: void 0, unreadable: false, refused: false };
+    let records;
+    try {
+      records = await reader.recordsOf(id);
+    } catch {
+      return { record: void 0, unreadable: false, refused: true };
+    }
+    const live = records.find((one) => "stored" in one);
+    if (live === void 0 || !("stored" in live)) return { record: void 0, unreadable: records.length > 0, refused: false };
+    return { record: { memory: live.stored.memory, revision: live.stored.revision }, unreadable: false, refused: false };
+  };
+  server.registerTool(
+    "correction_check",
+    { title: "Which delivered memories may have pointed Claude the wrong way", description: CORRECTION_DESCRIPTION, inputSchema: CORRECTION_INPUT },
+    ({ conversation: conversation2, suspects, words }) => guarded(async () => {
+      const who = conversationOf(conversation2);
+      if ("error" in who) return fail(who.error);
+      const place = placeName(placeRefOf(deps.session.place));
+      const today = await reader.load(visibleScopes(deps.session)).then(
+        ({ memories, problems }) => ({ memories, problems }),
+        () => void 0
+      );
+      if (deps.track === void 0) {
+        return ok(await correctionAnswer({ delivered: deliveredOnes({ state: "none" }, who.agent, 0), today, recordOf: recordOfId, suspects, words, place }));
+      }
+      const record2 = await deps.track.read(who.session);
+      const pending = trackLost.get(`${who.session}/${who.agent}`)?.count ?? 0;
+      return ok(await correctionAnswer({ delivered: deliveredOnes(record2, who.agent, pending), today, recordOf: recordOfId, suspects, words, place }));
     })
   );
   const deleteCall = async ({ id, revision }, confirmation) => {
@@ -51444,27 +51730,6 @@ function entryOf(memory) {
     ...shownCondition(memory)
   };
 }
-var START_MOMENTS = ["index", "full", "startup"];
-var HOW_WORDS = {
-  full: "in full",
-  index: "as its index line",
-  short: "as its index line cut to its title",
-  named: "named in a warning, not as its text"
-};
-var MOMENT_WORDS = {
-  prompt: "a prompt",
-  edit: "an edit",
-  read: "a read",
-  search: "a search",
-  failure: "a failed call",
-  input: "a call"
-};
-function momentWords2(note) {
-  if (note.event === "SubagentStart") return "the subagent start";
-  if (START_MOMENTS.includes(note.moment)) return note.source === "compact" ? "the session start after a compaction" : note.source === "clear" ? "the session start after a /clear" : "the session start";
-  const words = MOMENT_WORDS[note.moment] ?? note.moment;
-  return note.tool === void 0 ? words : `${words} (${shownCut(note.tool, 80)})`;
-}
 function inPlayAnswer(input2) {
   const { record: record2, agent, today, until } = input2;
   const by = until === void 0 ? "" : ` by ${new Date(until).toISOString()}`;
@@ -51478,44 +51743,26 @@ function inPlayAnswer(input2) {
     lines.push("Its notes cannot be read now; that does not mean no memory was in play.");
     return lines.join("\n");
   }
-  const notes = record2.state === "none" ? [] : record2.notes.filter((note) => note.agent === agent && (until === void 0 || Date.parse(note.time) <= until));
+  const delivered = deliveredOnes(record2, agent, input2.pending, until);
+  const notes = delivered.notes;
   const unknown2 = [];
-  const damaged = record2.state === "read" ? record2.damaged : 0;
-  const expired = record2.state === "read" ? record2.expired.filter((note) => note.agent === agent && (until === void 0 || Date.parse(note.time) <= until)) : [];
-  const gone = `${expired.length} ${expired.length === 1 ? "note" : "notes"} of this conversation passed the 24 hours NeoCortex keeps them, so what ${expired.length === 1 ? "it named is" : "they named is"} no longer kept.`;
+  const damaged = delivered.damaged;
+  const expired = delivered.expired;
+  const gone = `${expired} ${expired === 1 ? "note" : "notes"} of this conversation passed the 24 hours NeoCortex keeps them, so what ${expired === 1 ? "it named is" : "they named is"} no longer kept.`;
   if (damaged > 0) unknown2.push(`${damaged} ${damaged === 1 ? "note" : "notes"} of this session cannot be read, so what ${damaged === 1 ? "it names is" : "they name is"} unknown.`);
-  const lost = notes.reduce((sum, note) => sum + (note.lostBefore ?? 0), 0) + input2.pending;
+  const lost = delivered.lost;
   if (lost > 0) unknown2.push(`${lost} ${lost === 1 ? "delivery" : "deliveries"} of this conversation could not be noted, so what ${lost === 1 ? "it" : "they"} brought is unknown.`);
   if (notes.length === 0) {
     lines.push(nothing, ...unknown2);
     return lines.join("\n");
   }
-  if (agent === "" && notes.find((note) => note.event === "SessionStart")?.source === "clear") {
+  if (delivered.cleared) {
     lines.push("This conversation began with a /clear: only what arrived since is named, and nothing from before it.");
   }
-  let boundary = -1;
-  notes.forEach((note, i) => {
-    if (note.event === "SessionStart" && note.source === "compact" && (i === 0 || notes[i - 1].event !== "SessionStart")) boundary = i;
-  });
-  for (let i = 0; i < notes.length; ) {
-    if (notes[i].event !== "SessionStart" && notes[i].event !== "SubagentStart") {
-      i += 1;
-      continue;
-    }
-    let end = i;
-    while (end < notes.length && notes[end].event === notes[i].event) end += 1;
-    const group = notes.slice(i, end);
-    if (!group.some((note) => note.moment === "startup")) {
-      const missing = [];
-      for (const moment of ["index", "full"]) {
-        const first = group.find((note) => note.moment === moment && note.part === 1);
-        const count2 = first?.parts ?? 1;
-        for (let part = 1; part <= count2; part += 1) if (!group.some((note) => note.moment === moment && note.part === part)) missing.push(`${moment} part ${part}`);
-      }
-      const words = momentWords2(group[0]);
-      if (missing.length > 0) unknown2.push(`${words[0].toUpperCase()}${words.slice(1)} at ${group[0].time} left no note for ${missing.join(", ")}, so what ${missing.length === 1 ? "it" : "they"} delivered is unknown.`);
-    }
-    i = end;
+  const boundary = delivered.boundary;
+  for (const start of delivered.missingParts) {
+    const words = momentWords(start.first);
+    unknown2.push(`${words[0].toUpperCase()}${words.slice(1)} at ${start.first.time} left no note for ${start.missing.join(", ")}, so what ${start.missing.length === 1 ? "it" : "they"} delivered is unknown.`);
   }
   const latest = /* @__PURE__ */ new Map();
   notes.forEach((note, at) => {
@@ -51529,7 +51776,7 @@ function inPlayAnswer(input2) {
     const title = loaded === void 0 ? "" : ` "${shownCut(loaded.memory.title, 80)}"`;
     const times = entry.count > 1 ? `, ${entry.count} times in all` : "";
     const since = today === void 0 ? "" : loaded !== void 0 ? entry.revision !== void 0 && loaded.revision !== entry.revision ? "; changed since it arrived, so its text now is not what Claude read" : "" : today.problems.some((problem) => problem.id === id) ? "; its record cannot be read now" : "; deleted since it arrived, or no longer loading here";
-    return `- ${shortId(id)}${title}: ${HOW_WORDS[entry.how]} at ${momentWords2(entry.note)}, ${entry.note.time}${times}${since}`;
+    return `- ${shortId(id)}${title}: ${HOW_WORDS[entry.how]} at ${momentWords(entry.note)}, ${entry.note.time}${times}${since}`;
   };
   const entries = [...latest.entries()].sort((a, b) => a[1].at - b[1].at);
   const current = entries.filter(([, entry]) => entry.at >= boundary);
@@ -51540,7 +51787,7 @@ function inPlayAnswer(input2) {
     lines.push(`Arrived before the compaction at ${notes[boundary].time} and no longer in context in full:`, ...before.map(([id, entry]) => lineOf(id, entry)));
   }
   if (today === void 0) lines.push("Whether these memories changed since they arrived cannot be checked now: the store could not be read.");
-  if (expired.length > 0) lines.push(gone);
+  if (expired > 0) lines.push(gone);
   lines.push(...unknown2);
   return lines.join("\n");
 }
@@ -52746,7 +52993,7 @@ var FileRunStore = class {
     const fields = raw;
     const format = fields.format;
     if (isFormatVersion(format) && compareFormats(format, DREAM_RECORD_FORMAT) > 0) return { state: "newerFormat", format };
-    const record2 = recordOf(fields);
+    const record2 = recordOf2(fields);
     return record2 === null ? { state: "unreadable", reason: "the record does not hold the fields of a dream run" } : { state: "record", record: record2 };
   }
   /**
@@ -52789,7 +53036,7 @@ var FileRunStore = class {
     return join4(this.root, DREAM_AREA, DREAM_RUN_FILE);
   }
 };
-function recordOf(fields) {
+function recordOf2(fields) {
   const { format, started, finished, outcome, created, stoppedAt } = fields;
   if (format !== DREAM_RECORD_FORMAT) return null;
   if (typeof started !== "string" || Number.isNaN(Date.parse(started))) return null;
