@@ -129,9 +129,11 @@ title, summary and id, as many as fit. When they do not all fit, the lowest-rank
 (shown as …), never those of enforced or high-importance memories; only what still does not fit is counted, and Claude
 finds it with `search_memories`. When that happens, the index says so once: Claude reads the moves `dream_report`
 prices, offers them to you, and moves a memory off the start with `update_memory` and `delivery on-demand` only when
-you agree, one call per memory. Those moves never touch a handoff, and they offer a memory that still arrives at a call
-or a failure of its own before one that would arrive nowhere but by search, so the memories that lose most by leaving
-the start are the ones that leave last. A subagent gets part 1 alone and keeps every line whole, so it counts what does not
+you agree, one call per memory. Those moves never touch a handoff, and they offer only a memory that still arrives at a
+call or a failure of its own: a move that would leave a memory reachable only by `search_memories` is never
+recommended, and when that leaves no way under the budget the report says so. Every report also counts the memories that
+reach Claude only at the start and says each needs a moment of its own before it can leave. A subagent gets part 1 alone
+and keeps every line whole, so it counts what does not
 fit instead of shortening. Memories
 delivered at startup come in full. Claude reads a memory in full when the detail matters. `/plugin:neocortex:neocortex:refresh` reloads your memories in a running session, for
 example after another machine changed them.
@@ -368,9 +370,10 @@ written on stale text.
 **The report.** `dream_report` shows this place's cost at each moment, the moves that would bring an oversized start
 under its budget, near duplicates, and what the last dream run did: when it started, whether it ended `ok`, `budget` or
 `failed`, how many proposals it created, and which stage a budget stop stopped. Its plans keep every rewritten summary at
-120 characters or more, never rewrite or move a handoff, and offer a memory that still arrives at a call or a failure of
-its own before one that would arrive nowhere but by search; when no plan fits within those bounds it says so rather than
-naming one. It changes nothing.
+120 characters or more, never rewrite or move a handoff, and offer only a memory that still arrives at a call or a
+failure of its own, so no move it recommends leaves a memory reachable only by `search_memories`; when no plan fits
+within those bounds it says so rather than naming one, counts the index memories that reach Claude only at the start, and
+says each needs a moment of its own before it can leave. It changes nothing.
 
 What the Dreamer does not do yet: anything that needs a model, such as merged rewrites, contradictions or shortened
 summaries, and proposing a condition for a repeat it promotes. A promote moves the memory as it is: a proposal says

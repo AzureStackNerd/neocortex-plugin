@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.24 - 2026-11-17
+
+- Fixed: dream_report no longer recommends moving a memory off the start when it would then reach Claude only by
+  search. The move list and every plan offer only memories that still arrive at a call or a failure of their own;
+  a plan may still shorten the others. The report counts the index memories that reach Claude only at the start,
+  if any, and says each needs a moment of its own (a call or failure mark, or a file rule) before it can leave.
+  When no plan fits, the report says so; when one does, the move list points to it instead of advising a delete,
+  and a plan that needs more than 20 shortened summaries is still found (#476).
+
 ## 0.5.23 - 2026-11-16
 
 - Added: when you correct Claude, or ask afterwards whether a memory made it do what you corrected, Claude checks

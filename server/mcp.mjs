@@ -45992,7 +45992,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.23",
+  version: "0.5.24",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48361,7 +48361,9 @@ function blockersOf(memories) {
     handoff: index.filter(handoff2).length,
     savesNothing: plain2.filter((memory) => !shortenable(memory)).length,
     highCuttable: high.filter((memory) => keepsFloor(memory)).length,
-    enforcedCuttable: enforced.filter((memory) => keepsFloor(memory)).length
+    enforcedCuttable: enforced.filter((memory) => keepsFloor(memory)).length,
+    // The one split both answers read (#476 How line 1): the movable lines, whose moment decides which half they are in.
+    startOnly: movableLines(memories).filter((one) => !one.moment).length
   };
 }
 function adviceWords(blockers) {
@@ -48375,6 +48377,9 @@ function adviceWords(blockers) {
 function blockerWords(blockers) {
   const one = (n) => n === 1;
   const parts = [
+    // First among the clauses, at N of 1 or more (#476 How line 6, S2, S3, S10, S14): it is the one reason a plan's
+    // moves cannot reach past, since no move is offered for these lines at all.
+    blockers.startOnly === 0 ? "" : `${counted(blockers.startOnly, "index memory", "index memories")} ${one(blockers.startOnly) ? "reaches" : "reach"} Claude only at the start`,
     blockers.enforced === 0 ? "" : `${counted(blockers.enforced, "index line")} ${one(blockers.enforced) ? "is" : "are"} enforced`,
     blockers.high === 0 ? "" : `${counted(blockers.high, "index line")} ${one(blockers.high) ? "has" : "have"} importance high`,
     blockers.handoff === 0 ? "" : `${counted(blockers.handoff, "handoff")} ${one(blockers.handoff) ? "stays at the start because the next session starts from it" : "stay at the start because the next session starts from them"}`,
@@ -48388,13 +48393,24 @@ function counted(n, singular, plural2 = `${singular}s`) {
 var BUDGET_TEXT = {
   noIndex: "No memory here loads as an index line, so the start has no index line to move.",
   noneMayMove: (blockers) => `Nothing here may move off the start: ${blockerWords(blockers)}, so no line may lose its summary to make room and nothing moves off the start without a change of its own.`,
-  noneMayMoveOver: (blockers) => `The start is over its budget, and nothing here may move off it: ${blockerWords(blockers)}, so moving a memory cannot fit this place.${adviceWords(blockers)}`,
+  noneMayMoveOver: (blockers, pointer = "") => `The start is over its budget, and nothing here may move off it: ${blockerWords(blockers)}, so moving a memory cannot fit this place.${pointer === "" ? adviceWords(blockers) : pointer}`,
   fits: "The start already shows every index memory with its summary; no memory needs to move off it.",
+  /**
+   * The count AC3 promises (#476): what each of these memories needs before it can leave the start, in the words the
+   * refinement pins. '' at none, so a report with nothing to count carries no sentence anywhere.
+   */
+  startOnly: (count2) => count2 === 1 ? "1 index memory reaches Claude only at the start, so it is not offered to move: it needs a moment of its own (a call or failure mark, or a file rule) before it can leave the start." : `${count2} index memories reach Claude only at the start, so none of them is offered to move: each needs a moment of its own (a call or failure mark, or a file rule) before it can leave the start.`,
   /** The move list's own "no plan fits" text (#471 How line 7): one reason, shared with the plans' answer. */
-  tooShort: (moves, blockers) => `Moving all ${counted(moves, "index memory", "index memories")} that may lose their summary still leaves the start short: ${blockerWords(blockers)}.` + adviceWords(blockers),
+  tooShort: (moves, blockers, pointer = "") => `Moving all ${counted(moves, "index memory", "index memories")} that still ${moves === 1 ? "arrives" : "arrive"} at a moment of ${moves === 1 ? "its" : "their"} own still leaves the start short: ${blockerWords(blockers)}.` + (pointer === "" ? adviceWords(blockers) : pointer),
+  /**
+   * Said in place of the advice when a plan does fit (#476 fix round 1, finding 1): the advice assumes no plan fits
+   * (#471 How line 7), and beside a fitting plan it would send the user to delete a line no plan needs deleted. The
+   * sentence mirrors `defer`'s, so a reader who met one recognises the other.
+   */
+  pointer: " The plan named below reaches the budget: follow that one.",
   move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. Each entry says where that memory still arrives once it is off the start. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
   // not name: moves beyond the list, not every candidate beyond it (plan D10).
-  (moves <= listed3 ? "" : ` The list above shows the first ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it" : `${userScope} of them are user memories, so they`} leave the start of every project.`),
+  (moves <= listed3 ? "" : ` The list above shows the first ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it leaves" : `${userScope} of them are user memories, so they leave`} the start of every project.`),
   /**
    * The demotion-only text when a plan reaches the budget without demoting a user memory (#424's second criterion): it
    * names the cost and sends the user to that plan instead of telling them to empty the start of every other place. The
@@ -48412,19 +48428,30 @@ function movableLines(memories) {
 function indexBudget(input2, place, plans) {
   const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const candidates = movableLines(memories).map(({ memory }) => memory);
+  const moves = movableLines(memories);
+  const candidates = moves.filter((one) => one.moment).map(({ memory }) => memory);
   const listed3 = candidates.slice(0, INDEX_BUDGET_MAX).map((memory) => ({ memory, arrivesAt: arrivalWords(memory) }));
   const others = candidates.length - listed3.length;
-  const budgetOf = (toFit, freed2, next) => ({ candidates: listed3, others, toFit, freed: freed2, next });
+  const startOnly = blockersOf(memories).startOnly;
+  const budgetOf = (toFit, freed2, next) => ({
+    candidates: listed3,
+    others,
+    toFit,
+    freed: freed2,
+    next,
+    ...startOnly === 0 ? {} : { startOnly: BUDGET_TEXT.startOnly(startOnly) }
+  });
   if (memories.length === 0) return budgetOf(0, 0, BUDGET_TEXT.noIndex);
   const fitsToday = today.unshown === 0 && today.shortened === 0;
-  if (candidates.length === 0) {
+  const pointerOf = () => (plans ?? indexPlans(input2, place)).fitting.length > 0 ? BUDGET_TEXT.pointer : "";
+  if (moves.length === 0) {
     const blockers = blockersOf(memories);
-    return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove(blockers)) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockers));
+    return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove(blockers)) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockers, pointerOf()));
   }
   if (fitsToday) return budgetOf(0, 0, BUDGET_TEXT.fits);
+  if (candidates.length === 0) return budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockersOf(memories), pointerOf()));
   const fewest = fewestThatFits(input2, place, candidates);
-  if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length, blockersOf(memories)));
+  if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length, blockersOf(memories), pointerOf()));
   const moved = candidates.slice(0, fewest);
   const freed = freedBy(today.parts, moved);
   const userMoves = userScopeOf(moved);
@@ -48476,9 +48503,13 @@ var PLAN_TEXT = {
   /**
    * No rewrite and no demotion brings it under, and the walk was not cut short: it prices every rewrite count up to
    * INDEX_PLANS_MAX, and each count costs one probe at the floor cut, at most a halving on the moves, and a cut bought
-   * only for the ways the answer names, so it always finishes (#420 re-review, #421, #422). The reason is the start's own
-   * (#471 How line 7): moving every movable line fits whenever any plan does, since a move frees at least as much as a
-   * rewrite and the fill is monotone (#317), so what stops every plan is what stays on the start, never the floor.
+   * only for the ways the answer names, so it always finishes (#420 re-review, #421, #422).
+   *
+   * "No combination" is a claim about every plan, which the walk alone cannot make: it stops at INDEX_PLANS_MAX rewrites,
+   * so the fallback (`beyondTheCap`) first prices the largest reduction any plan may make and, when that fits, names the
+   * plan the walk could not reach (fix round 1, finding 4). When the fallback finds nothing either, the claim holds, and
+   * the reason is the start's own (#471 How line 7): what stays on the start -- the enforced, high and handoff lines and
+   * those that save no room -- stops every plan, never the floor.
    */
   nothing: (blockers) => `No combination of shorter summaries and memories moved off the start takes it under its budget: ${blockerWords(blockers)}.${adviceWords(blockers)}`,
   // `others` is how many more plans fit. The sentence says nothing about their counts: on every store measured they
@@ -48529,13 +48560,13 @@ function indexPlans(input2, place) {
   const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
   if (today.unshown === 0 && today.shortened === 0) return { today: todayParts, fitting: [], next: PLAN_TEXT.fits };
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
-  const moves = movableLines(memories);
-  const rewrites = [...moves].sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id)).filter((one) => keepsFloor(one.memory));
-  const rewritable = Math.min(rewrites.length, INDEX_PLANS_MAX);
+  const rewritable = movableLines(memories);
+  const moves = rewritable.filter((one) => one.moment);
+  const rewrites = [...rewritable].sort((a, b) => b.line - a.line || compareText3(a.memory.id, b.memory.id)).filter((one) => keepsFloor(one.memory));
+  const rewritableCount = Math.min(rewrites.length, INDEX_PLANS_MAX);
   const movesFor = (rewritesOf) => {
     const named2 = new Set(rewritesOf.map((memory) => memory.id));
-    const pool = rewritesOf.some((memory) => hasOwnMoment(memory)) ? moves.filter((one) => one.moment) : moves;
-    return pool.flatMap((one) => named2.has(one.memory.id) ? [] : [one.memory]);
+    return moves.flatMap((one) => named2.has(one.memory.id) ? [] : [one.memory]);
   };
   const found = [];
   const atFloor = (k) => k === 0 ? 0 : floorCap(rewrites.slice(0, k));
@@ -48570,7 +48601,7 @@ function indexPlans(input2, place) {
     }
     return high;
   };
-  for (let k = 0; k <= rewritable; k += 1) {
+  for (let k = 0; k <= rewritableCount; k += 1) {
     const atShortest = planIn(k, 0, atFloor(k));
     if (atShortest !== null) {
       found.push({ plan: atShortest, longestCut: () => atLongestCap(k, 0) });
@@ -48584,6 +48615,10 @@ function indexPlans(input2, place) {
   const dominated = (plan) => found.some(
     (other) => other.plan !== plan && other.plan.changes < plan.changes && other.plan.elsewhere <= plan.elsewhere && other.plan.demote.length <= plan.demote.length
   );
+  if (found.length === 0) {
+    const fallback = beyondTheCap(input2, place, rewrites, moves, charactersOf);
+    if (fallback !== null) found.push({ plan: fallback, longestCut: () => fallback });
+  }
   const undominated = found.filter(({ plan }) => !dominated(plan));
   const named = undominated.sort((a, b) => a.plan.elsewhere - b.plan.elsewhere || a.plan.changes - b.plan.changes || a.plan.shorten.length - b.plan.shorten.length).slice(0, INDEX_PLANS_SHOWN);
   const ranked = named.map((one) => one.longestCut()).filter((plan) => plan !== null);
@@ -48592,6 +48627,67 @@ function indexPlans(input2, place) {
     fitting: ranked,
     next: ranked.length === 0 ? PLAN_TEXT.nothing(blockersOf(memories)) : PLAN_TEXT.cheapest(ranked[0], ranked.length - 1) + PLAN_TEXT.elsewhere(ranked[0])
   };
+}
+function beyondTheCap(input2, place, rewrites, moves, charactersOf) {
+  const rewritePool = rewrites.filter((one) => !one.moment).map((one) => one.memory);
+  const movePool = moves.map((one) => one.memory);
+  const floorRoom = (memory) => {
+    const shown2 = shownText(memory.summary);
+    if (shown2.length <= SUMMARY_FLOOR) return shown2.length;
+    for (let room = SUMMARY_FLOOR; room <= shown2.length; room += 1) if (shown2.slice(0, room).trimEnd().length >= SUMMARY_FLOOR) return room;
+    return shown2.length;
+  };
+  const cutAt = (memory, extra) => shownText(memory.summary).slice(0, Math.min(shownText(memory.summary).length, floorRoom(memory) + extra)).trimEnd();
+  const planAt = (k2, j2, extra) => {
+    if (k2 + j2 === 0) return null;
+    const rewrite = rewritePool.slice(0, k2);
+    const moved = movePool.slice(0, j2);
+    const cut = new Map(rewrite.map((memory) => [memory.id, cutAt(memory, extra)]));
+    const movedIds = new Set(moved.map((memory) => memory.id));
+    const active = input2.resolution.active.map((memory) => {
+      if (movedIds.has(memory.id)) return { ...memory, delivery: "on-demand" };
+      const summary = cut.get(memory.id);
+      return summary === void 0 ? memory : { ...memory, summary };
+    });
+    const fill = startFill(input2, place, active);
+    if (fill.unshown > 0 || fill.shortened > 0) return null;
+    const priced = rewrite.map((memory) => ({ memory, summary: cut.get(memory.id) }));
+    if (priced.some(({ summary }) => summary.length < SUMMARY_FLOOR)) return null;
+    return {
+      shorten: priced.map(({ memory, summary }) => ({ memory, summaryLength: { today: shownText(memory.summary).length, after: summary.length } })),
+      demote: moved.map((memory) => ({ memory, arrivesAt: arrivalWords(memory) })),
+      changes: k2 + j2,
+      userScope: userScopeOf([...rewrite, ...moved]),
+      elsewhere: userScopeOf(moved),
+      characters: charactersOf(fill)
+    };
+  };
+  const fewestOf = (fits, most) => {
+    if (!fits(most)) return null;
+    if (fits(0)) return 0;
+    let low = 0;
+    let high = most;
+    while (high - low > 1) {
+      const middle = Math.floor((low + high) / 2);
+      if (fits(middle)) high = middle;
+      else low = middle;
+    }
+    return high;
+  };
+  const k = fewestOf((n) => planAt(n, movePool.length, 0) !== null, rewritePool.length);
+  if (k === null) return null;
+  const j = fewestOf((n) => planAt(k, n, 0) !== null, movePool.length);
+  if (j === null) return null;
+  const longest = Math.max(...rewritePool.slice(0, k).map((memory) => shownText(memory.summary).length - floorRoom(memory)));
+  let fitsAt = 0;
+  let missesAt = longest;
+  if (planAt(k, j, missesAt) !== null) return planAt(k, j, missesAt);
+  while (missesAt - fitsAt > 1) {
+    const middle = Math.floor((fitsAt + missesAt) / 2);
+    if (planAt(k, j, middle) !== null) fitsAt = middle;
+    else missesAt = middle;
+  }
+  return planAt(k, j, fitsAt);
 }
 function longestCap(planAt, k, j, floor, longest) {
   let fitsAt = floor;
@@ -49913,7 +50009,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every place loads; a handoff never moves, and each candidate carries where it still arrives once moved, arrivesAt; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: only the ones that still arrive at a call or a failure of their own, each carrying where it still arrives once moved, arrivesAt, this place's own before the ones every place loads; a handoff never moves, and no plan and no move list offers a memory that would then arrive only by search; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), and the count of index memories that reach Claude only at the start, which each needs a moment of its own before it can leave (indexBudget.startOnly, absent when there are none), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
@@ -50738,6 +50834,8 @@ ${TRACK_LOST_LINE}`;
             toFit: budget.toFit,
             freed: budget.freed,
             next: budget.next,
+            // The count of #476 AC3, absent when there is nothing to count, so a report with none carries no such sentence.
+            ...budget.startOnly === void 0 ? {} : { startOnly: budget.startOnly },
             plans: {
               today: plans.today,
               fitting: plans.fitting.map(planOf),
