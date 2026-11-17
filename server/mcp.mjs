@@ -45992,7 +45992,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.24",
+  version: "0.5.25",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46810,6 +46810,619 @@ function compareText(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// src/calls.ts
+var BESIDE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "Skill", "WebSearch"]);
+var MCP_READ_WORDS = /* @__PURE__ */ new Set(["get", "list", "search", "read", "find", "describe", "fetch"]);
+var MCP_JOIN_WORDS = /* @__PURE__ */ new Set(["and", "or", "then"]);
+var MCP_WRITE_WORDS = /* @__PURE__ */ new Set([
+  "create",
+  "update",
+  "delete",
+  "add",
+  "remove",
+  "send",
+  "set",
+  "write",
+  "edit",
+  "post",
+  "put",
+  "patch",
+  "push",
+  "move",
+  "run",
+  "execute",
+  "import",
+  "apply",
+  "close",
+  "resolve",
+  "merge",
+  "replace",
+  "lock",
+  "insert",
+  "upsert",
+  "upload",
+  "publish",
+  "archive",
+  "rename",
+  "revoke",
+  "grant"
+]);
+var READING_COMMANDS = /* @__PURE__ */ new Set([
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "echo",
+  "printf",
+  "pwd",
+  "whoami",
+  "date",
+  "env",
+  "file",
+  "tree",
+  "grep",
+  "rg",
+  "find",
+  "sort",
+  "cd"
+]);
+var POWERSHELL_READING = /* @__PURE__ */ new Set([
+  "select-object",
+  "select-string",
+  "sort-object",
+  "measure-object",
+  "format-table",
+  "format-list",
+  "test-path",
+  "resolve-path",
+  "split-path",
+  "join-path",
+  "write-output",
+  "out-string",
+  "compare-object",
+  "group-object",
+  "where-object"
+]);
+function changesNothing(call) {
+  const tool = call.tool.trim();
+  if (BESIDE_TOOLS.has(tool)) return true;
+  if (tool.startsWith("mcp__")) return mcpNameReads(tool);
+  if (tool === "Bash" || tool === "PowerShell") {
+    if (call.calls.length === 0) return false;
+    return call.calls.every((command) => commandReads(command, tool === "PowerShell"));
+  }
+  return false;
+}
+function mcpNameReads(tool) {
+  const at = tool.lastIndexOf("__");
+  const words = (at === -1 ? tool : tool.slice(at + 2)).replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().split(/[^a-z0-9]+/).filter((one) => one !== "");
+  const [first] = words;
+  if (first === void 0 || !MCP_READ_WORDS.has(first)) return false;
+  return !words.some((one) => MCP_JOIN_WORDS.has(one) || MCP_WRITE_WORDS.has(one));
+}
+function commandReads(command, powershell) {
+  if (SMART_QUOTES.test(command)) return false;
+  const scanned = scan(command, 0, false);
+  if (scanned === null || scanned.parts.length === 0) return false;
+  return scanned.parts.every((part) => partReads(part, powershell));
+}
+function partReads(part, powershell) {
+  const [head, ...args2] = part;
+  if (head === void 0 || ASSIGNMENT.test(head)) return false;
+  if (powershell) return head.toLowerCase().startsWith("get-") || POWERSHELL_READING.has(head.toLowerCase());
+  if (head === "git") return gitReads(args2);
+  if (!READING_COMMANDS.has(head)) return false;
+  return readsArguments(head, args2);
+}
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var ALLOWED = {
+  ls: /* @__PURE__ */ new Set([
+    "-a",
+    "-A",
+    "-l",
+    "-h",
+    "-r",
+    "-t",
+    "-S",
+    "-R",
+    "-d",
+    "-1",
+    "-F",
+    "-p",
+    "-i",
+    "-s",
+    "-n",
+    "-G",
+    "--color",
+    "--all",
+    "--almost-all",
+    "--long",
+    "--human-readable",
+    "--reverse",
+    "--recursive",
+    "--directory",
+    "--group-directories-first"
+  ]),
+  cat: /* @__PURE__ */ new Set(["-n", "-b", "-s", "-E", "-T", "-A", "-v"]),
+  head: /* @__PURE__ */ new Set(["-n", "-c", "-q", "-v", "--lines", "--bytes", "--quiet", "--verbose"]),
+  tail: /* @__PURE__ */ new Set(["-n", "-c", "-q", "-v", "--lines", "--bytes", "--quiet", "--verbose"]),
+  wc: /* @__PURE__ */ new Set(["-l", "-w", "-c", "-m", "-L"]),
+  // These take no option at all, as the How line says: `echo -e`, `pwd -P` and `env -i ls` stop.
+  echo: /* @__PURE__ */ new Set([]),
+  printf: /* @__PURE__ */ new Set([]),
+  pwd: /* @__PURE__ */ new Set([]),
+  whoami: /* @__PURE__ */ new Set([]),
+  date: /* @__PURE__ */ new Set(["-u", "-R", "-I"]),
+  env: /* @__PURE__ */ new Set([]),
+  file: /* @__PURE__ */ new Set(["-b", "-i", "-k", "-L", "-n", "-N", "-z", "--mime", "--mime-type", "--mime-encoding", "--brief"]),
+  tree: /* @__PURE__ */ new Set(["-a", "-d", "-f", "-i", "-l", "-q", "-s", "-p", "-u", "-g", "-h", "-D", "-L", "--noreport"]),
+  grep: /* @__PURE__ */ new Set([
+    "-n",
+    "-i",
+    "-v",
+    "-w",
+    "-l",
+    "-c",
+    "-r",
+    "-R",
+    "-E",
+    "-F",
+    "-G",
+    "-H",
+    "-h",
+    "-s",
+    "-q",
+    "-o",
+    "-A",
+    "-B",
+    "-C",
+    "-e",
+    "-f",
+    "--include",
+    "--exclude",
+    "--exclude-dir",
+    "--color",
+    "--line-number"
+  ]),
+  rg: /* @__PURE__ */ new Set([
+    "-n",
+    "-i",
+    "-w",
+    "-l",
+    "-c",
+    "-v",
+    "-F",
+    "-e",
+    "-A",
+    "-B",
+    "-C",
+    "-g",
+    "-t",
+    "-T",
+    "--glob",
+    "--type",
+    "--type-not",
+    "--count",
+    "--count-matches",
+    "--files-with-matches",
+    "--invert-match",
+    "--ignore-case",
+    "--word-regexp",
+    "--fixed-strings",
+    "--line-number",
+    "--context",
+    "--after-context",
+    "--before-context",
+    "--max-count"
+  ]),
+  // Every action that writes or runs (`-delete`, `-exec`, `-fprint` and their kin) is simply absent.
+  find: /* @__PURE__ */ new Set([
+    "-name",
+    "-iname",
+    "-path",
+    "-ipath",
+    "-type",
+    "-size",
+    "-mtime",
+    "-newer",
+    "-maxdepth",
+    "-mindepth",
+    "-not",
+    "-o",
+    "-a",
+    "-print",
+    "-print0",
+    "-prune",
+    "-depth",
+    "-xdev",
+    "-H",
+    "-L",
+    "-P"
+  ]),
+  sort: /* @__PURE__ */ new Set([
+    "-b",
+    "-c",
+    "-d",
+    "-f",
+    "-g",
+    "-h",
+    "-i",
+    "-k",
+    "-m",
+    "-n",
+    "-r",
+    "-R",
+    "-s",
+    "-t",
+    "-u",
+    "-V",
+    "-z",
+    "--check",
+    "--dictionary-order",
+    "--field-separator",
+    "--ignore-case",
+    "--ignore-leading-blanks",
+    "--key",
+    "--month-sort",
+    "--numeric-sort",
+    "--reverse",
+    "--stable",
+    "--unique",
+    "--version-sort"
+  ]),
+  cd: /* @__PURE__ */ new Set([])
+};
+var COUNT_COMMANDS = /* @__PURE__ */ new Set(["head", "tail"]);
+var GIT_ALLOWED = {
+  status: /* @__PURE__ */ new Set(["-s", "-b", "-u", "-z", "--short", "--branch", "--porcelain", "--untracked-files", "--ignored"]),
+  log: /* @__PURE__ */ new Set([
+    "-n",
+    "-p",
+    "-u",
+    "-s",
+    "-v",
+    "-w",
+    "-M",
+    "-C",
+    "--stat",
+    "--numstat",
+    "--oneline",
+    "--graph",
+    "--name-only",
+    "--name-status",
+    "--decorate",
+    "--pretty",
+    "--format",
+    "--author",
+    "--since",
+    "--until",
+    "--grep",
+    "--no-merges",
+    "--first-parent",
+    "--follow",
+    "--abbrev-commit"
+  ]),
+  show: /* @__PURE__ */ new Set(["-s", "-p", "-u", "--stat", "--oneline", "--name-only", "--name-status", "--pretty", "--format", "--abbrev-commit"]),
+  diff: /* @__PURE__ */ new Set([
+    "-u",
+    "-p",
+    "-s",
+    "-w",
+    "-M",
+    "-C",
+    "--stat",
+    "--numstat",
+    "--name-only",
+    "--name-status",
+    "--no-index",
+    "--word-diff",
+    "--color",
+    "--no-color",
+    "--cached",
+    "--staged"
+  ]),
+  blame: /* @__PURE__ */ new Set(["-L", "-C", "-M", "-w", "-s", "-e", "--line-porcelain", "--porcelain", "--show-name", "--show-number"]),
+  branch: /* @__PURE__ */ new Set([
+    "-a",
+    "-r",
+    "-v",
+    "-vv",
+    "-l",
+    "--all",
+    "--remotes",
+    "--verbose",
+    "--list",
+    "--show-current",
+    "--contains",
+    "--no-contains",
+    "--merged",
+    "--no-merged",
+    "--points-at",
+    "--sort",
+    "--format",
+    "--color",
+    "--no-color",
+    "--column",
+    "--no-column"
+  ]),
+  tag: /* @__PURE__ */ new Set(["-l", "--list"]),
+  remote: /* @__PURE__ */ new Set(["-v", "--verbose"]),
+  stash: /* @__PURE__ */ new Set(["list", "show"]),
+  config: /* @__PURE__ */ new Set(["-l", "--get", "--get-all", "--list"]),
+  describe: /* @__PURE__ */ new Set(["--tags", "--always", "--long", "--dirty", "--all", "--abbrev"]),
+  "rev-parse": /* @__PURE__ */ new Set([
+    "--git-dir",
+    "--show-toplevel",
+    "--show-prefix",
+    "--abbrev-ref",
+    "--verify",
+    "--short",
+    "--is-inside-work-tree",
+    "--is-bare-repository",
+    "--all",
+    "--branches",
+    "--tags",
+    "--remotes"
+  ]),
+  "ls-files": /* @__PURE__ */ new Set([
+    "-z",
+    "-s",
+    "-c",
+    "-o",
+    "-m",
+    "-d",
+    "-i",
+    "--cached",
+    "--others",
+    "--modified",
+    "--deleted",
+    "--ignored",
+    "--stage",
+    "--exclude-standard"
+  ]),
+  grep: /* @__PURE__ */ new Set([
+    "-n",
+    "-i",
+    "-v",
+    "-w",
+    "-l",
+    "-c",
+    "-E",
+    "-F",
+    "-G",
+    "-H",
+    "-h",
+    "-s",
+    "-e",
+    "-f",
+    "-A",
+    "-B",
+    "-C",
+    "--include",
+    "--exclude",
+    "--color",
+    "--line-number",
+    "--invert-match",
+    "--ignore-case",
+    "--fixed-strings",
+    "--files-with-matches",
+    "--count"
+  ]),
+  version: /* @__PURE__ */ new Set([])
+};
+var GIT_COUNT_SUBCOMMANDS = /* @__PURE__ */ new Set(["log"]);
+var NOT_AN_OPTION = /* @__PURE__ */ new Set(["-"]);
+var COUNT_TOKEN = /^-\d+$/;
+var ATTACHED_DIGITS = /^-[A-Za-z]+\d+$/;
+function optionsAllowed(args2, list, counts) {
+  for (const token of args2) {
+    if (!token.startsWith("-") || NOT_AN_OPTION.has(token)) continue;
+    if (token.startsWith("--")) {
+      const eq = token.indexOf("=");
+      const name = eq === -1 ? token : token.slice(0, eq);
+      if (!list.has(name)) return false;
+      continue;
+    }
+    if (counts && COUNT_TOKEN.test(token)) continue;
+    if (ATTACHED_DIGITS.test(token) && [...token.slice(1).replace(/\d+$/, "")].every((letter) => list.has(`-${letter}`))) continue;
+    if (list.has(token)) continue;
+    if (![...token.slice(1)].every((letter) => list.has(`-${letter}`))) return false;
+  }
+  return true;
+}
+function positionalsOf(args2) {
+  return args2.filter((token) => !token.startsWith("-") || NOT_AN_OPTION.has(token));
+}
+function readsArguments(command, args2) {
+  const list = ALLOWED[command];
+  if (list === void 0) return false;
+  if (!optionsAllowed(args2, list, COUNT_COMMANDS.has(command))) return false;
+  const positional = positionalsOf(args2);
+  switch (command) {
+    case "date":
+      return positional.every((one) => one.startsWith("+"));
+    case "cd":
+      return positional.length <= 1;
+    case "env":
+      return args2.length === 0;
+    default:
+      return true;
+  }
+}
+var LIST_MODE_FILTERS = ["--contains", "--no-contains", "--merged", "--no-merged", "--points-at"];
+function gitReads(args2) {
+  let at = 0;
+  while (at < args2.length && (args2[at] ?? "").startsWith("-")) {
+    const token = args2[at] ?? "";
+    if (token === "-C") at += 2;
+    else if (token === "--no-pager") at += 1;
+    else if (token === "--version" || token === "-v") return true;
+    else return false;
+  }
+  const sub = args2[at];
+  if (sub === void 0) return true;
+  const list = GIT_ALLOWED[sub];
+  if (list === void 0) return false;
+  const rest = args2.slice(at + 1);
+  if (!optionsAllowed(rest, list, GIT_COUNT_SUBCOMMANDS.has(sub))) return false;
+  const positional = positionalsOf(rest);
+  if (sub === "branch") {
+    const listing = rest.some((one) => LIST_MODE_FILTERS.some((filter) => one === filter || one.startsWith(`${filter}=`))) || rest.some((one) => one === "--list" || one === "-l");
+    return positional.length === 0 || listing && positional.length === 1;
+  }
+  if (sub === "tag") {
+    const listing = rest.some((one) => one === "--list" || one === "-l");
+    return positional.length === 0 || listing && positional.length === 1;
+  }
+  if (sub === "stash") {
+    return positional.length === 1 && (positional[0] === "list" || positional[0] === "show");
+  }
+  if (sub === "remote") {
+    return positional.length === 0;
+  }
+  if (sub === "config") {
+    return rest[0] === "--get" || rest[0] === "--get-all" || rest[0] === "--list" || rest[0] === "-l";
+  }
+  return true;
+}
+var SEPARATOR_CHARS = ";&|\n";
+var SMART_QUOTES = /[‘’‚‛“”„]/;
+var REDIRECTION_STOPS = " 	;&|\n<>";
+function scan(text, from, nested) {
+  const parts = [];
+  let words = [];
+  let word = "";
+  let open4 = false;
+  const endWord = () => {
+    if (open4) {
+      words.push(word);
+      word = "";
+      open4 = false;
+    }
+  };
+  const endPart = () => {
+    endWord();
+    if (words.length > 0) parts.push(words);
+    words = [];
+  };
+  const skip = () => {
+    while (text[i] === " " || text[i] === "	") i += 1;
+  };
+  const wordTo = () => {
+    let one = "";
+    while (i < text.length && !REDIRECTION_STOPS.includes(text[i] ?? "")) {
+      one += text[i];
+      i += 1;
+    }
+    return one;
+  };
+  const writtenNowhere = () => {
+    skip();
+    if (text.startsWith("&1", i) || text.startsWith("&2", i)) {
+      const after = text[i + 2] ?? "";
+      if (!REDIRECTION_STOPS.includes(after) || after === "<" || after === ">") return false;
+      i += 2;
+      return true;
+    }
+    return wordTo() === "/dev/null";
+  };
+  let i = from;
+  while (i < text.length) {
+    const c = text[i] ?? "";
+    if (c === " " || c === "	") {
+      endWord();
+      i += 1;
+      continue;
+    }
+    if (c === "\n" || c === ";") {
+      endPart();
+      i += 1;
+      continue;
+    }
+    if (c === "\\") {
+      const next = text[i + 1];
+      if (next === void 0 || SEPARATOR_CHARS.includes(next) || `'"\`(){}<>`.includes(next)) return null;
+      word += next;
+      open4 = true;
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const close = text.indexOf(c, i + 1);
+      if (close === -1) return null;
+      const run = text.slice(i + 1, close);
+      const other = c === "'" ? '"' : "'";
+      if ([...run].some((one) => SEPARATOR_CHARS.includes(one) || one === other || one === "`")) return null;
+      if (SMART_QUOTES.test(run) || run.includes("$(")) return null;
+      if (c === '"' && /\\[;&|<>(){}'"`]/.test(run)) return null;
+      if (c === "'" && /\\[;&|<>(){}'"`]/.test(run)) return null;
+      word += run;
+      open4 = true;
+      i = close + 1;
+      continue;
+    }
+    if (c === "`" || c === "(" || c === "{" || c === "}") return null;
+    if (c === ")" && nested) {
+      endPart();
+      return { parts, at: i + 1 };
+    }
+    if (c === "$" && text[i + 1] === "(") {
+      endWord();
+      const inner = scan(text, i + 2, true);
+      if (inner === null) return null;
+      parts.push(...inner.parts);
+      i = inner.at;
+      continue;
+    }
+    if (c === "<") {
+      if (text.startsWith("<<<", i) || text.startsWith("<<", i) || text.startsWith("<(", i)) return null;
+      if (open4 && (word === "0" || word === "1" || word === "2")) {
+        word = "";
+        open4 = false;
+      } else endWord();
+      i += 1;
+      if (text[i] === ">") return null;
+      skip();
+      const target = wordTo();
+      if (target === "" || /[$`'"(){}\\]/.test(target)) return null;
+      continue;
+    }
+    if (c === ">") {
+      if (text.startsWith(">(", i)) return null;
+      if (open4 && (word === "0" || word === "1" || word === "2")) {
+        word = "";
+        open4 = false;
+      } else endWord();
+      i += text.startsWith(">>", i) || text.startsWith(">|", i) ? 2 : 1;
+      if (!writtenNowhere()) return null;
+      continue;
+    }
+    if (c === "&") {
+      if (text.startsWith("&>>", i) || text.startsWith("&>", i)) {
+        i += text.startsWith("&>>", i) ? 3 : 2;
+        if (!writtenNowhere()) return null;
+        continue;
+      }
+      endPart();
+      i += text.startsWith("&&", i) ? 2 : 1;
+      continue;
+    }
+    if (c === "|") {
+      endPart();
+      i += text.startsWith("||", i) ? 2 : text.startsWith("|&", i) ? 2 : 1;
+      continue;
+    }
+    if (c === ")" || c === ">" || c === "<") return null;
+    word += c;
+    open4 = true;
+    i += 1;
+  }
+  if (nested) return null;
+  endPart();
+  return { parts, at: text.length };
+}
+
 // src/deliver.ts
 var HOOK_CAP = 1e4;
 var WARNING_RESERVE = 600;
@@ -47429,9 +48042,8 @@ function failureDelivered(active, byId, problems, call = NO_FAILURE, claim2 = cl
   return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
 }
 var NO_INPUT = { kind: "call", tool: "", calls: [] };
-var CHANGES_NOTHING = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "Skill"]);
-function refusesAt(tool) {
-  return !CHANGES_NOTHING.has(tool.trim());
+function refuses(call) {
+  return call === "unjudged" || !changesNothing({ tool: call.tool, calls: call.calls });
 }
 function inputAsk(active, problems, call) {
   if (call === "unjudged" || call.tool === "") return { seen: [], named: [] };
@@ -47460,9 +48072,10 @@ function inputAnswer(active, byId, problems, call, claim2) {
   const { text, arrived } = inputDelivered(active, byId, problems, call, claim2);
   if (text === "" || call === "unjudged") return { text, deny: false, arrived };
   const brought = active.some((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
-  return { text: brought && claim2.recorded && refusesAt(call.tool) ? `${REFUSAL_LEAD}
+  const stop = brought && claim2.recorded && refuses(call);
+  return { text: stop ? `${REFUSAL_LEAD}
 
-${text}` : text, deny: brought && claim2.recorded && refusesAt(call.tool), arrived };
+${text}` : text, deny: stop, arrived };
 }
 function unjudgedInputWarning(missing) {
   return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
@@ -49908,7 +50521,7 @@ var markSchema2 = (patternWords) => external_exports.strictObject({
 var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
-var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. Before a command, a tool call, an agent spawn or a web fetch that cannot be taken back, NeoCortex refuses that call once with this memory as the reason; beside the result of a write, an edit, a read or a skill. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call is stopped once with this memory as the reason; made again, it runs. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
 var USER_WORDS_MAX = 2e3;
 var userWordsInput = external_exports.array(textInputSchema.superRefine((entry, ctx) => {
   const character = unshownCharOf(entry);

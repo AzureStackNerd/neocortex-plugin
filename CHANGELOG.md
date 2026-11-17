@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.25 - 2026-11-17
+
+- Changed: a memory about a call that only reads now arrives beside that call instead of stopping it. A shell or
+  PowerShell command NeoCortex knows only reads (a listing, a file shown, a search, a status, joined or with its
+  output sent nowhere), an MCP tool whose name says it reads, and a web search run at once, with the memory beside
+  their result and no refused call in the session. Every other call a memory is about (a push, a delete, a release,
+  a write to an outside system, or one NeoCortex cannot tell only reads) is still stopped once with the memory
+  shown first, as before. Each command's options are checked against a list of reading options, so a writing
+  option stops the call; no stored memory needs changing (#491).
+
 ## 0.5.24 - 2026-11-17
 
 - Fixed: dream_report no longer recommends moving a memory off the start when it would then reach Claude only by
