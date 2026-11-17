@@ -166,7 +166,8 @@ NeoCortex knows only reads — a command that only lists, shows, searches or ech
 search — gets the memory **beside its result**, so the call runs at once, and so do a write, an edit, a read, a search
 and a skill, so Claude can correct the file or follow the memory while doing what the skill says. Every other call — one
 that cannot be taken back, and one NeoCortex cannot tell only reads — is **refused once** with the memory as the reason,
-before it runs, and the same call then runs. Its `tool` may name several tools separated by `|`, such as
+before it runs, and the same call then runs; a refusal's reason is not held to the 10,000 characters a hook's context
+gets, so every memory about that call is in it. Its `tool` may name several tools separated by `|`, such as
 `Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
 merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry
 one yet.
@@ -224,8 +225,9 @@ Such a rule arrives:
 - before every write or edit of a matching file, and at no other edit;
 - once in each agent's context at the first read of such a file or search for one: a Read, a Grep in that file, a
   Glob or a Grep file filter that names that kind of file, such as `**/*.bicep`, or a Grep by a language type that is
-  the file's extension, such as `ts` or `py`. For a type such as `ps`, `csharp` or `rust` it arrives at the first read of such a file instead. Later
-  reads in that context bring nothing; after a compaction or `/clear` it comes once more;
+  the file's extension, such as `ts` or `py`. For a type such as `ps`, `csharp` or `rust` it arrives at the first read of such a file instead. Once it
+  has arrived in full, later reads in that context bring nothing; a rule that a full hook could only name comes again at
+  the next matching read, and after a compaction or `/clear` it comes once more;
 - in the main conversation and in every subagent, each in its own context.
 
 A pattern names one kind of file: it has no slash, such as `*.md`, or starts with `**/`, such as `**/infra/*.bicep`. It

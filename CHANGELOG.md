@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.5.26 - 2026-11-17
+
+- Fixed: a memory that did not fit a full hook was named once and then never came back in that context. It now
+  arrives in full at its next matching call, failed call, read or search in the same context, until it has
+  arrived once; when several each fit only alone, each moment brings the next. A memory too large to fit even
+  alone is still named once. A call NeoCortex stops now carries every memory about it in the one refusal, so
+  nothing about a stopped call is left out and the call made again runs (#492).
+
 ## 0.5.25 - 2026-11-17
 
 - Changed: a memory about a call that only reads now arrives beside that call instead of stopping it. A shell or

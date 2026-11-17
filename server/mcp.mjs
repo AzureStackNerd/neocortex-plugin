@@ -37790,27 +37790,43 @@ var FileOnce = class {
     this.readText = options.readText ?? ((path) => readFile2(path, "utf8"));
   }
   /**
-   * Marks these ids in the agent's row and returns, of each list, the ones it did not hold before, and whether this write
-   * was confirmed. A call that matched nothing takes no lock and records nothing: it has nothing to record, so `recorded`
-   * says true, and the input moment's refusal never rests on that arm (a call that matched nothing refuses nothing).
+   * Marks as had what a moment's fill says it delivered, and answers what this call brings (#492 How line 3).
+   *
+   * `settle` is called on every path, because the moment's text is composed inside it: a path that returned without
+   * calling it would answer with no text at all, and a read that matches no rule would then look like silence. It is
+   * handed the ids this agent's row does not yet hold — those are the ones owed — and it answers which of them this
+   * call now marks as had, and which it names.
+   *
+   * The paths that record nothing answer `recorded: false` and still deliver what was owed: a claim with nothing to
+   * record, a record that cannot be read, and a lock that cannot be taken with no holder seen. A write that fails is the
+   * same: nothing is had, so the next matching moment brings the memory again (S27). A lock another call holds past the
+   * budget still throws OnceBusyError, so the moment answers with its failure line rather than a second copy (S36).
    */
-  async claim(key, ask) {
-    if (ask.seen.length === 0 && ask.named.length === 0) return { seen: /* @__PURE__ */ new Set(), named: /* @__PURE__ */ new Set(), recorded: true };
-    return this.locked(async () => {
-      const rows = await this.read();
-      if (rows === void 0) return { seen: new Set(ask.seen), named: new Set(ask.named), recorded: false };
-      const row = rows.get(key.session)?.get(key.agent);
-      const seenBefore = idsOf(row?.seen);
-      const namedBefore = idsOf(row?.named);
-      const seen = new Set(ask.seen.filter((id) => !seenBefore.has(id)));
-      const named = new Set(ask.named.filter((id) => !namedBefore.has(id)));
-      if (seen.size === 0 && named.size === 0) return { seen, named, recorded: true };
-      const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
-      agents.set(key.agent, { seen: [...seenBefore, ...seen], named: [...namedBefore, ...named], updated: new Date(this.now()).toISOString() });
-      rows.set(key.session, agents);
-      const written = await this.write(rows, key).then(() => true, () => false);
-      return { seen, named, recorded: written };
-    }, () => ({ seen: new Set(ask.seen), named: new Set(ask.named), recorded: false }));
+  async claim(key, ask, settle2) {
+    const every = (owed) => ({ deliver: new Set(owed.seen), recorded: false, answer: settle2(owed) });
+    if (ask.seen.length === 0 && ask.named.length === 0) return { deliver: /* @__PURE__ */ new Set(), recorded: true, answer: settle2({ seen: [], named: [] }) };
+    return this.locked(
+      async () => {
+        const rows = await this.read();
+        if (rows === void 0) return every(ask);
+        const row = rows.get(key.session)?.get(key.agent);
+        const seenBefore = idsOf(row?.seen);
+        const namedBefore = idsOf(row?.named);
+        const owed = ask.seen.filter((id) => !seenBefore.has(id));
+        const answer = settle2({ seen: owed, named: ask.named.filter((id) => !namedBefore.has(id)) });
+        const had = answer.had.filter((id) => owed.includes(id));
+        const keys = answer.claimed ?? answer.named ?? [];
+        const named = keys.filter((key2) => !namedBefore.has(key2));
+        const deliver = new Set(owed);
+        if (had.length === 0 && named.length === 0) return { deliver, recorded: true, answer };
+        const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
+        agents.set(key.agent, { seen: [...seenBefore, ...had], named: [...namedBefore, ...named], updated: new Date(this.now()).toISOString() });
+        rows.set(key.session, agents);
+        const written = await this.write(rows, key).then(() => true, () => false);
+        return { deliver, recorded: written, answer };
+      },
+      () => every(ask)
+    );
   }
   /**
    * Drops the main conversation's row of this session, which a start with a rebuilt context does (S10, S11). The server
@@ -45992,7 +46008,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.25",
+  version: "0.5.26",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47706,8 +47722,8 @@ function fileRulesAt(active, edit) {
 }
 var NO_TARGET = { kind: "no-target" };
 var NO_FAILURE = { kind: "call", tool: "", call: "", problems: [] };
-function claimAll(ask) {
-  return { seen: new Set(ask.seen), named: new Set(ask.named), recorded: false };
+function claimAll(ask, settle2) {
+  return { deliver: new Set(ask.seen), recorded: false, answer: settle2(ask) };
 }
 function judgedBy(target) {
   if (target.kind === "no-target") return null;
@@ -47751,8 +47767,8 @@ function fullParts(kinds, active, byId, budgets, options = {}) {
   const lead = warnings.join("\n\n");
   const rooms = budgets.map((budget, i) => i > 0 || lead === "" ? budget : Math.max(0, budget - lead.length - 2 * warnings.length));
   const brought = kinds.includes("edit") ? active.filter((memory) => memory.delivery !== "edit" || arrivesAtEdit(memory, edit)) : active;
-  const { parts, notFit, kept } = fullText(kinds, brought, byId, rooms, options.priority ?? kinds);
-  return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat(), placedParts: kept, named };
+  const { parts, notFit, kept, settled } = fullText(kinds, brought, byId, rooms, options.priority ?? kinds);
+  return { parts: parts.map((text, i) => i === 0 ? [lead, text].filter((t) => t !== "").join("\n\n") : text), notFit, placed: kept.flat(), placedParts: kept, named, settled };
 }
 function fullArrivals(fill, part = 1) {
   return arrivalsOf(fill.placedParts[part - 1] ?? [], "full", part === 1 ? fill.named : []);
@@ -47851,13 +47867,13 @@ function standingAt(memory, active, byId, problems = []) {
   const left = cases.some(({ after: edit }) => arrivesAtEdit(memory, edit) && !deliveredAt("edit", active, byId, problems, edit).includes(memory));
   return left ? "no-room" : "loads";
 }
-function fullText(kinds, active, byId, rooms, priority) {
+function fullText(kinds, active, byId, rooms, priority, drain = false) {
   const chosen = kinds.flatMap((kind) => active.filter((m) => m.delivery === kind));
   const heading = kinds.includes("startup") ? FULL_HEADING : null;
-  return fillChosen(chosen, byId, rooms, priority, heading, (memory) => loadedText(memory, byId));
+  return fillChosen(chosen, byId, rooms, priority, heading, (memory) => loadedText(memory, byId), drain);
 }
-function fillChosen(chosen, byId, rooms, priority, heading, blockOf) {
-  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0, kept: rooms.map(() => []) };
+function fillChosen(chosen, byId, rooms, priority, heading, blockOf, drain = false) {
+  if (chosen.length === 0) return { parts: rooms.map(() => ""), notFit: 0, kept: rooms.map(() => []), settled: [] };
   const blocks = chosen.map((m) => ({ memory: m, text: blockOf(m, byId) }));
   const rank = (i) => priority.indexOf(blocks[i].memory.delivery);
   const order = blocks.map((_, i) => i).sort((a, b) => rank(a) - rank(b) || a - b);
@@ -47884,13 +47900,18 @@ function fillChosen(chosen, byId, rooms, priority, heading, blockOf) {
   };
   let warn = false;
   let more = false;
-  let result = fill(warn, more);
+  const first = fill(false, false);
+  let result = first;
   while (result.skipped.length > 0 && !warn || result.spilled && !more) {
     warn ||= result.skipped.length > 0;
     more ||= result.spilled;
     result = fill(warn, more);
   }
+  const stalled = drain && first.kept.some((part) => part.length > 0) && result.kept.every((part) => part.length === 0);
+  if (stalled) result = first;
   const { kept, skipped } = result;
+  const widest = Math.max(0, ...rooms);
+  const settled = skipped.filter((memory) => blocks.find((block) => block.memory === memory).text.length > widest);
   const one = skipped.length === 1;
   const warning = skipped.length === 0 ? [] : [
     `WARNING: ${skipped.length} NeoCortex ${one ? "memory" : "memories"} did not fit Claude Code's ${HOOK_CAP}-character hook cap and ${one ? "is" : "are"} NOT in context: ${listed2(skipped.map(namedInWarning))}. Say so before answering; get_memory shows the text.`
@@ -47899,9 +47920,12 @@ function fillChosen(chosen, byId, rooms, priority, heading, blockOf) {
   const parts = kept.map((memories, p) => {
     const later = kept.slice(p + 1).flat();
     const lastLine = later.length > 0 ? [laterLine(later, p + 2, kept.length)] : [];
-    return [...p === 0 ? [...warning, ...heading === null ? [] : [heading]] : [], ...memories.map((m) => textOf.get(m) ?? ""), ...lastLine].join("\n\n");
+    const content = [...p === 0 && heading !== null ? [heading] : [], ...memories.map((m) => textOf.get(m) ?? ""), ...lastLine];
+    if (p !== 0) return content.join("\n\n");
+    const withWarning = [...warning, ...content].join("\n\n");
+    return stalled && withWarning.length > rooms[0] ? content.join("\n\n") : withWarning;
   });
-  return { parts, notFit: skipped.length, kept };
+  return { parts, notFit: skipped.length, kept, settled };
 }
 function namedInWarning(memory) {
   return `"${shownCut(memory.title, 40)}" (${shortId(memory.id)})`;
@@ -48010,14 +48034,29 @@ function unusableWarning(broken, into) {
   };
   return `WARNING: ${broken.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot use, which matches no file: ${namedWithFiles(broken, patterns, into)}. Say so before answering; ${one ? "the pattern needs" : "the patterns need"} a repair.`;
 }
-function readDelivered(active, byId, problems, target, claim2 = claimAll(readAsk(active, target))) {
-  const named = [];
-  const warnings = [...readWarnings(active, target, claim2, named), brokenWarning(["edit"], problems, named)].filter((warning) => warning !== "");
-  const lead = warnings.join("\n\n");
-  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
-  const brought = active.filter((memory) => memory.delivery === "edit" && claim2.seen.has(memory.id));
-  const { parts, kept } = fullText(["edit"], brought, byId, [room], ["edit"]);
-  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
+function readSettle(active, byId, problems, target) {
+  return (owed) => {
+    const named = [];
+    const unjudged = new Set(owed.seen.filter((id) => {
+      const memory = byId.get(id);
+      return memory !== void 0 && editFiles(memory).state === "unjudged";
+    }));
+    const warnings = [...readWarnings(active, target, owed, unjudged, named), brokenWarning(["edit"], problems, named)].filter((warning) => warning !== "");
+    const lead = warnings.join("\n\n");
+    const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+    const brought = active.filter((memory) => memory.delivery === "edit" && owed.seen.includes(memory.id));
+    const { parts, kept, settled } = fullText(["edit"], brought, byId, [room], ["edit"], true);
+    return {
+      text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"),
+      arrived: arrivalsOf(kept.flat(), "full", named),
+      had: [...kept.flat(), ...settled].map((memory) => memory.id),
+      named,
+      claimed: [...owed.named]
+    };
+  };
+}
+function readText(active, byId, problems, target, claim2 = claimAll(readAsk(active, target), readSettle(active, byId, problems, target))) {
+  return claim2.answer.text;
 }
 function failureAsk(active, problems, call) {
   if (call.tool === "") return { seen: [], named: [] };
@@ -48031,17 +48070,27 @@ function filesHoldAtFailure(memory, call) {
   const path = call.filePath;
   return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
 }
-function failureDelivered(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call))) {
-  const named = [];
-  const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
-  const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
-  const lead = warnings.join("\n\n");
-  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
-  const brought = active.filter((memory) => memory.failure !== void 0 && claim2.seen.has(memory.id));
-  const { parts, kept } = fillChosen(brought, byId, [room], [], null, fullBlock);
-  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
+function failureSettle(active, byId, problems, call) {
+  return (owed) => {
+    const named = [];
+    const naming = problems.filter((problem) => problem.delivery !== void 0 && owed.named.includes(problemKey(problem)));
+    const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
+    const lead = warnings.join("\n\n");
+    const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+    const brought = active.filter((memory) => memory.failure !== void 0 && owed.seen.includes(memory.id));
+    const { parts, kept, settled } = fillChosen(brought, byId, [room], [], null, fullBlock, true);
+    return {
+      text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"),
+      arrived: arrivalsOf(kept.flat(), "full", named),
+      had: [...kept.flat(), ...settled].map((memory) => memory.id),
+      named,
+      claimed: [...owed.named]
+    };
+  };
 }
-var NO_INPUT = { kind: "call", tool: "", calls: [] };
+function failureText(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call), failureSettle(active, byId, problems, call))) {
+  return claim2.answer.text;
+}
 function refuses(call) {
   return call === "unjudged" || !changesNothing({ tool: call.tool, calls: call.calls });
 }
@@ -48058,21 +48107,34 @@ function filesHoldAtInput(memory, call) {
   return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
 }
 var REFUSAL_LEAD = "NeoCortex refuses this call once, on purpose: a memory you saved is about this call, and its rule is below. Read it, then make the call again, changed to follow it or as it is; it will run.";
-function inputDelivered(active, byId, problems, call = NO_INPUT, claim2 = claimAll(inputAsk(active, problems, call))) {
-  const named = [];
-  const naming = problems.filter((problem) => problem.delivery !== void 0 && claim2.named.has(problemKey(problem)));
-  const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
-  const lead = warnings.join("\n\n");
-  const room = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
-  const brought = active.filter((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
-  const { parts, kept } = fillChosen(brought, byId, [room], [], null, fullBlock);
-  return { text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"), arrived: arrivalsOf(kept.flat(), "full", named) };
+function inputSettle(active, byId, problems, call, stopping) {
+  return (owed) => {
+    const named = [];
+    const naming = problems.filter((problem) => problem.delivery !== void 0 && owed.named.includes(problemKey(problem)));
+    const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
+    const lead = warnings.join("\n\n");
+    const capped = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
+    const room = stopping ? Number.MAX_SAFE_INTEGER : capped;
+    const brought = active.filter((memory) => memory.callInput !== void 0 && owed.seen.includes(memory.id));
+    const { parts, kept, settled } = fillChosen(brought, byId, [room], [], null, fullBlock, !stopping);
+    return {
+      text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"),
+      arrived: arrivalsOf(kept.flat(), "full", named),
+      had: [...kept.flat(), ...settled].map((memory) => memory.id),
+      named,
+      claimed: [...owed.named]
+    };
+  };
+}
+function stoppingInput(active, call) {
+  return call !== "unjudged" && call.tool !== "" && refuses(call) && inputAsk(active, [], call).seen.length > 0;
 }
 function inputAnswer(active, byId, problems, call, claim2) {
-  const { text, arrived } = inputDelivered(active, byId, problems, call, claim2);
-  if (text === "" || call === "unjudged") return { text, deny: false, arrived };
-  const brought = active.some((memory) => memory.callInput !== void 0 && claim2.seen.has(memory.id));
-  const stop = brought && claim2.recorded && refuses(call);
+  if (call === "unjudged") return { text: claim2.answer.text, deny: false, arrived: claim2.answer.arrived };
+  const stopping = stoppingInput(active, call);
+  const { text, arrived } = stopping && !claim2.recorded ? inputSettle(active, byId, problems, call, false)({ seen: [...claim2.deliver], named: claim2.answer.claimed }) : claim2.answer;
+  if (text === "") return { text, deny: false, arrived };
+  const stop = claim2.recorded && refuses(call) && active.some((memory) => memory.callInput !== void 0 && claim2.deliver.has(memory.id));
   return { text: stop ? `${REFUSAL_LEAD}
 
 ${text}` : text, deny: stop, arrived };
@@ -48087,7 +48149,7 @@ function problemWarning(problems, into) {
   const records = problems.map(shownProblem).map(({ record: record2, reason }) => `${truncate(record2, 120)} (${truncateReason(reason, 80)})`);
   return `WARNING: ${problems.length} NeoCortex memory ${one ? "record" : "records"} did not load and ${one ? "is" : "are"} NOT in context: ${listed2(records)}. Say so before answering; ` + (problems.some((p) => p.newerFormat !== void 0) ? "a record written by a newer NeoCortex needs NeoCortex updated on this machine, any other record a repair by hand." : `${one ? "the record needs" : "the records need"} a repair by hand.`);
 }
-function readWarnings(active, target, claim2, into) {
+function readWarnings(active, target, owed, unjudgedIds, into) {
   const rules = active.filter((memory) => memory.delivery === "edit");
   if (target.kind === "no-target") {
     return rules.some((memory) => editFiles(memory).state !== "none") ? [
@@ -48095,7 +48157,7 @@ function readWarnings(active, target, claim2, into) {
     ] : [];
   }
   const warnings = [];
-  const unjudged = rules.filter((memory) => claim2.seen.has(memory.id) && editFiles(memory).state === "unjudged");
+  const unjudged = rules.filter((memory) => unjudgedIds.has(memory.id));
   if (unjudged.length > 0) {
     const one = unjudged.length === 1;
     const patterns = (memory) => {
@@ -48106,7 +48168,7 @@ function readWarnings(active, target, claim2, into) {
       `WARNING: ${unjudged.length} NeoCortex ${one ? "memory has" : "memories have"} a file pattern NeoCortex cannot judge yet, a folder or a project memory's, so ${one ? "it arrived" : "they arrived"} at this read or search without NeoCortex checking whether ${one ? "it is" : "they are"} about this file: ${namedWithFiles(unjudged, patterns, into)}. Say so before answering.`
     );
   }
-  const broken = rules.filter((memory) => claim2.named.has(memory.id) && hasUnusable(memory));
+  const broken = rules.filter((memory) => owed.named.includes(memory.id) && hasUnusable(memory));
   if (broken.length > 0) warnings.push(unusableWarning(broken, into));
   return warnings;
 }
@@ -48608,7 +48670,7 @@ function deliveryFor(command, event, input2, extra) {
   const { problems } = input2;
   const full = (kinds, options) => {
     const fill = fullParts(kinds, active, byId, [HOOK_CAP], options);
-    return { text: fill.parts[0], arrived: fullArrivals(fill) };
+    return { text: fill.parts[0], arrived: fullArrivals(fill), had: [...fill.placed, ...fill.settled].map((memory) => memory.id) };
   };
   switch (command) {
     case "index": {
@@ -48629,10 +48691,16 @@ function deliveryFor(command, event, input2, extra) {
     case "edit":
       return full(["edit"], { problems, edit: extra.edit ?? NO_FILE });
     case "read":
-    case "search":
-      return readDelivered(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH), extra.read?.claim);
-    case "failure":
-      return failureDelivered(active, byId, problems, extra.failure ?? NO_FAILURE, extra.failure?.claim);
+    case "search": {
+      const answer = extra.read?.claim?.answer;
+      const text = answer?.text ?? readText(active, byId, problems, extra.read?.target ?? (command === "read" ? NO_TARGET : NO_SEARCH));
+      return { text, arrived: answer?.arrived ?? [] };
+    }
+    case "failure": {
+      const answer = extra.failure?.claim?.answer;
+      const text = answer?.text ?? failureText(active, byId, problems, extra.failure ?? NO_FAILURE);
+      return { text, arrived: answer?.arrived ?? [] };
+    }
     case "input": {
       if (extra.input === void 0) return { text: "", arrived: [] };
       const { text, arrived } = inputAnswer(active, byId, problems, extra.input.call, extra.input.claim);
@@ -50847,7 +50915,7 @@ function createServer(deps) {
     () => void 0,
     () => void 0
   );
-  const claimed = (key, ask) => deps.once === void 0 || key.session === "" ? Promise.resolve(claimAll(ask)) : deps.once.claim(key, ask);
+  const claimed = (key, ask, settle2) => deps.once === void 0 || key.session === "" ? Promise.resolve(claimAll(ask, settle2)) : deps.once.claim(key, ask, settle2);
   const trackLost = /* @__PURE__ */ new Map();
   const settledInTime = (work) => new Promise((resolve5) => {
     const timer = setTimeout(() => resolve5(false), TRACK_WRITE_MS);
@@ -51684,7 +51752,7 @@ ${TRACK_LOST_LINE}`;
         const named = moment === "read" ? readOf(file2, deps.placeDir) : moment === "search" ? searchOf({ path, glob, type, pattern }, deps.placeDir) : void 0;
         const look = named?.kind === "search" ? pathToLookAt(delivery.resolution.active, named) : void 0;
         const target = named?.kind === "search" && look !== void 0 ? { ...named, pathIsFile: isFile(look) } : named;
-        const read2 = target === void 0 ? void 0 : { target, claim: await claimed(key, readAsk(delivery.resolution.active, target)) };
+        const read2 = target === void 0 ? void 0 : { target, claim: await claimed(key, readAsk(delivery.resolution.active, target), readSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, target)) };
         const judged = moment === "failure" ? failedCallOf(tool, given(call) ?? notebook, input2, delivery.problems, interrupted === "true", delivery.resolution.active) : void 0;
         if (judged === "unjudged") {
           const missing = given(tool) === void 0 ? "no tool name" : "no input for the call";
@@ -51692,14 +51760,15 @@ ${TRACK_LOST_LINE}`;
           return { content: [{ type: "text", text: hookOutput(event, warning) }] };
         }
         const failed = judged === void 0 ? void 0 : judged;
-        const failure2 = failed === void 0 ? void 0 : { ...failed, claim: await claimed(key, failureAsk(delivery.resolution.active, delivery.problems, failed)) };
+        const failure2 = failed === void 0 ? void 0 : { ...failed, claim: await claimed(key, failureAsk(delivery.resolution.active, delivery.problems, failed), failureSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, failed)) };
         const callInput = moment === "input" ? inputCallOf(tool, input2, delivery.problems, delivery.resolution.active) : void 0;
         if (callInput === "unjudged") {
           const missing = given(tool) === void 0 ? "no tool name" : "no input for the call";
           return { content: [{ type: "text", text: hookOutput(event, unjudgedInputWarning(missing)) }] };
         }
         const inputCase = callInput === void 0 ? void 0 : callInput;
-        const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase));
+        const stopping = inputCase === void 0 ? false : stoppingInput(delivery.resolution.active, inputCase);
+        const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase), inputSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, stopping));
         const inputAnswerHere = inputCase === void 0 || inputClaim === void 0 ? void 0 : inputAnswer(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, inputClaim);
         const answer = inputAnswerHere ?? deliveryFor(moment, event, delivery, {
           prompt,
@@ -51713,7 +51782,10 @@ ${TRACK_LOST_LINE}`;
           ...conversation2 === void 0 ? {} : { conversation: conversation2 }
         });
         let text = answer.text;
-        if (edit !== void 0 && deps.once !== void 0 && key.session !== "") await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }).catch(() => void 0);
+        if (edit !== void 0 && deps.once !== void 0 && key.session !== "") {
+          const had = "had" in answer && answer.had !== void 0 ? answer.had : fileRulesAt(delivery.resolution.active, edit);
+          await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }, () => ({ text: "", arrived: [], had, named: [], claimed: [] })).catch(() => void 0);
+        }
         dreamOnce(event);
         const deny = inputAnswerHere?.deny === true;
         if (deps.track !== void 0 && tracked !== void 0 && (startPart || answer.arrived.length > 0)) {
