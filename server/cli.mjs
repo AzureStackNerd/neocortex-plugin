@@ -18382,7 +18382,7 @@ import { fileURLToPath } from "node:url";
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.26",
+  version: "0.6.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18409,9 +18409,15 @@ var package_default = {
 };
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input", "reply"];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
-var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure"];
+var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure", "Stop", "SubagentStop"];
+function endsTurn(event) {
+  return event === "Stop" || event === "SubagentStop";
+}
+function uncheckedReplyLine(reason) {
+  return `NeoCortex could not check this reply (${reason}); the memories about replies are NOT in context.`;
+}
 var DEFAULT_EVENT = {
   index: "SessionStart",
   full: "SessionStart",
@@ -18422,7 +18428,8 @@ var DEFAULT_EVENT = {
   search: "PreToolUse",
   subagent: "SubagentStart",
   failure: "PostToolUseFailure",
-  input: "PreToolUse"
+  input: "PreToolUse",
+  reply: "Stop"
 };
 var MISSING = {
   index: "the memory index is",
@@ -18434,12 +18441,14 @@ var MISSING = {
   search: "the search rules are",
   subagent: "the subagent rules are",
   failure: "the failure memories are",
-  input: "the memories about calls are"
+  input: "the memories about calls are",
+  reply: "the memories about replies are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
 }
 function hookFailure(moment, event, reason) {
+  if (endsTurn(event)) return hookJson({ systemMessage: uncheckedReplyLine(reason) });
   return hookJson({
     systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
     hookSpecificOutput: {

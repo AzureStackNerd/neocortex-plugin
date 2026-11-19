@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.6.0 - 2026-11-19
+
+- Added: a memory can be marked with the words of a situation in Claude's own replies ("the tests pass",
+  "ready to release"). When the reply that ends Claude's turn says one of those phrasings, the memory arrives in
+  full at the end of that turn and Claude checks the reply against it before you answer; a subagent gets it
+  before it hands back its report. NeoCortex keeps a turn going at most once per message you send, each memory
+  arrives once per context, and when NeoCortex cannot check a reply you see one line and the turn ends. The
+  memory report counts a reply mark as a moment of its own. New end-of-turn hooks (Stop, SubagentStop); record
+  format 2.4, which an older NeoCortex keeps but does not use (#485).
+- Changed: a conversation's record of the memories it already had now counts as empty once it is more than a
+  day old, so after a day idle every memory arrives once more instead of depending on other sessions (#485).
+
 ## 0.5.26 - 2026-11-17
 
 - Fixed: a memory that did not fit a full hook was named once and then never came back in that context. It now

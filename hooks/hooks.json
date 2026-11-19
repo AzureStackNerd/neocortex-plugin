@@ -318,6 +318,43 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "reply",
+              "event": "${hook_event_name}",
+              "message": "${last_assistant_message}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
+            }
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^.+$",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:neocortex:neocortex",
+            "tool": "hook_context",
+            "input": {
+              "moment": "reply",
+              "event": "${hook_event_name}",
+              "message": "${last_assistant_message}",
+              "session": "${session_id}",
+              "agent": "${agent_id}"
+            }
+          }
+        ]
+      }
     ]
   }
 }

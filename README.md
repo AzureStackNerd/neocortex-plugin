@@ -130,7 +130,7 @@ title, summary and id, as many as fit. When they do not all fit, the lowest-rank
 finds it with `search_memories`. When that happens, the index says so once: Claude reads the moves `dream_report`
 prices, offers them to you, and moves a memory off the start with `update_memory` and `delivery on-demand` only when
 you agree, one call per memory. Those moves never touch a handoff, and they offer only a memory that still arrives at a
-call or a failure of its own: a move that would leave a memory reachable only by `search_memories` is never
+call, a failure or a reply of its own: a move that would leave a memory reachable only by `search_memories` is never
 recommended, and when that leaves no way under the budget the report says so. Every report also counts the memories that
 reach Claude only at the start and says each needs a moment of its own before it can leave. A subagent gets part 1 alone
 and keeps every line whole, so it counts what does not
@@ -171,6 +171,16 @@ gets, so every memory about that call is in it. Its `tool` may name several tool
 `Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
 merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry
 one yet.
+
+A memory can carry a **reply mark** (`reply: {phrases}`) as well: the words of a situation in Claude's own reply, such as
+`["tests pass", "all green"]`. When the reply that ends a turn says any one of them, the turn does not end yet: the
+memory arrives in full and Claude checks that reply against it before you answer. Only the reply that ends a turn is
+heard, never text before an earlier tool call, a tool call's input or your own message. A phrase matches within one line
+of the reply, capitals ignored, `*` for any run of words, with a word boundary at its start; a phrase with no letter or
+digit is refused. It arrives once per agent's context and again after a compaction or `/clear`, and each time it fires
+it costs **one extra reply**, so NeoCortex keeps a turn going at most once per message you send. A subagent's final reply
+is heard the same way before it hands back; Claude Code's own helper agents are not. When NeoCortex cannot check a reply,
+you see one line at the end of the turn and the turn ends. A rule cannot carry one yet.
 
 **Rules.** A memory that loads on its own at a moment (`startup`, `prompt`, `question`, `subagent` or `edit`), or that
 is enforced, is a rule. Claude changes a rule only with `save_rule`, `update_rule` or `delete_rule`, and Claude Code
@@ -374,8 +384,8 @@ written on stale text.
 **The report.** `dream_report` shows this place's cost at each moment, the moves that would bring an oversized start
 under its budget, near duplicates, and what the last dream run did: when it started, whether it ended `ok`, `budget` or
 `failed`, how many proposals it created, and which stage a budget stop stopped. Its plans keep every rewritten summary at
-120 characters or more, never rewrite or move a handoff, and offer only a memory that still arrives at a call or a
-failure of its own, so no move it recommends leaves a memory reachable only by `search_memories`; when no plan fits
+120 characters or more, never rewrite or move a handoff, and offer only a memory that still arrives at a call, a
+failure or a reply of its own, so no move it recommends leaves a memory reachable only by `search_memories`; when no plan fits
 within those bounds it says so rather than naming one, counts the index memories that reach Claude only at the start, and
 says each needs a moment of its own before it can leave. It changes nothing.
 

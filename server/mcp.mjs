@@ -35925,19 +35925,22 @@ var FIELDS_2_0 = [...FIELDS_1_0, "appliesWhen"];
 var FIELDS_2_1 = [...FIELDS_2_0, "failure"];
 var FIELDS_2_2 = [...FIELDS_2_1, "callInput"];
 var FIELDS_2_3 = [...FIELDS_2_2, "userWords"];
+var FIELDS_2_4 = [...FIELDS_2_3, "reply"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
     { version: "2.0", fields: FIELDS_2_0 },
     { version: "2.1", fields: FIELDS_2_1 },
     { version: "2.2", fields: FIELDS_2_2 },
-    { version: "2.3", fields: FIELDS_2_3 }
+    { version: "2.3", fields: FIELDS_2_3 },
+    { version: "2.4", fields: FIELDS_2_4 }
   ],
   // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
   // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means. Nor
   // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means. Nor a 2.2
-  // record: no kept words is what every record before #467 means, and its why may hold words nobody marked (S18).
-  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields }
+  // record: no kept words is what every record before #467 means, and its why may hold words nobody marked (S18). Nor a
+  // 2.3 record: no reply mark is what every record before #485 means (S55).
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields, "2.3": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -36431,6 +36434,130 @@ function aboutMark(mark, kind, tool, calls) {
   if (canonical.pattern === "") return true;
   return calls.some((call) => matchesFailure(canonical.pattern, call));
 }
+function usablePhrase(phrase) {
+  return /[\p{L}\p{N}]/u.test(phrase);
+}
+function canonicalReply(mark) {
+  if (mark === void 0) return void 0;
+  const seen = /* @__PURE__ */ new Set();
+  const phrases = [];
+  for (const raw of mark.phrases) {
+    const phrase = raw.trim();
+    const key = phrase.toLowerCase();
+    if (phrase === "" || seen.has(key)) continue;
+    seen.add(key);
+    phrases.push(phrase);
+  }
+  return phrases.length === 0 ? void 0 : { phrases };
+}
+function sameReply(a, b) {
+  const [x, y] = [canonicalReply(a), canonicalReply(b)];
+  if (x === void 0 || y === void 0) return x === y;
+  const keys = (mark) => [...mark.phrases.map((phrase) => phrase.toLowerCase())].sort();
+  const [xs, ys] = [keys(x), keys(y)];
+  return xs.length === ys.length && xs.every((one, i) => one === ys[i]);
+}
+function usablePhrases(mark) {
+  return (canonicalReply(mark)?.phrases ?? []).filter(usablePhrase);
+}
+function compared(text) {
+  return text.replaceAll("\u2019", "'").replace(/[ \t]+/g, " ").toLowerCase();
+}
+var WORD_CHAR = /[\p{L}\p{N}]/u;
+function lineSays(phrase, line) {
+  const parts = compared(phrase.trim()).split("*");
+  const first = parts[0] ?? "";
+  const bounded = WORD_CHAR.test(first.charAt(0));
+  for (let start = line.indexOf(first); start !== -1; start = line.indexOf(first, start + 1)) {
+    if (bounded && start > 0 && WORD_CHAR.test(line.charAt(start - 1))) continue;
+    let at = start + first.length;
+    let found = true;
+    for (const part of parts.slice(1)) {
+      const next = line.indexOf(part, at);
+      if (next === -1) {
+        found = false;
+        break;
+      }
+      at = next + part.length;
+    }
+    if (found) return true;
+    if (parts.length > 1) return false;
+  }
+  return false;
+}
+function matchesReply(mark, reply) {
+  const phrases = usablePhrases(mark);
+  if (phrases.length === 0) return false;
+  const lines = reply.split(/\r?\n/).map((line) => compared(line.replace(/[`*]/g, "")));
+  return phrases.some((phrase) => lines.some((line) => lineSays(phrase, line)));
+}
+function toolMarkKind(field, what, moment, key, gone, unusable) {
+  return {
+    unusable: (given2) => given2 === void 0 || given2 === null ? void 0 : unusable(given2),
+    field,
+    what,
+    moment,
+    key,
+    of: (holder) => canonicalMark(holder?.[field], field),
+    same: (a, b) => sameMark(a?.[field], b?.[field], field),
+    describe: (value, cut) => {
+      const mark = value;
+      return `${cut(mark.tool)} "${cut(mark.pattern)}"`;
+    },
+    shown: (value, text) => {
+      const mark = value;
+      return { tool: text(mark.tool), pattern: text(mark.pattern) };
+    },
+    gone
+  };
+}
+function holderOf(marks) {
+  const out = {};
+  for (const { kind, mark } of marks) out[kind.field] = mark;
+  return out;
+}
+var MARK_KINDS = [
+  // A failure mark whose tool holds the `|` of a call mark: the failure moment reads it as one literal name and never
+  // matches it, so it would silently never fire.
+  toolMarkKind(
+    "failure",
+    "a failure",
+    "failure",
+    "FailureMark",
+    "arrives at a call judging the failure",
+    (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : void 0
+  ),
+  // A call mark whose tool names nothing after its split (`|`, `| |`, `  `), which could never meet a call.
+  toolMarkKind(
+    "callInput",
+    "a call's input",
+    "input",
+    "CallInputMark",
+    "arrives at a call judging the call's own input",
+    (mark) => toolsOf(mark, "callInput").length === 0 ? "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; leave the mark out (null) to remove it" : void 0
+  ),
+  {
+    // A phrase with no letter or digit would bring the memory at nearly every reply, and a list with none usable at no
+    // reply at all; both are refused rather than stored, since the write would otherwise look like it worked (S42).
+    unusable: (given2) => {
+      if (given2 === void 0 || given2 === null) return void 0;
+      const phrases = given2.phrases;
+      const bad = phrases.filter((phrase) => !usablePhrase(phrase));
+      if (bad.length === 0 && phrases.length > 0) return void 0;
+      const which = bad.length === 0 ? "it gives no phrase" : `${bad.map((phrase) => JSON.stringify(phrase)).join(", ")} ${bad.length === 1 ? "holds" : "hold"} no letter or digit`;
+      return `reply: ${which}, so it would bring the memory at every reply or at none; give the words of the situation as Claude would say them, such as "tests pass", or leave the mark out (null removes it)`;
+    },
+    field: "reply",
+    what: "Claude's reply",
+    moment: "reply",
+    key: "ReplyMark",
+    of: (holder) => canonicalReply(holder?.reply),
+    same: (a, b) => sameReply(a?.reply, b?.reply),
+    describe: (value, cut) => value.phrases.map((phrase) => `"${cut(phrase)}"`).join(" or "),
+    shown: (value, text) => ({ phrases: value.phrases.map(text) }),
+    gone: "arrives at a reply that says those words"
+  }
+];
 
 // src/memory.ts
 var SCOPES = ["user", "project"];
@@ -36591,6 +36718,7 @@ var appliesWhenSchema = external_exports.strictObject({
   files: external_exports.array(external_exports.string()).optional()
 });
 var markSchema = external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() });
+var replyMarkSchema = external_exports.strictObject({ phrases: external_exports.array(external_exports.string()) });
 var frontmatterSchema = external_exports.strictObject({
   id: memoryId,
   title: external_exports.string().trim().min(1),
@@ -36616,7 +36744,10 @@ var frontmatterSchema = external_exports.strictObject({
   // #467 half 1, format 2.3: the user's own words, a list of entries with no dates (How line 1). A stored one is never
   // refused for what it changed to: it loads and shows through shownText, as a stored title and summary do (#322, #345),
   // so a save's own refusal of a character does not make a stored memory unloadable (S50).
-  userWords: external_exports.array(external_exports.string()).optional()
+  userWords: external_exports.array(external_exports.string()).optional(),
+  // #485, format 2.4: the mark about Claude's reply, a top-level field of its own; a hand-edited phrase that cannot be
+  // matched still loads and is skipped by the matcher (S50).
+  reply: replyMarkSchema.optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36772,6 +36903,7 @@ function toFrontmatter(memory) {
   const canonical = canonicalCondition(memory.appliesWhen);
   const mark = canonicalMark(memory.failure, "failure");
   const callMark = canonicalMark(memory.callInput, "callInput");
+  const replyMark = canonicalReply(memory.reply);
   const words = (memory.userWords ?? []).map((entry) => entry.trim()).filter((entry) => entry !== "");
   return {
     id: memory.id,
@@ -36796,7 +36928,9 @@ function toFrontmatter(memory) {
     // #466: the same for the mark about a call, so a record with neither keeps exactly the 2.0 keys.
     ...callMark === void 0 ? {} : { callInput: callMark },
     // #467: absent when no words are kept, so a record without them keeps exactly the 2.2 keys.
-    ...words.length === 0 ? {} : { userWords: words }
+    ...words.length === 0 ? {} : { userWords: words },
+    // #485: absent when the memory is about no reply, so a record without one keeps exactly the 2.3 keys.
+    ...replyMark === void 0 ? {} : { reply: replyMark }
   };
 }
 function issueMessages(issues) {
@@ -37711,11 +37845,17 @@ function messageOf(error62) {
 }
 
 // src/moments.ts
-var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input"];
+var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input", "reply"];
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
 var FULL_PART_BUDGETS = [1e4, 1e4];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
-var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure"];
+var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure", "Stop", "SubagentStop"];
+function endsTurn(event) {
+  return event === "Stop" || event === "SubagentStop";
+}
+function uncheckedReplyLine(reason) {
+  return `NeoCortex could not check this reply (${reason}); the memories about replies are NOT in context.`;
+}
 var MISSING = {
   index: "the memory index is",
   full: "the startup memories are",
@@ -37726,12 +37866,14 @@ var MISSING = {
   search: "the search rules are",
   subagent: "the subagent rules are",
   failure: "the failure memories are",
-  input: "the memories about calls are"
+  input: "the memories about calls are",
+  reply: "the memories about replies are"
 };
 function hookJson(value) {
   return JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item);
 }
 function hookFailure(moment, event, reason) {
+  if (endsTurn(event)) return hookJson({ systemMessage: uncheckedReplyLine(reason) });
   return hookJson({
     systemMessage: `NeoCortex: ${moment} failed: ${reason}`,
     hookSpecificOutput: {
@@ -37809,7 +37951,10 @@ var FileOnce = class {
       async () => {
         const rows = await this.read();
         if (rows === void 0) return every(ask);
-        const row = rows.get(key.session)?.get(key.agent);
+        const row = this.live(rows.get(key.session)?.get(key.agent));
+        if (ask.turn !== void 0 && (row?.held === true || ask.turn === "started" && row?.started !== true)) {
+          return { deliver: /* @__PURE__ */ new Set(), recorded: true, answer: settle2({ seen: [], named: [] }), held: true };
+        }
         const seenBefore = idsOf(row?.seen);
         const namedBefore = idsOf(row?.named);
         const owed = ask.seen.filter((id) => !seenBefore.has(id));
@@ -37818,9 +37963,16 @@ var FileOnce = class {
         const keys = answer.claimed ?? answer.named ?? [];
         const named = keys.filter((key2) => !namedBefore.has(key2));
         const deliver = new Set(owed);
-        if (had.length === 0 && named.length === 0) return { deliver, recorded: true, answer };
+        const holds = ask.turn !== void 0 && answer.holds === true;
+        if (had.length === 0 && named.length === 0 && !holds) return { deliver, recorded: true, answer };
         const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
-        agents.set(key.agent, { seen: [...seenBefore, ...had], named: [...namedBefore, ...named], updated: new Date(this.now()).toISOString() });
+        agents.set(key.agent, {
+          ...row,
+          seen: [...seenBefore, ...had],
+          named: [...namedBefore, ...named],
+          updated: new Date(this.now()).toISOString(),
+          ...holds ? { held: true } : {}
+        });
         rows.set(key.session, agents);
         const written = await this.write(rows, key).then(() => true, () => false);
         return { deliver, recorded: written, answer };
@@ -37848,6 +38000,75 @@ var FileOnce = class {
         throw new Error(`the once record's lock could not be taken (${reason})`);
       }
     );
+  }
+  /**
+   * Releases the row's `held` (#485 How line 11): the user sent a message, so NeoCortex may keep one turn going again
+   * (S60). A row that is not held is read without the lock and left alone, so a prompt with nothing held writes nothing.
+   * Any failure throws; the caller costs that message its continuation, never the prompt's own text (point D).
+   */
+  async release(key) {
+    if (!await this.rowHeld(key)) return;
+    await this.locked(
+      async () => {
+        const rows = await this.read();
+        if (rows === void 0) throw new Error(`the once record ${this.path(FILE)} cannot be read`);
+        const row = rows.get(key.session)?.get(key.agent);
+        if (row === void 0 || row.held !== true) return;
+        const { held: _held, ...rest } = row;
+        rows.get(key.session)?.set(key.agent, rest);
+        await this.write(rows, key);
+      },
+      (reason) => {
+        throw new Error(`the once record's lock could not be taken (${reason})`);
+      }
+    );
+  }
+  /**
+   * Writes a subagent's row as started, with `held` cleared (#485 How line 12): its end of turn is a subagent's, and a
+   * subagent resumed through SendMessage starts again, so it may be kept going once more (point E). Any failure throws;
+   * the start names it in its own text.
+   */
+  async start(key) {
+    await this.locked(
+      async () => {
+        const rows = await this.read();
+        if (rows === void 0) throw new Error(`the once record ${this.path(FILE)} cannot be read`);
+        const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
+        const { held: _held, ...rest } = this.live(agents.get(key.agent)) ?? {};
+        agents.set(key.agent, { ...rest, started: true, updated: new Date(this.now()).toISOString() });
+        rows.set(key.session, agents);
+        await this.write(rows, key);
+      },
+      (reason) => {
+        throw new Error(`the once record's lock could not be taken (${reason})`);
+      }
+    );
+  }
+  /**
+   * The row as it counts (#485 S20, Remco 2026-11-19): undefined when it was last written more than ROW_MS ago, or holds
+   * no time a row is judged by, which is the same age rule `write` sweeps other rows by. Its marks are then no longer
+   * this context's, so the claim judges every memory owed again and writes the row fresh.
+   */
+  live(row) {
+    if (row === void 0) return void 0;
+    const updated = typeof row.updated === "string" ? Date.parse(row.updated) : Number.NaN;
+    return updated >= this.now() - ROW_MS ? row : void 0;
+  }
+  /** Whether the row is held, read without the lock; a record that cannot be read or parsed takes the locked path. */
+  async rowHeld(key) {
+    let text;
+    try {
+      text = await this.readText(this.path(FILE));
+    } catch (error62) {
+      if (codeOf2(error62) === "ENOENT" || codeOf2(error62) === "ENOTDIR") return false;
+      return true;
+    }
+    try {
+      JSON.parse(text);
+    } catch {
+      return true;
+    }
+    return rowsOf(text).get(key.session)?.get(key.agent)?.held === true;
   }
   /**
    * Whether a clear finds nothing to clear before it locks (gate G2): no record, or a record it can read and parse that
@@ -46008,7 +46229,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.5.26",
+  version: "0.6.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46370,7 +46591,10 @@ var CONDITION_TEXT = {
    * every other way out is. which says the field's name, what the mark is about and the moment that answers it, so one
    * text serves both marks.
    */
-  ruleMark: (which, mark, way, update = false) => `${which.field}: a rule cannot be marked about ${which.what} yet (the mark ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"), because the ${which.moment} moment would be a second moment for it${wayList([way, update ? "save the remedy as a memory that is no rule and mark that one" : "save it as a memory that is no rule (index or on-demand) and mark that one"])}`,
+  ruleMark: (which, mark, way) => (
+    // #485 S43: a save and an update name the same way, S43's own words.
+    `${which.field}: a rule cannot be marked about ${which.what} yet (the mark ${mark}), because the ${which.moment} moment would be a second moment for it${wayList([way, "save the remedy as a memory that is no rule and mark that one"])}`
+  ),
   /** The project reason (design-scopes 2.4). */
   project: "appliesWhen: a project memory takes no labels and no inRepo, because its project already fixes where it applies; leave them out, or give the condition to a memory in user scope",
   /** The sixth reason (refinement points 3 and 12): an override of this memory would stop holding. */
@@ -46577,34 +46801,17 @@ function conditionProblems(written, stored, current, existing, named = true) {
   }
   return problems;
 }
-var MARKS = [
-  { field: "failure", what: "a failure", moment: "failure" },
-  { field: "callInput", what: "a call's input", moment: "input" }
-];
 function unusableMarkProblems(given2) {
-  const problems = [];
-  const call = given2.callInput;
-  if (call !== void 0 && call !== null && toolsOf(call, "callInput").length === 0) {
-    problems.push(
-      "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; leave the mark out (null) to remove it"
-    );
-  }
-  const failure2 = given2.failure;
-  if (failure2 !== void 0 && failure2 !== null && failure2.tool.includes("|")) {
-    problems.push(
-      "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead"
-    );
-  }
-  return problems;
+  return MARK_KINDS.flatMap((kind) => kind.unusable(given2[kind.field]) ?? []);
 }
-function markProblems(written, stored, named = true) {
+function markProblems(written, stored, named = true, existing = []) {
   if (!isRule(written)) return [];
-  const way = stored !== void 0 && !isRule(stored);
-  return MARKS.flatMap(({ field, ...which }) => {
-    const mark = canonicalMark(written[field], field);
+  const way = named && (stored !== void 0 ? !isRule(stored) : wayPasses({ ...written, delivery: "index", enforced: false }, void 0, existing));
+  return MARK_KINDS.flatMap((kind) => {
+    const mark = kind.of(written);
     if (mark === void 0) return [];
-    if (stored !== void 0 && isRule(stored) && sameMark(written[field], stored[field], field)) return [];
-    return [CONDITION_TEXT.ruleMark({ field, ...which }, mark, named && way, stored !== void 0)];
+    if (stored !== void 0 && isRule(stored) && kind.same(written, stored)) return [];
+    return [CONDITION_TEXT.ruleMark(kind, kind.describe(mark, (text) => shownCut(text, 80)), way)];
   });
 }
 function resolve4(memories, session, today, here = UNKNOWN_HERE) {
@@ -47577,18 +47784,20 @@ function arrivingMarks(memory) {
   const calls = canonicalMark(memory.callInput, "callInput");
   const failure2 = canonicalMark(memory.failure, "failure");
   const failures = failure2 !== void 0 && failure2.tool.includes("|") ? void 0 : failure2;
-  return filesHold ? { calls, failures } : { calls: void 0, failures: void 0 };
+  const replies = replyPhrases(memory);
+  return filesHold ? { calls, failures, replies } : { calls: void 0, failures: void 0, replies };
 }
 function hasOwnMoment(memory) {
-  const { calls, failures } = arrivingMarks(memory);
-  return calls !== void 0 || failures !== void 0;
+  const { calls, failures, replies } = arrivingMarks(memory);
+  return calls !== void 0 || failures !== void 0 || replies.length > 0;
 }
 var SEARCH_ONLY = "only when you search for it or read it by its id";
 function arrivalWords(memory) {
-  const { calls, failures } = arrivingMarks(memory);
-  const moments = [calls === void 0 ? "" : markWords(calls, "callInput", "a call", "every call"), failures === void 0 ? "" : markWords(failures, "failure", "a failed call", "every failed call")].filter((part) => part !== "");
-  if (moments.length === 0) return SEARCH_ONLY;
-  return moments.join(" and ") + filesWords(memory);
+  const { calls, failures, replies } = arrivingMarks(memory);
+  const marked = [calls === void 0 ? "" : markWords(calls, "callInput", "a call", "every call"), failures === void 0 ? "" : markWords(failures, "failure", "a failed call", "every failed call")].filter((part) => part !== "");
+  const reply = replies.length === 0 ? "" : `when Claude's reply says ${replies.map((phrase) => `"${shownCut(phrase, 80)}"`).join(" or ")}`;
+  if (marked.length === 0 && reply === "") return SEARCH_ONLY;
+  return [marked.length === 0 ? "" : marked.join(" and ") + filesWords(memory), reply].filter((part) => part !== "").join(" and ");
 }
 function markWords(mark, kind, one, every) {
   const tools = toolsOf(mark, kind);
@@ -48142,6 +48351,52 @@ ${text}` : text, deny: stop, arrived };
 function unjudgedInputWarning(missing) {
   return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
 }
+function replyLead(event) {
+  return "NeoCortex: your reply above says what a memory you saved is about; it is below. Check that reply against it now: if the reply already follows it, end your turn with one short line saying so; if not, correct the reply " + (event === "SubagentStop" ? "before you hand back your report." : "before the user acts on it.");
+}
+function replyAsk(active, problems, reply, turn) {
+  if (!active.some(hasReplyMark)) return { seen: [], named: [] };
+  const seen = active.filter((memory) => matchesReply({ phrases: replyPhrases(memory) }, reply)).map((memory) => memory.id);
+  return { seen, named: problems.map(problemKey), turn };
+}
+function hasReplyMark(memory) {
+  return replyPhrases(memory).length > 0;
+}
+function replyPhrases(memory) {
+  return editFiles(memory).state === "none" ? usablePhrases(memory.reply) : [];
+}
+function replySettle(active, byId, problems, event) {
+  return (owed) => {
+    const named = [];
+    const naming = problems.filter((problem) => owed.named.includes(problemKey(problem)));
+    const userLine = problemLine(naming, named);
+    const lead = replyLead(event);
+    const brought = active.filter((memory) => owed.seen.includes(memory.id));
+    const { parts, kept, settled } = fillChosen(brought, byId, [Math.max(0, HOOK_CAP - lead.length - 2)], [], null, fullBlock, true);
+    const body = parts[0] ?? "";
+    const text = body === "" ? "" : `${lead}
+
+${body}`;
+    return {
+      text,
+      arrived: arrivalsOf(kept.flat(), "full", named),
+      had: [...kept.flat(), ...settled].map((memory) => memory.id),
+      named,
+      claimed: [...owed.named],
+      userLine,
+      holds: text !== ""
+    };
+  };
+}
+function problemLine(problems, into) {
+  const warning = problemWarning(problems, into);
+  if (warning === "") return "";
+  const told = warning.replace(/^WARNING: /, "").replace(/Say so before answering; (\w)/, (_whole, first) => first.toUpperCase());
+  return `NeoCortex: ${told}`;
+}
+function replyUncheckedLine(reason) {
+  return uncheckedReplyLine(reason);
+}
 function problemWarning(problems, into) {
   if (problems.length === 0) return "";
   into?.push(...problems.slice(0, MAX_LISTED).flatMap((problem) => problem.id === void 0 ? [] : [problem.id]));
@@ -48359,7 +48614,9 @@ var MOMENT_WORDS = {
   read: "a read",
   search: "a search",
   failure: "a failed call",
-  input: "a call"
+  input: "a call",
+  // #485 S32: the end of a turn whose reply named the memory.
+  reply: "the end of a reply"
 };
 var HOW_WORDS = {
   full: "in full",
@@ -48458,7 +48715,7 @@ function emptyDelivery(state, pending) {
     missingParts: []
   };
 }
-var FULL_BLOCK_MOMENTS = /* @__PURE__ */ new Set(["failure", "input"]);
+var FULL_BLOCK_MOMENTS = /* @__PURE__ */ new Set(["failure", "input", "reply"]);
 function arrivalText(memory, byId, how, kind) {
   if (how === "named") return "";
   if (how === "index") return indexLine(memory);
@@ -48706,6 +48963,11 @@ function deliveryFor(command, event, input2, extra) {
       const { text, arrived } = inputAnswer(active, byId, problems, extra.input.call, extra.input.claim);
       return { text, arrived };
     }
+    case "reply": {
+      const claim2 = extra.reply?.claim;
+      if (claim2 === void 0 || !claim2.recorded) return { text: "", arrived: [] };
+      return { text: claim2.answer.text, arrived: claim2.answer.arrived };
+    }
   }
 }
 var NO_SEARCH = { kind: "search", patterns: [] };
@@ -48722,7 +48984,9 @@ var HOOK_PLACEHOLDERS = /* @__PURE__ */ new Set([
   "${agent_id}",
   "${hook_event_name}",
   "${prompt}",
-  "${is_interrupt}"
+  "${is_interrupt}",
+  // #485: the reply that ends a turn, at Stop and SubagentStop.
+  "${last_assistant_message}"
 ]);
 function given(value) {
   const trimmed = value?.trim() ?? "";
@@ -49080,7 +49344,7 @@ var BUDGET_TEXT = {
    * The count AC3 promises (#476): what each of these memories needs before it can leave the start, in the words the
    * refinement pins. '' at none, so a report with nothing to count carries no sentence anywhere.
    */
-  startOnly: (count2) => count2 === 1 ? "1 index memory reaches Claude only at the start, so it is not offered to move: it needs a moment of its own (a call or failure mark, or a file rule) before it can leave the start." : `${count2} index memories reach Claude only at the start, so none of them is offered to move: each needs a moment of its own (a call or failure mark, or a file rule) before it can leave the start.`,
+  startOnly: (count2) => count2 === 1 ? "1 index memory reaches Claude only at the start, so it is not offered to move: it needs a moment of its own (a call, failure or reply mark, or a file rule) before it can leave the start." : `${count2} index memories reach Claude only at the start, so none of them is offered to move: each needs a moment of its own (a call, failure or reply mark, or a file rule) before it can leave the start.`,
   /** The move list's own "no plan fits" text (#471 How line 7): one reason, shared with the plans' answer. */
   tooShort: (moves, blockers, pointer = "") => `Moving all ${counted(moves, "index memory", "index memories")} that still ${moves === 1 ? "arrives" : "arrive"} at a moment of ${moves === 1 ? "its" : "their"} own still leaves the start short: ${blockerWords(blockers)}.` + (pointer === "" ? adviceWords(blockers) : pointer),
   /**
@@ -49089,7 +49353,7 @@ var BUDGET_TEXT = {
    * sentence mirrors `defer`'s, so a reader who met one recognises the other.
    */
   pointer: " The plan named below reaches the budget: follow that one.",
-  move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. Each entry says where that memory still arrives once it is off the start. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
+  move: (moves, freed, listed3, others, userScope) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call, a failure or a reply of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, and every remaining index memory then reaches the start with its full summary: read each with get_memory for its revision and link lists, then, on the user's word, call update_memory with delivery on-demand, one call per memory. Each entry says where that memory still arrives once it is off the start. The same call with delivery index puts it back on the start.` + // The list holds the first 20 whatever the count, so a move that needs more says how many of its own lines it does
   // not name: moves beyond the list, not every candidate beyond it (plan D10).
   (moves <= listed3 ? "" : ` The list above shows the first ${listed3} of them; the other ${moves - listed3} that must move may be read with search_memories, not listed here.` + (others > moves - listed3 ? ` ${others - (moves - listed3)} more may move too, and are counted only.` : "")) + (userScope === 0 ? "" : ` ${userScope === 1 ? "One of them is a user memory, so it leaves" : `${userScope} of them are user memories, so they leave`} the start of every project.`),
   /**
@@ -49099,7 +49363,7 @@ var BUDGET_TEXT = {
    * room without them, and then own demotions buy the rest), which costs no other place anything -- so the sentence says
    * "no user memory", never "nothing".
    */
-  defer: (moves, freed, userMoves) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call or a failure of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, but ${userMoves === 1 ? "one of them is a user memory" : `${userMoves} of them are user memories`}, whose ${userMoves === 1 ? "line" : "lines"} every other place also loads at its start. The plan named below reaches the budget without moving a user memory: follow that one. A move is update_memory with delivery on-demand, one call per memory and only on the user's word, and the same call with delivery index puts it back on the start.`
+  defer: (moves, freed, userMoves) => `Moving the first ${moves} index ${moves === 1 ? "line" : "lines"} off the start, in the order listed -- the ones that still arrive at a call, a failure or a reply of their own first, then this place's own before the ones every project loads -- frees ${freed} characters, but ${userMoves === 1 ? "one of them is a user memory" : `${userMoves} of them are user memories`}, whose ${userMoves === 1 ? "line" : "lines"} every other place also loads at its start. The plan named below reaches the budget without moving a user memory: follow that one. A move is update_memory with delivery on-demand, one call per memory and only on the user's word, and the same call with delivery index puts it back on the start.`
 };
 function movableLines(memories) {
   return memories.filter((memory) => shortenable(memory) && !carriesLabel(memory, HANDOFF_LABEL)).map((memory) => ({ memory, line: indexLine(memory).length, moment: hasOwnMoment(memory) })).sort(
@@ -49472,20 +49736,16 @@ function isLater(a, b) {
 
 // src/dream/apply.ts
 function supersedeMark(retired, survivor) {
-  if (survivor === void 0) return {};
-  const settle2 = (mark, held, kind) => {
-    const one = canonicalMark(mark, kind);
-    if (one === void 0) return {};
-    if (canonicalMark(held, kind) === void 0 && !isRule(survivor)) return { carried: one };
-    return sameMark(held, one, kind) ? {} : { dropped: one };
-  };
-  const failure2 = settle2(retired?.failure, survivor.failure, "failure");
-  const call = settle2(retired?.callInput, survivor.callInput, "callInput");
-  return {
-    ...failure2,
-    ...call.carried === void 0 ? {} : { carriedCall: call.carried },
-    ...call.dropped === void 0 ? {} : { droppedCall: call.dropped }
-  };
+  const carried = [];
+  const dropped = [];
+  if (survivor === void 0) return { carried: {}, dropped };
+  for (const kind of MARK_KINDS) {
+    const one = kind.of(retired);
+    if (one === void 0) continue;
+    if (kind.of(survivor) === void 0 && !isRule(survivor)) carried.push({ kind, mark: one });
+    else if (!kind.same(survivor, retired)) dropped.push({ kind, mark: one });
+  }
+  return { carried: holderOf(carried), dropped };
 }
 function planApply(proposal, records, context) {
   const intent = proposal.intent;
@@ -49528,14 +49788,7 @@ function planOfIntent(intent, recordOf3, restOf, context) {
   if (intent.act === "supersede") {
     const gone = recordOf3(intent.retired);
     const retiredMemory = gone !== void 0 && "stored" in gone ? gone.stored.memory : void 0;
-    const carry = (memory) => {
-      const { carried, carriedCall } = supersedeMark(retiredMemory, memory);
-      return {
-        ...memory,
-        ...carried === void 0 ? {} : { failure: carried },
-        ...carriedCall === void 0 ? {} : { callInput: carriedCall }
-      };
-    };
+    const carry = (memory) => ({ ...memory, ...supersedeMark(retiredMemory, memory).carried });
     const survivor = stepOf(intent.survivor, (memory) => memory.supersedes.includes(intent.retired), (base) => ({
       kind: "update",
       memory: { ...carry(base.memory), supersedes: addTarget(base.memory.supersedes, intent.retired), updated: stamp },
@@ -50590,6 +50843,10 @@ var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
 var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call is stopped once with this memory as the reason; made again, it runs. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var REPLY_WORDS = `The situation in Claude's own reply this memory is about, as phrasings Claude would write ("tests pass", "all green", "ready to release"): at the end of a turn whose final reply says any one of them, the memory arrives in full and Claude checks that reply against it before the user acts; once per agent's context, and each time it fires costs one extra reply. Matched within one line of the reply, capitals ignored, * as any run of words; each phrase needs a letter or digit. Set it unasked when a memory you save is about something Claude says (a claim, a report, a conclusion). A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).`;
+var REPLY_MARK = external_exports.strictObject({
+  phrases: external_exports.array(external_exports.string()).describe('The phrasings of the situation, any one of which brings the memory, such as ["tests pass", "all green"]')
+});
 var USER_WORDS_MAX = 2e3;
 var userWordsInput = external_exports.array(textInputSchema.superRefine((entry, ctx) => {
   const character = unshownCharOf(entry);
@@ -50627,6 +50884,7 @@ var SAVE_INPUT = {
   appliesWhen: CONDITION.optional().describe(CONDITION_WORDS),
   failure: FAILURE_MARK.optional().describe(FAILURE_WORDS),
   callInput: CALL_MARK.optional().describe(CALL_INPUT_WORDS),
+  reply: REPLY_MARK.optional().describe(REPLY_WORDS),
   userWords: userWordsInput.optional().describe(USER_WORDS_WORDS),
   reading: external_exports.string().trim().min(1).optional().describe(READING_WORDS)
 };
@@ -50651,6 +50909,7 @@ var UPDATE_INPUT = {
   appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`),
   failure: FAILURE_MARK.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
   callInput: CALL_MARK.nullable().optional().describe(`${CALL_INPUT_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
+  reply: REPLY_MARK.nullable().optional().describe(`${REPLY_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
   // #467: the new words join the stored ones, so the stored trail survives a correction (point 4 (a)); left out, the
   // stored words stay, as a mark does.
   userWords: userWordsInput.optional().describe(`${USER_WORDS_WORDS} Left out, the stored words stay; a value joins them.`),
@@ -50690,7 +50949,7 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: only the ones that still arrive at a call or a failure of their own, each carrying where it still arrives once moved, arrivesAt, this place's own before the ones every place loads; a handoff never moves, and no plan and no move list offers a memory that would then arrive only by search; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), and the count of index memories that reach Claude only at the start, which each needs a moment of its own before it can leave (indexBudget.startOnly, absent when there are none), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: only the ones that still arrive at a call, a failure or a reply of their own, each carrying where it still arrives once moved, arrivesAt, this place's own before the ones every place loads; a handoff never moves, and no plan and no move list offers a memory that would then arrive only by search; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), and the count of index memories that reach Claude only at the start, which each needs a moment of its own before it can leave (indexBudget.startOnly, absent when there are none), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
 var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
@@ -51177,6 +51436,7 @@ ${TRACK_LOST_LINE}`;
     const condition = canonicalCondition(args2.appliesWhen);
     const mark = canonicalMark(args2.failure === void 0 || args2.failure === null ? void 0 : args2.failure, "failure");
     const callMark = canonicalMark(args2.callInput === void 0 || args2.callInput === null ? void 0 : args2.callInput, "callInput");
+    const replyMark = canonicalReply(args2.reply ?? void 0);
     const memory = {
       id: newId(),
       scope: args2.scope === "project" ? deps.session.project : deps.session.user,
@@ -51197,11 +51457,13 @@ ${TRACK_LOST_LINE}`;
       ...condition === void 0 ? {} : { appliesWhen: condition },
       ...mark === void 0 ? {} : { failure: mark },
       ...callMark === void 0 ? {} : { callInput: callMark },
+      // #485: the reply mark in its one form; an unusable one never gets here (unusableMarkProblems refuses it, S42).
+      ...replyMark === void 0 ? {} : { reply: replyMark },
       // #467: a save takes the words as its call gives them, trimmed, with no empty entry. The reading is never stored:
       // its question is the refusal's, and its answer arrives as an entry of userWords (How lines 5 and 6).
       ...keptWords(args2.userWords) === void 0 ? {} : { userWords: keptWords(args2.userWords) }
     };
-    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0), ...unusableMarkProblems(args2), ...validateLinks(memory, memories)];
+    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0, true, memories), ...unusableMarkProblems(args2), ...validateLinks(memory, memories)];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -51267,6 +51529,7 @@ ${TRACK_LOST_LINE}`;
     const condition = args2.appliesWhen === void 0 ? previous.appliesWhen : canonicalCondition(args2.appliesWhen ?? void 0);
     const mark = args2.failure === void 0 ? previous.failure : canonicalMark(args2.failure ?? void 0, "failure");
     const callMark = args2.callInput === void 0 ? previous.callInput : canonicalMark(args2.callInput ?? void 0, "callInput");
+    const replyMark = args2.reply === void 0 ? previous.reply : canonicalReply(args2.reply ?? void 0);
     const memory = {
       id: previous.id,
       scope: kind === "project" ? deps.session.project : deps.session.user,
@@ -51287,6 +51550,7 @@ ${TRACK_LOST_LINE}`;
       ...condition === void 0 ? {} : { appliesWhen: condition },
       ...mark === void 0 ? {} : { failure: mark },
       ...callMark === void 0 ? {} : { callInput: callMark },
+      ...replyMark === void 0 ? {} : { reply: replyMark },
       // #467: left out, the stored words stay; new ones join them (How line 3), so a correction keeps the trail (S15).
       ...joinedWords(previous.userWords, args2.userWords) === void 0 ? {} : { userWords: joinedWords(previous.userWords, args2.userWords) }
     };
@@ -51721,10 +51985,13 @@ ${TRACK_LOST_LINE}`;
         interrupted: external_exports.string().optional(),
         // #468 How line 15: the SessionStart input's source (startup, clear, compact), which the start client passes; it
         // is kept on a start's note, so a compaction is a boundary in memories_in_play's answer and a /clear is named.
-        source: external_exports.string().optional()
+        source: external_exports.string().optional(),
+        // #485: the reply that ends the turn (last_assistant_message), read at the reply moment only. It is matched and
+        // never kept: it reaches no answer, no record and no log.
+        message: external_exports.string().optional()
       }
     },
-    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted, source }) => {
+    async ({ moment, event, part, prompt, file: file2, path, glob, type, pattern, session, agent, tool, call, notebook, input: input2, interrupted, source, message: replyText }) => {
       try {
         const key = onceKeyOf(session, agent);
         noteConversation(session, agent);
@@ -51770,6 +52037,38 @@ ${TRACK_LOST_LINE}`;
         const stopping = inputCase === void 0 ? false : stoppingInput(delivery.resolution.active, inputCase);
         const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase), inputSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, stopping));
         const inputAnswerHere = inputCase === void 0 || inputClaim === void 0 ? void 0 : inputAnswer(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, inputClaim);
+        const replyMarked = delivery.resolution.active.some(hasReplyMark);
+        if (replyMarked && event === "UserPromptSubmit" && deps.once !== void 0 && key.session !== "") {
+          await deps.once.release(key).catch(() => void 0);
+        }
+        let startFailed;
+        if (replyMarked && event === "SubagentStart" && moment === "subagent" && deps.once !== void 0 && key.session !== "" && key.agent !== "") {
+          await deps.once.start(key).catch((error62) => {
+            startFailed = message(error62);
+          });
+        }
+        let replyClaim;
+        let replyUser = "";
+        if (moment === "reply") {
+          const raw = (replyText ?? "").trim();
+          const ending = event === "SubagentStop" ? "SubagentStop" : "Stop";
+          if (raw === "") return { content: [{ type: "text", text: "" }] };
+          if (raw === "${last_assistant_message}") {
+            const line = replyMarked ? replyUncheckedLine("the end-of-turn hook passed no reply text") : "";
+            return { content: [{ type: "text", text: hookOutput(event, "", line) }] };
+          }
+          const ask = replyAsk(delivery.resolution.active, delivery.problems, replyText ?? "", ending === "SubagentStop" ? "started" : "main");
+          if (ask.seen.length > 0 || ask.named.length > 0) {
+            if (deps.once === void 0 || key.session === "") {
+              return { content: [{ type: "text", text: hookOutput(event, "", replyUncheckedLine("no session to record it in")) }] };
+            }
+            replyClaim = await deps.once.claim(key, ask, replySettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, ending));
+            if (!replyClaim.recorded) {
+              return { content: [{ type: "text", text: hookOutput(event, "", replyUncheckedLine("its once record could not be written")) }] };
+            }
+            replyUser = replyClaim.answer.userLine ?? "";
+          }
+        }
         const answer = inputAnswerHere ?? deliveryFor(moment, event, delivery, {
           prompt,
           part,
@@ -51778,10 +52077,17 @@ ${TRACK_LOST_LINE}`;
           ...edit === void 0 ? {} : { edit },
           ...read2 === void 0 ? {} : { read: read2 },
           ...failure2 === void 0 ? {} : { failure: failure2 },
+          ...replyClaim === void 0 ? {} : { reply: { claim: replyClaim } },
           ...onceReset === void 0 ? {} : { onceReset },
           ...conversation2 === void 0 ? {} : { conversation: conversation2 }
         });
         let text = answer.text;
+        if (startFailed !== void 0) {
+          const line = `WARNING: NeoCortex could not prepare the reply check of this subagent (${startFailed}), so its replies bring no memory about replies. Say so before answering.`;
+          text = text === "" ? line : `${text}
+
+${line}`;
+        }
         if (edit !== void 0 && deps.once !== void 0 && key.session !== "") {
           const had = "had" in answer && answer.had !== void 0 ? answer.had : fileRulesAt(delivery.resolution.active, edit);
           await deps.once.claim(key, { seen: fileRulesAt(delivery.resolution.active, edit), named: [] }, () => ({ text: "", arrived: [], had, named: [], claimed: [] })).catch(() => void 0);
@@ -51811,7 +52117,8 @@ ${TRACK_LOST_LINE}`;
             text
           );
         }
-        return { content: [{ type: "text", text: hookOutput(event, text, systemMessageFor(moment, event, delivery, part, place), deny) }] };
+        const userMessage = replyUser === "" ? systemMessageFor(moment, event, delivery, part, place) : replyUser;
+        return { content: [{ type: "text", text: hookOutput(event, text, userMessage, deny) }] };
       } catch (error62) {
         return { content: [{ type: "text", text: hookFailure(moment, event, message(error62)) }] };
       }
@@ -52442,12 +52749,12 @@ function relatedEntryOf(memory) {
 }
 function shownCondition(memory) {
   const condition = canonicalCondition(memory.appliesWhen);
-  const mark = canonicalMark(memory.failure, "failure");
-  const callMark = canonicalMark(memory.callInput, "callInput");
-  const marks = {
-    ...mark === void 0 ? {} : { failure: { tool: shownText(mark.tool), pattern: shownText(mark.pattern) } },
-    ...callMark === void 0 ? {} : { callInput: { tool: shownText(callMark.tool), pattern: shownText(callMark.pattern) } }
-  };
+  const marks = holderOf(
+    MARK_KINDS.flatMap((kind) => {
+      const mark = kind.of(memory);
+      return mark === void 0 ? [] : [{ kind, mark: kind.shown(mark, shownText) }];
+    })
+  );
   if (condition === void 0) return marks;
   const { inRepo, labels, files } = condition;
   return {
@@ -52464,27 +52771,21 @@ function promoteCost(shown2, intent) {
   if (intent?.act !== "promote") return {};
   const record2 = shown2.find((one) => one.memory.id === intent.record)?.memory;
   const carries = canonicalCondition(record2?.appliesWhen) !== void 0;
-  const marked = canonicalMark(record2?.failure, "failure") !== void 0;
-  const callMarked = canonicalMark(record2?.callInput, "callInput") !== void 0;
+  const marked = MARK_KINDS.filter((kind) => kind.of(record2) !== void 0);
   return {
     carriesCondition: carries,
-    loadsEverywhere: !carries && !marked && !callMarked,
-    ...marked ? { carriesFailureMark: true } : {},
-    ...callMarked ? { carriesCallInputMark: true } : {}
+    loadsEverywhere: !carries && marked.length === 0,
+    ...Object.fromEntries(marked.map((kind) => [`carries${kind.key}`, true]))
   };
 }
 function supersedeCost(shown2, survivorId, retiredId) {
   const memoryOf2 = (id) => shown2.find((one) => one.memory.id === id)?.memory;
-  const { dropped, droppedCall } = supersedeMark(memoryOf2(retiredId), memoryOf2(survivorId));
-  return {
-    ...dropped === void 0 ? {} : { dropsFailureMark: true, failureMarkGoes: markGoes(dropped, "failure", "a failure", retiredId, survivorId) },
-    // #466 S46: a call mark the accept would lose is said in the same words, before the accept, so the answer never
-    // leaves Claude thinking the memory about that call still arrives.
-    ...droppedCall === void 0 ? {} : { dropsCallInputMark: true, callInputMarkGoes: markGoes(droppedCall, "a call", "the call's own input", retiredId, survivorId) }
-  };
+  const { dropped } = supersedeMark(memoryOf2(retiredId), memoryOf2(survivorId));
+  const lower = (key) => key.charAt(0).toLowerCase() + key.slice(1);
+  return Object.fromEntries(dropped.flatMap(({ kind, mark }) => [[`drops${kind.key}`, true], [`${lower(kind.key)}Goes`, markGoes(kind, mark, retiredId, survivorId)]]));
 }
-function markGoes(mark, what, judged, retiredId, survivorId) {
-  return `Accepting retires ${shortId(retiredId)}, marked about ${what} of ${shownCut(mark.tool, 80)} "${shownCut(mark.pattern, 80)}"; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory arrives at a call judging ${judged}. Tell the user before accepting.`;
+function markGoes(kind, mark, retiredId, survivorId) {
+  return `Accepting retires ${shortId(retiredId)}, marked about ${kind.what}: ${kind.describe(mark, (text) => shownCut(text, 80))}; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory ${kind.gone}. Tell the user before accepting.`;
 }
 function planOf(plan) {
   return {
