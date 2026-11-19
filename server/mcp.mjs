@@ -37849,6 +37849,7 @@ var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "
 var INDEX_PART_BUDGETS = [1e4, 1e4, 5e3];
 var FULL_PART_BUDGETS = [1e4, 1e4];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
+var STATUS_PLUGIN_ENV = "NEOCORTEX_STATUS_PLUGIN";
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure", "Stop", "SubagentStop"];
 function endsTurn(event) {
   return event === "Stop" || event === "SubagentStop";
@@ -37881,6 +37882,13 @@ function hookFailure(moment, event, reason) {
       additionalContext: `NeoCortex is unavailable (${reason}): ${MISSING[moment]} NOT in context. Say so before answering.`
     }
   });
+}
+var STATUS_SHOW = "Show the user this NeoCortex status exactly as it stands: repeat the fenced block below, fences included, without rewording, shortening or summarising it.";
+function statusShown(status) {
+  let longest = 0;
+  for (const run of status.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [STATUS_SHOW, "", fence, status, fence].join("\n");
 }
 
 // src/once.ts
@@ -46229,7 +46237,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.6.0",
+  version: "0.7.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48497,6 +48505,11 @@ function ignoredNotice(ignored) {
 var STATUS_TEXT = {
   connected: "The NeoCortex server of this session is connected.",
   unread: (reason) => `The NeoCortex server of this session is connected, but the store cannot be read: ${reason}`,
+  // #392, a server the status command started: its two facts are the folder it reads and whether it could, never which
+  // server is speaking, and the one next step follows the same line (How lines 5 to 7).
+  clientRead: (location) => `The memory folder ${shownText(location)} can be read.`,
+  // S9 and S10 share the store's one reason and its step; every other read failure (S11) names the access step.
+  clientUnread: (reason, pluginId) => /does not exist or is not a folder/.test(reason) ? `The memory folder cannot be read: ${reason}. Create it, or set another folder with /plugin configure ${pluginId}.` : `The memory folder cannot be read: ${reason}. Give access to it, or set another folder with /plugin configure ${pluginId}.`,
   store: (location) => `Store: ${location}`,
   session: (session) => `This session: project ${shownText(session.project.key)}, ${session.place.kind === "project" ? "a repository" : `the folder ${shownFolderKey(session.place.key)}`}`,
   version: (version2) => `NeoCortex ${version2}, reads and writes format ${CURRENT_FORMAT}`,
@@ -48534,7 +48547,9 @@ function statusReport(input2, place, about) {
   const labels = placeLabels(place.read);
   const notices = [updateWarning(problems), newerNotice(newer), expiredNotice(expired), ignoredNotice(resolution.ignored)].filter((n) => n !== "");
   return [
-    STATUS_TEXT.connected,
+    // #392 How line 5: a server the status command started speaks about the folder it reads, not about this session's
+    // server, which it is not; every other server keeps its line (AC9, S32).
+    about.statusClient === void 0 ? STATUS_TEXT.connected : STATUS_TEXT.clientRead(about.location),
     STATUS_TEXT.session(about.session),
     STATUS_TEXT.version(about.version),
     STATUS_TEXT.labels(labels),
@@ -48550,14 +48565,10 @@ function statusReport(input2, place, about) {
 }
 function statusUnread(about, error62) {
   const reason = systemErrorCode(error62) ?? (error62 instanceof Error ? error62.message : String(error62));
+  if (about.statusClient !== void 0) {
+    return [STATUS_TEXT.clientUnread(shownText(reason), about.statusClient.pluginId), STATUS_TEXT.session(about.session), STATUS_TEXT.version(about.version)].join("\n");
+  }
   return [STATUS_TEXT.unread(shownText(reason)), STATUS_TEXT.store(about.location), STATUS_TEXT.session(about.session), STATUS_TEXT.version(about.version)].join("\n");
-}
-var STATUS_SHOW = "Show the user this NeoCortex status exactly as it stands: repeat the fenced block below, fences included, without rewording, shortening or summarising it.";
-function statusShown(status) {
-  let longest = 0;
-  for (const run of status.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
-  const fence = "`".repeat(Math.max(3, longest + 1));
-  return [STATUS_SHOW, "", fence, status, fence].join("\n");
 }
 function updateWarning(problems) {
   const unreadable = problems.filter((problem) => problem.newerFormat !== void 0).length;
@@ -52315,7 +52326,7 @@ ${line}`;
       description: "Show which store NeoCortex reads, what it loaded for this session and what it could not load, and why."
     },
     async () => {
-      const about = { version: package_default.version, session: deps.session, location: reader.location };
+      const about = { version: package_default.version, session: deps.session, location: reader.location, ...deps.statusClient === void 0 ? {} : { statusClient: deps.statusClient } };
       let text;
       try {
         const place = await visitPlace(deps.places, deps.session, now());
@@ -54430,9 +54441,11 @@ if (move) {
   const upgrade2 = process.env[START_HOOK_ENV] === "1" ? void 0 : () => store.sweep().catch((error62) => {
     console.error(`NeoCortex: the upgrade of stored memories stopped (${error62 instanceof Error ? error62.message : String(error62)}); the next session tries again.`);
   });
+  const statusPlugin = process.env[STATUS_PLUGIN_ENV]?.trim();
+  const statusClient = process.env[START_HOOK_ENV] === "1" && statusPlugin !== void 0 && statusPlugin !== "" ? { pluginId: statusPlugin } : void 0;
   const once = new FileOnce({ folder: onceFolder(homedir2()) });
   const track = new FileTrack({ folder: trackFolder(homedir2()) });
-  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, track, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, track, statusClient, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }

@@ -8316,8 +8316,8 @@ var init_types = __esm({
 });
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
-function isTerminal(status) {
-  return status === "completed" || status === "failed" || status === "cancelled";
+function isTerminal(status2) {
+  return status2 === "completed" || status2 === "failed" || status2 === "cancelled";
 }
 var init_interfaces = __esm({
   "node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js"() {
@@ -9638,8 +9638,8 @@ var init_protocol = __esm({
             }
             return task;
           },
-          storeTaskResult: async (taskId, status, result) => {
-            await taskStore.storeTaskResult(taskId, status, result, sessionId);
+          storeTaskResult: async (taskId, status2, result) => {
+            await taskStore.storeTaskResult(taskId, status2, result, sessionId);
             const task = await taskStore.getTask(taskId, sessionId);
             if (task) {
               const notification = TaskStatusNotificationSchema.parse({
@@ -9655,15 +9655,15 @@ var init_protocol = __esm({
           getTaskResult: (taskId) => {
             return taskStore.getTaskResult(taskId, sessionId);
           },
-          updateTaskStatus: async (taskId, status, statusMessage) => {
+          updateTaskStatus: async (taskId, status2, statusMessage) => {
             const task = await taskStore.getTask(taskId, sessionId);
             if (!task) {
               throw new McpError(ErrorCode.InvalidParams, `Task "${taskId}" not found - it may have been cleaned up`);
             }
             if (isTerminal(task.status)) {
-              throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
+              throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status2}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
             }
-            await taskStore.updateTaskStatus(taskId, status, statusMessage, sessionId);
+            await taskStore.updateTaskStatus(taskId, status2, statusMessage, sessionId);
             const updatedTask = await taskStore.getTask(taskId, sessionId);
             if (updatedTask) {
               const notification = TaskStatusNotificationSchema.parse({
@@ -18099,14 +18099,14 @@ var require_enoent = __commonJS({
         return originalEmit.apply(cp, arguments);
       };
     }
-    function verifyENOENT(status, parsed) {
-      if (isWin && status === 1 && !parsed.file) {
+    function verifyENOENT(status2, parsed) {
+      if (isWin && status2 === 1 && !parsed.file) {
         return notFoundError(parsed.original, "spawn");
       }
       return null;
     }
-    function verifyENOENTSync(status, parsed) {
-      if (isWin && status === 1 && !parsed.file) {
+    function verifyENOENTSync(status2, parsed) {
+      if (isWin && status2 === 1 && !parsed.file) {
         return notFoundError(parsed.original, "spawnSync");
       }
       return null;
@@ -18377,12 +18377,13 @@ var init_stdio2 = __esm({
 });
 
 // src/cli.ts
+import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.6.0",
+  version: "0.7.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -18411,6 +18412,7 @@ var package_default = {
 // src/moments.ts
 var MOMENTS = ["index", "full", "startup", "prompt", "edit", "read", "search", "subagent", "failure", "input", "reply"];
 var START_HOOK_ENV = "NEOCORTEX_START_HOOK";
+var STATUS_PLUGIN_ENV = "NEOCORTEX_STATUS_PLUGIN";
 var HOOK_EVENTS = ["SessionStart", "SubagentStart", "UserPromptSubmit", "PreToolUse", "PostToolUseFailure", "Stop", "SubagentStop"];
 function endsTurn(event) {
   return event === "Stop" || event === "SubagentStop";
@@ -18457,6 +18459,13 @@ function hookFailure(moment, event, reason) {
     }
   });
 }
+var STATUS_SHOW = "Show the user this NeoCortex status exactly as it stands: repeat the fenced block below, fences included, without rewording, shortening or summarising it.";
+function statusShown(status2) {
+  let longest = 0;
+  for (const run2 of status2.matchAll(/`+/g)) longest = Math.max(longest, run2[0].length);
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return [STATUS_SHOW, "", fence, status2, fence].join("\n");
+}
 
 // src/cli.ts
 var SERVER = fileURLToPath(new URL(`./mcp${import.meta.url.slice(import.meta.url.lastIndexOf("."))}`, import.meta.url));
@@ -18482,9 +18491,11 @@ function parseInput(text) {
     return {};
   }
 }
+var NoAnswerError = class extends Error {
+};
 function withTimeout(work, ms) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`no answer from the NeoCortex server within ${ms} ms`)), ms);
+    const timer = setTimeout(() => reject(new NoAnswerError(`no answer from the NeoCortex server within ${ms} ms`)), ms);
     work.then(
       (value) => {
         clearTimeout(timer);
@@ -18545,12 +18556,151 @@ async function run(moment, part2) {
   }
 }
 var PARTED = ["index", "full"];
+var STATUS_TIMEOUT_MS = 2e4;
+var CLI_TIMEOUT_MS = 8e3;
+var STATUS_NEXT = {
+  // S39, in Remco's words: a --plugin-dir build, and a plugin synced from claude.ai, has no install record, so Claude
+  // Code cannot read its memory folder, which an installed NeoCortex reads.
+  notInstalled: "This session runs a NeoCortex that is not installed (loaded with --plugin-dir, or synced from claude.ai), so Claude Code cannot read its memory folder here; an installed NeoCortex reads the folder its plugin option names. Install the plugin from the marketplace to have it read memories.",
+  otherCopy: (found, installed, id) => `This session runs another version of the installed NeoCortex (${found}) than the one Claude Code has (${installed}), so its memory folder cannot be read here. Run /reload-plugins or restart the session to use the installed version, then run this again. To change the folder the installed NeoCortex reads, run /plugin configure ${id}.`,
+  noFolder: (id) => `The memory folder is not set. Set it to the full path of an existing folder with /plugin configure ${id}.`,
+  blankFolder: (id) => `The memory folder is set but empty. Set it to the full path of an existing folder with /plugin configure ${id}.`,
+  // The step names no cause the server's own line did not give: S8's relative path, S18's git and S20's Node each fail
+  // for their own reason, and naming the folder fix there would send the user to the wrong place.
+  notStarted: (id, reason) => `NeoCortex does not start on the memory folder this plugin is set to: ${reason}. Fix what that line names. NeoCortex needs the full path of an existing folder, git, and Node 24.19 or later (the plugin README's requirements); the folder is set with /plugin configure ${id}.`,
+  // S21: the server started and never answered, which the client found itself, so the cause is not a path, git or Node.
+  noAnswer: (id) => `NeoCortex did not answer within its time limit on the memory folder this plugin is set to, so the folder may be unreachable: a network share or a sync folder that is offline does this. Check that the folder is reachable, or set another one with /plugin configure ${id}.`,
+  // How line 11: output the client cannot read is its own reason, never a real state (an installed plugin reported as
+  // "not installed" is wrong for every user the day Claude Code changes a shape). The id is named when it was found.
+  unreadable: (id) => id === void 0 ? "Claude Code's answer about this NeoCortex could not be read, so its memory folder cannot be found here. Run /neocortex:status again, and if it keeps failing, run /plugin and read the NeoCortex plugin's own entry." : `Claude Code's answer about this NeoCortex could not be read, so its memory folder cannot be found here. Run /neocortex:status again; set the folder with /plugin configure ${id} if it keeps failing.`,
+  // `claude plugin configure` with no id exits "missing required argument 'plugin'" (measured at gate 2), so the step
+  // never carries a bare `/plugin configure`. The in-session `/plugin` menu is where a user finds the id [unchecked: the
+  // in-session form was not measured; the command-line one was].
+  cliFailed: (detail, id) => id === void 0 ? `Claude Code could not be asked which memory folder this NeoCortex is set to (${detail}). Run /neocortex:status again, and if it keeps failing, run /plugin and open the NeoCortex plugin's own entry to set its memory folder.` : `Claude Code could not be asked which memory folder this NeoCortex is set to (${detail}). Run /neocortex:status again, and if it keeps failing, set the folder with /plugin configure ${id}.`,
+  failed: (reason) => `the status command failed: ${reason}`
+};
+var BridgeError = class extends Error {
+};
+var UnreadableError = class extends Error {
+};
+async function claudeJson(projectDir, args) {
+  const exe = process.env.CLAUDE_CODE_EXECPATH ?? "claude";
+  return new Promise((resolve, reject) => {
+    execFile(exe, args, { cwd: projectDir, timeout: CLI_TIMEOUT_MS, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error2, stdout) => {
+      if (error2 !== null) {
+        reject(new BridgeError(error2.killed ? `no answer within ${CLI_TIMEOUT_MS} ms` : error2.message.split("\n")[0]));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        reject(new BridgeError("claude did not print JSON"));
+      }
+    });
+  });
+}
+async function findPlugin(pluginRoot, projectDir) {
+  const fold = (path) => typeof path === "string" ? path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() : "";
+  const versionFolder = (path) => {
+    const parts = path.split("/");
+    const at = parts.lastIndexOf("cache");
+    return at >= 0 && parts.length >= at + 4 ? parts.slice(0, at + 3).join("/") : "";
+  };
+  const list = await claudeJson(projectDir, ["plugin", "list", "--json"]);
+  if (!Array.isArray(list)) throw new UnreadableError();
+  const entries = list.filter((entry) => typeof entry === "object" && entry !== null);
+  const root = fold(pluginRoot);
+  const exact = entries.find((entry) => fold(entry.installPath) !== "" && fold(entry.installPath) === root);
+  if (exact !== void 0 && typeof exact.id === "string") return { id: exact.id };
+  const folder = versionFolder(root);
+  const sibling = folder === "" ? void 0 : entries.find((entry) => entry.enabled === true && typeof entry.id === "string" && versionFolder(fold(entry.installPath)) === folder);
+  if (sibling !== void 0) {
+    const installed = typeof sibling.version === "string" ? `version ${sibling.version}` : "another version";
+    return { otherCopy: { found: `version ${package_default.version}`, installed, id: sibling.id } };
+  }
+  return { notInstalled: true };
+}
+function folderFrom(configured2) {
+  if (!Array.isArray(configured2.configured)) throw new UnreadableError();
+  const listed = configured2.configured.includes("memory_folder");
+  const value = configured2.inputs?.["memory_folder"];
+  if (!listed) return { unset: "noFolder" };
+  if (typeof value !== "string") throw new UnreadableError();
+  if (value.trim() === "") return { unset: "blankFolder" };
+  return { folder: value.trim() };
+}
+async function promptStatus(folder, pluginId, projectDir) {
+  const { Client: Client2 } = await Promise.resolve().then(() => (init_client2(), client_exports));
+  const { StdioClientTransport: StdioClientTransport2 } = await Promise.resolve().then(() => (init_stdio2(), stdio_exports));
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) if (value !== void 0) env[key] = value;
+  delete env.CLAUDE_PLUGIN_OPTION_MEMORY_FOLDER;
+  delete env.NEOCORTEX_ROOT;
+  env.NEOCORTEX_ROOT = folder;
+  env[START_HOOK_ENV] = "1";
+  env.CLAUDE_PROJECT_DIR = projectDir;
+  env[STATUS_PLUGIN_ENV] = pluginId;
+  const transport = new StdioClientTransport2({ command: process.execPath, args: [SERVER], env, stderr: "pipe" });
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const closed = new Promise((resolve) => {
+    transport.onclose = () => resolve();
+  });
+  const client = new Client2({ name: "neocortex-status", version: package_default.version });
+  try {
+    const result = await withTimeout(
+      (async () => {
+        await client.connect(transport);
+        return client.getPrompt({ name: "status", arguments: {} });
+      })(),
+      STATUS_TIMEOUT_MS
+    );
+    const message = (Array.isArray(result.messages) ? result.messages : [])[0];
+    return message?.content?.type === "text" ? message.content.text ?? "" : "";
+  } catch (error2) {
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 1e3))]);
+    const named = reasonFrom(stderr);
+    if (named !== void 0) throw new Error(named);
+    throw error2 instanceof Error ? error2 : new Error(String(error2));
+  } finally {
+    await client.close().catch(() => void 0);
+  }
+}
+async function status(pluginRoot, projectDir) {
+  const bridge = (error2) => error2 instanceof BridgeError ? error2.message : void 0;
+  const mine = (text) => statusShown(text);
+  let pluginId;
+  try {
+    const plugin = await findPlugin(pluginRoot, projectDir);
+    if ("notInstalled" in plugin) return mine(STATUS_NEXT.notInstalled);
+    if ("otherCopy" in plugin) return mine(STATUS_NEXT.otherCopy(plugin.otherCopy.found, plugin.otherCopy.installed, plugin.otherCopy.id));
+    pluginId = plugin.id;
+    const configured2 = await claudeJson(projectDir, ["plugin", "configure", plugin.id, "--json"]);
+    const choice = folderFrom(configured2);
+    if ("unset" in choice) return mine(STATUS_NEXT[choice.unset](plugin.id));
+    return await promptStatus(choice.folder, plugin.id, projectDir);
+  } catch (error2) {
+    const known = bridge(error2);
+    const reason = (error2 instanceof Error ? error2.message : String(error2)).split("\n")[0] ?? "unknown";
+    if (error2 instanceof UnreadableError) return mine(STATUS_NEXT.unreadable(pluginId));
+    if (known !== void 0) return mine(STATUS_NEXT.cliFailed(known, pluginId));
+    if (error2 instanceof NoAnswerError && pluginId !== void 0) return mine(STATUS_NEXT.noAnswer(pluginId));
+    if (pluginId !== void 0) return mine(STATUS_NEXT.notStarted(pluginId, reason));
+    return mine(STATUS_NEXT.failed(reason));
+  }
+}
 var command = process.argv[2];
 var part = command !== void 0 && PARTED.includes(command) && process.argv[3] !== void 0 ? Number(process.argv[3]) : 1;
-if (command !== void 0 && MOMENTS.includes(command) && Number.isInteger(part) && part >= 1) {
+if (command === "status") {
+  const pluginRoot = process.argv[3] ?? process.env.CLAUDE_PLUGIN_ROOT ?? fileURLToPath(new URL("..", import.meta.url));
+  const projectDir = process.argv[4] ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+  process.stdout.write(await status(pluginRoot, projectDir));
+} else if (command !== void 0 && MOMENTS.includes(command) && Number.isInteger(part) && part >= 1) {
   process.stdout.write(await run(command, part));
 } else {
-  const commands = MOMENTS.map((moment) => PARTED.includes(moment) ? `${moment} [part]` : moment).join("|");
+  const commands = [...MOMENTS.map((moment) => PARTED.includes(moment) ? `${moment} [part]` : moment), "status"].join("|");
   process.stderr.write(`Usage: node src/cli.ts ${commands}   (reads hook input on stdin)
 `);
   process.exitCode = 2;

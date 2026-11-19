@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.7.0 - 2026-11-19
+
+- Added: `/neocortex:status`, one command that says which part of NeoCortex is broken and what to do next. It
+  works whether or not this session's NeoCortex server is connected: it says whether the server is connected,
+  whether NeoCortex starts on the memory folder the plugin is set to, what it reads there or why it does not, and
+  the one step to take first, then where to reconnect in `/mcp`. Claude may also start it itself when you ask why
+  NeoCortex does not work or when NeoCortex is unavailable. It changes none of your memories. The plugin now ships
+  a `skills/` folder (#392).
+
 ## 0.6.0 - 2026-11-19
 
 - Added: a memory can be marked with the words of a situation in Claude's own replies ("the tests pass",

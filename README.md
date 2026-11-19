@@ -104,6 +104,17 @@ code bundled into the server.
 
 ## Check that it runs
 
+When NeoCortex seems broken — no memory arrives, `UserPromptSubmit hook error` shows under a prompt, or the start names
+a NeoCortex failure — run `/neocortex:status` in that session. It says which part is broken and what to do next: whether
+this session's NeoCortex server is connected, which memory folder the plugin is set to, what NeoCortex reads there or
+why it cannot, and the one step for that reason. It needs only the plugin to have loaded, not its server, so it also
+works while the server is off. When it is not in the `/` menu, the plugin did not load: the `/plugin` Errors tab says
+why.
+
+`claude mcp list` and `/mcp` are further checks, and they answer less: for a NeoCortex server that does not start they
+show only `✘ Failed to connect — CONNECTION_CLOSED: Connection closed`, not why. `/neocortex:status` is what turns
+that into a reason.
+
 In a session, `/mcp` lists the server as `plugin:neocortex:neocortex`, and it must show as connected. From a shell,
 `claude mcp list` prints the same name followed by `✔ Connected` (measured with Claude Code 2.1.306). Connected does
 not prove that the memory folder exists; see `memory_folder` above. When the server is not connected, check `node`
