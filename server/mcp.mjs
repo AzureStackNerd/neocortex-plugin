@@ -46237,7 +46237,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.7.0",
+  version: "0.8.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -49205,7 +49205,7 @@ function deadOf(resolution, present) {
   }
   const newest = /* @__PURE__ */ new Set();
   const olderHandoffs = /* @__PURE__ */ new Set();
-  const handoffs = resolution.active.filter((m) => carriesLabel(m, HANDOFF_LABEL)).sort((x, y) => compareText2(y.updated, x.updated) || compareText2(x.id, y.id));
+  const handoffs = resolution.active.filter((m) => carriesLabel(m, HANDOFF_LABEL)).sort(newestFirst);
   for (const memory of handoffs) {
     const key = handoffKey(memory);
     if (newest.has(key)) olderHandoffs.add(memory.id);
@@ -49217,6 +49217,14 @@ var HANDOFF_TITLE_RE = /^handoff:\s*(\S.*)$/i;
 function handoffName(memory) {
   const named = HANDOFF_TITLE_RE.exec(memory.title.trim());
   return named === null ? null : named[1].trim();
+}
+function newestFirst(x, y) {
+  return compareText2(y.updated, x.updated) || compareText2(x.id, y.id);
+}
+function newerHandoff(retired, active) {
+  const key = handoffKey(retired);
+  const newest = active.filter((m) => carriesLabel(m, HANDOFF_LABEL) && handoffKey(m) === key).sort(newestFirst)[0];
+  return newest === void 0 || newest.id === retired.id ? void 0 : newest;
 }
 function handoffKey(memory) {
   const name = handoffName(memory);
@@ -49299,6 +49307,13 @@ function twinIn(text, candidates) {
 }
 function roundedSimilarity(a, b) {
   return Math.round(similarity(a, b) * 100) / 100;
+}
+function activeUserMemories(memories, session, today) {
+  return resolve4(
+    memories.filter((memory) => memory.scope.kind === "user"),
+    session,
+    toLocalDate(today)
+  ).active;
 }
 
 // src/dream/rebalance.ts
@@ -50960,8 +50975,8 @@ var NEAR_TEXT = {
   project: (targets, where) => `${targets.join(", ")} ${targets.length === 1 ? "is" : "are"} in ${where}, and no link from a user memory hides a project memory: with the user's agreement, delete ${targets.length === 1 ? "it" : "each one the user picks"} with delete_memory and the revision get_memory shows.`
 };
 var DREAM_PAIRS_MAX = 20;
-var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: only the ones that still arrive at a call, a failure or a reply of their own, each carrying where it still arrives once moved, arrivesAt, this place's own before the ones every place loads; a handoff never moves, and no plan and no move list offers a memory that would then arrive only by search; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength), and the count of index memories that reach Claude only at the start, which each needs a moment of its own before it can leave (indexBudget.startOnly, absent when there are none), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
-var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
+var DREAM_DESCRIPTION = "How optimized NeoCortex is for this place: the characters it loads at a start, at every prompt and at every edit, the index lines that do not fit, the index memories that could move off the start and what moving them frees (indexBudget: only the ones that still arrive at a call, a failure or a reply of their own, each carrying where it still arrives once moved, arrivesAt, this place's own before the ones every place loads, and the revision that was priced on, which the move's update_memory call passes so it is refused once the memory changed; a handoff never moves, and no plan and no move list offers a memory that would then arrive only by search; it names no user memory to move while a plan below avoids moving one), and every way the start can be brought under its budget \u2014 demoting memories, rewriting summaries shorter down to a floor of 120 characters and not below, or both, with no plan rewriting or moving a handoff \u2014 with the recommended one and its cost to other places (indexBudget.plans; each rewrite names its summary's length today and after it, summaryLength, and each change the revision it was priced on), and the count of index memories that reach Claude only at the start, which each needs a moment of its own before it can leave (indexBudget.startOnly, absent when there are none), near-duplicate pairs among the memories this session sees, repeats of them in other places, expired memories, dead links, older handoffs and records that did not load; plus counts for the whole store, which name nothing of another project. It changes nothing.";
+var PROPOSALS_DESCRIPTION = "The Dreamer's proposals that wait here for the user's answer: each with its kind and the memories of this session it shows, what accepting it does (act), and what its offer names: the memory that survives and the one retired by a supersede (survives, retires), the memory a retire deletes (retires), with its end date for an expired one (expires), the newer handoff of its name that stays for an old handoff (newer, absent when none is there) and the user memory that covers a duplicate or repeat copy (stays, absent when none does), and the links to deleted memories a drop-link removes (targets); and how many other memories it also rests on (others), which it never names; the accepted proposals whose writes are still to finish (unfinished); the accepted proposals that are closed because a memory they rest on changed, moved or was deleted after the accept, or this version cannot apply their writes, each with its reason (closedAccepts); plus counts of proposals here that are closed because a memory they show, the record of an earlier answer to them, or the record of an earlier apply of them, could not be read, and of proposal records that could not be read. It changes nothing.";
 var DECIDE_ID = external_exports.string().min(1).describe("The whole id of a proposal dream_proposals lists under waiting");
 var DECIDE_ANSWER = external_exports.enum(DECISIONS).describe("reject and keep-both change no memory; accept writes the clean-up the proposal describes");
 var TWIN_ANSWER = external_exports.literal("accept").describe("only accept writes; reject and keep-both change no memory, so call dream_decide for them");
@@ -51719,7 +51734,9 @@ ${TRACK_LOST_LINE}`;
     () => guarded(async () => {
       const at = now();
       const place = await loadPlace(deps.places, deps.session);
-      const input2 = await loadDelivery(reader, deps.session, at, CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
+      const loaded = await reader.load(visibleScopes(deps.session));
+      const input2 = deliveryOf(loaded, reader.location, deps.session, at, CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
+      const revisions = new Map(loaded.memories.map((stored) => [stored.memory.id, stored.revision]));
       const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
       const plans = indexPlans(input2, place);
@@ -51785,7 +51802,7 @@ ${TRACK_LOST_LINE}`;
             shown: pairs.slice(0, DREAM_PAIRS_MAX).map(({ a, b, score }) => ({ a: relatedEntryOf(a), b: relatedEntryOf(b), score }))
           },
           indexBudget: {
-            candidates: budget.candidates.map(moveEntryOf),
+            candidates: budget.candidates.map((entry) => moveEntryOf(entry, revisions)),
             others: budget.others,
             toFit: budget.toFit,
             freed: budget.freed,
@@ -51794,7 +51811,7 @@ ${TRACK_LOST_LINE}`;
             ...budget.startOnly === void 0 ? {} : { startOnly: budget.startOnly },
             plans: {
               today: plans.today,
-              fitting: plans.fitting.map(planOf),
+              fitting: plans.fitting.map((plan) => planOf(plan, revisions)),
               next: plans.next
             }
           },
@@ -51846,18 +51863,28 @@ ${TRACK_LOST_LINE}`;
       const unfinished = verdicts.flatMap((one) => one.closed === void 0 && !one.replaced ? [one.id] : []);
       const closedAccepts = verdicts.flatMap((one) => one.closed === void 0 ? [] : [one.closed]);
       const cannot = verdicts.some((one) => one.cannot);
+      const viewMemories = view.loaded.memories.map((stored) => stored.memory);
+      const today = now();
+      const offerFrom = {
+        active: resolve4(viewMemories, deps.session, toLocalDate(today)).active,
+        activeUser: activeUserMemories(viewMemories, deps.session, today)
+      };
       return ok({
-        waiting: waiting.map((one) => ({
-          id: one.id,
-          kind: one.kind,
-          shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
-          ...one.others > 0 ? { others: one.others } : {},
-          // A promote moves the record as it is stored, its condition included (src/dream/apply.ts), so without one the
-          // memory loads in EVERY place, including the owner's folder places the cluster's evidence never covered. The
-          // answer says it where the user agrees (decided 2026-11-05, #401), from the promoted record's own condition
-          // (#445 S45), which its shown entry also carries.
-          ...promoteCost(one.shown, proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent)
-        })),
+        waiting: waiting.map((one) => {
+          const intent = proposalsLoaded.proposals.find((proposal) => proposal.id === one.id)?.intent;
+          return {
+            id: one.id,
+            kind: one.kind,
+            shown: one.shown.map((stored) => relatedEntryOf(stored.memory)),
+            ...one.others > 0 ? { others: one.others } : {},
+            ...offerOf(one.kind, one.shown, intent, offerFrom),
+            // A promote moves the record as it is stored, its condition included (src/dream/apply.ts), so without one the
+            // memory loads in EVERY place, including the owner's folder places the cluster's evidence never covered. The
+            // answer says it where the user agrees (decided 2026-11-05, #401), from the promoted record's own condition
+            // (#445 S45), which its shown entry also carries.
+            ...promoteCost(one.shown, intent)
+          };
+        }),
         ...unfinished.length > 0 ? { unfinished } : {},
         ...closedAccepts.length > 0 ? { closedAccepts } : {},
         ...anyClosed ? { closed } : {},
@@ -52777,6 +52804,23 @@ function shownCondition(memory) {
     ...marks
   };
 }
+function offerOf(kind, shown2, intent, from) {
+  if (intent === void 0) return {};
+  if (intent.act === "supersede") return { act: intent.act, survives: shortId(intent.survivor), retires: shortId(intent.retired) };
+  if (intent.act === "drop-link") return { act: intent.act, targets: intent.targets.map(shortId) };
+  if (intent.act === "promote") return { act: intent.act };
+  const retired = shown2.find((one) => one.memory.id === intent.retired)?.memory;
+  const newer = kind === "old-handoff" && retired !== void 0 ? newerHandoff(retired, from.active) : void 0;
+  const stays = (kind === "duplicate" || kind === "repeat") && retired !== void 0 ? twinIn(retired, from.activeUser) : null;
+  const staying = stays === null ? void 0 : from.activeUser.find((memory) => memory.id === stays);
+  return {
+    act: intent.act,
+    retires: shortId(intent.retired),
+    ...kind === "expired" && retired !== void 0 && retired.expires !== null ? { expires: retired.expires } : {},
+    ...newer === void 0 ? {} : { newer: relatedEntryOf(newer) },
+    ...staying === void 0 ? {} : { stays: relatedEntryOf(staying) }
+  };
+}
 function promoteCost(shown2, intent) {
   if (intent?.act === "supersede") return supersedeCost(shown2, intent.survivor, intent.retired);
   if (intent?.act !== "promote") return {};
@@ -52798,18 +52842,18 @@ function supersedeCost(shown2, survivorId, retiredId) {
 function markGoes(kind, mark, retiredId, survivorId) {
   return `Accepting retires ${shortId(retiredId)}, marked about ${kind.what}: ${kind.describe(mark, (text) => shownCut(text, 80))}; the memory that survives, ${shortId(survivorId)}, does not take the mark (a rule, or a memory with a mark of its own), so after the accept no memory ${kind.gone}. Tell the user before accepting.`;
 }
-function planOf(plan) {
+function planOf(plan, revisions) {
   return {
-    shorten: plan.shorten.map(({ memory, summaryLength }) => ({ ...relatedEntryOf(memory), summaryLength })),
-    demote: plan.demote.map(moveEntryOf),
+    shorten: plan.shorten.map(({ memory, summaryLength }) => ({ ...relatedEntryOf(memory), summaryLength, revision: revisions.get(memory.id) })),
+    demote: plan.demote.map((entry) => moveEntryOf(entry, revisions)),
     changes: plan.changes,
     userScope: plan.userScope,
     elsewhere: plan.elsewhere,
     characters: plan.characters
   };
 }
-function moveEntryOf(entry) {
-  return { ...relatedEntryOf(entry.memory), arrivesAt: entry.arrivesAt };
+function moveEntryOf(entry, revisions) {
+  return { ...relatedEntryOf(entry.memory), arrivesAt: entry.arrivesAt, revision: revisions.get(entry.memory.id) };
 }
 function entryOf(memory) {
   return {
@@ -52988,6 +53032,11 @@ function revisionOf(text) {
 }
 var FileStore = class {
   root;
+  /**
+   * The platform withLock answers a lock's EINVAL for (#499): darwin's EINVAL is the race ENOENT is elsewhere. A field
+   * rather than process.platform, so a test can hold each platform's answer to its row.
+   */
+  platform = process.platform;
   registry;
   placeRegistry;
   busyBudgetMs;
@@ -53419,6 +53468,10 @@ var FileStore = class {
   placePath(stem) {
     return join4(this.root, PLACES, `${stem}.yaml`);
   }
+  /** Takes one lock file, failing when it exists: withLock's open, a method so a test can answer it with an error (#499). */
+  openLock(path) {
+    return open3(path, "wx");
+  }
   /** The lock folder of this root, made if missing: the same for every spelling of it, such as another case or an 8.3 short name. */
   async lockFolder() {
     const folder = this.lockFolderPath();
@@ -53745,11 +53798,12 @@ var FileStore = class {
         continue;
       }
       try {
-        handle = await open3(path, "wx");
+        handle = await this.openLock(path);
       } catch (error62) {
         const code = codeOf3(error62);
-        if (code !== "EEXIST" && code !== "ENOENT" && !isBusy(code)) throw error62;
-        if (code !== "ENOENT") contended = true;
+        const folderGone = code === "ENOENT" || code === "EINVAL" && this.platform === "darwin";
+        if (code !== "EEXIST" && !folderGone && !isBusy(code)) throw error62;
+        if (!folderGone) contended = true;
         if (code === "EEXIST" && await this.removeIfStale(path)) continue;
         if (Date.now() >= deadline) throw contended ? new StoreBusyError(id) : error62;
         await pause2();

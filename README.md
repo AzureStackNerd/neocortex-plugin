@@ -138,9 +138,10 @@ without `origin`, `project` means that folder only, not its subfolders.
 At every session start Claude gets an index: one line for each active memory delivered by index, with its scope,
 title, summary and id, as many as fit. When they do not all fit, the lowest-ranked lines lose their summary first
 (shown as …), never those of enforced or high-importance memories; only what still does not fit is counted, and Claude
-finds it with `search_memories`. When that happens, the index says so once: Claude reads the moves `dream_report`
-prices, offers them to you, and moves a memory off the start with `update_memory` and `delivery on-demand` only when
-you agree, one call per memory. Those moves never touch a handoff, and they offer only a memory that still arrives at a
+finds it with `search_memories`. When that happens, the index says so once; `/neocortex:dreamer` then goes through the
+moves `dream_report` prices with you (Claude may start it on that notice, or you type it), and moves a memory off the
+start with `update_memory` and `delivery on-demand` only when you agree, one memory at a time. Those moves never touch
+a handoff, and they offer only a memory that still arrives at a
 call, a failure or a reply of its own: a move that would leave a memory reachable only by `search_memories` is never
 recommended, and when that leaves no way under the budget the report says so. Every report also counts the memories that
 reach Claude only at the start and says each needs a moment of its own before it can leave. A subagent gets part 1 alone
@@ -364,6 +365,12 @@ unknown rather than as no memory.
 The Dreamer looks for the memories that are worth cleaning up and proposes what to do with each, one proposal at a
 time, for you to answer. It never changes a memory on its own: a proposal writes nothing until you accept it.
 
+**Going through it: `/neocortex:dreamer`.** Type `/neocortex:dreamer`, or ask Claude to tidy your memories. It shows
+what the Dreamer found in this place, then offers each proposal and each change of the recommended plan one at a time,
+each with what it costs and where the memory still arrives afterwards, and changes a memory only on your answer for
+it. Ask for "all the rest" and it shows every remaining offer with its cost first; your one answer then stands for
+exactly those. A move or rewrite you decline is offered again the next time, since nothing records it.
+
 **It looks on its own, at most once a week.** When the last run is more than 7 days old, the first prompt you send in a
 session starts one run in the background, after the answer to that prompt is written, so nothing you see waits on it.
 A run that failed or was interrupted is retried sooner: it does not cost you a week of waiting. Two sessions open at
@@ -382,6 +389,7 @@ What it proposes, without a model, from what it finds:
 | `duplicate` | Two memories that load in the same place whose text is nearly identical | Keeps the newer text and makes it `supersedes` the older one; a project copy of a user memory is retired instead |
 | `expired` | A memory whose `expires` date has passed | Deletes the memory (it can be put back from the `deleted` folder) |
 | `dead-link` | A `supersedes` or `overrides` id that no live memory has | Removes every such link from that memory |
+| `repeat` | A project memory with nearly the same text in at least three places of yours (the other places counted, never named) | Makes it a `user` memory, which loads in every place unless it carries a condition; when a `user` memory already covers it, deletes this copy instead |
 | `old-handoff` | A `handoff`-labelled memory that a later `Handoff: <name>` in the same scope replaced | Deletes the older handoff |
 
 **Answering one.** `dream_proposals` lists the proposals that wait in this session, each showing the memories it is

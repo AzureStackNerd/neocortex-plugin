@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.8.0 - 2026-11-20
+
+- Added: `/neocortex:dreamer`, one command that goes through what the Dreamer found with you: each proposal and each
+  change of the recommended plan one at a time, each with what it costs and where the memory still arrives, and no
+  memory changes without your answer for it. Say "all the rest" and it lists every remaining change before writing
+  any. Claude may also start it itself when a session start says the start is crowded or a proposal waits.
+  `dream_proposals` now names what accepting each proposal does and the memories it touches, and every move and
+  rewrite `dream_report` offers carries the revision it was priced on, so a change is refused once that memory
+  changed (#473).
+- Fixed: on macOS a save could fail with "could not read or write its store (EINVAL)" when it met another write
+  finishing, such as the sweep a session runs at its start (#499).
+
 ## 0.7.0 - 2026-11-19
 
 - Added: `/neocortex:status`, one command that says which part of NeoCortex is broken and what to do next. It
