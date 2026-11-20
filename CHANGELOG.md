@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.9.0 - 2026-11-20
+
+- Added: therapy at a correction. When you correct Claude and the correction check suspects a memory, Claude now
+  diagnoses it before asking anything: whether its words misled it (they say other than its reason, its intent no
+  longer holds, or they do not land), with the evidence beside it. It then offers to reword or reframe it with you,
+  and nothing changes without your answer for that memory. A rule (a memory that loads in full, or is enforced) is
+  named with its evidence and offered no wording: you change it on your own ask (#474).
+- Added: a memory keeps every earlier wording. After a rewording, `get_memory` shows each earlier title, summary,
+  reason and body with when it changed, and the update says the earlier wording stays readable until the memory is
+  deleted. Memory format 2.5 (#474).
+
 ## 0.8.0 - 2026-11-20
 
 - Added: `/neocortex:dreamer`, one command that goes through what the Dreamer found with you: each proposal and each

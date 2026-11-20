@@ -35926,6 +35926,7 @@ var FIELDS_2_1 = [...FIELDS_2_0, "failure"];
 var FIELDS_2_2 = [...FIELDS_2_1, "callInput"];
 var FIELDS_2_3 = [...FIELDS_2_2, "userWords"];
 var FIELDS_2_4 = [...FIELDS_2_3, "reply"];
+var FIELDS_2_5 = [...FIELDS_2_4, "trail"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
@@ -35933,14 +35934,16 @@ var REGISTRY = {
     { version: "2.1", fields: FIELDS_2_1 },
     { version: "2.2", fields: FIELDS_2_2 },
     { version: "2.3", fields: FIELDS_2_3 },
-    { version: "2.4", fields: FIELDS_2_4 }
+    { version: "2.4", fields: FIELDS_2_4 },
+    { version: "2.5", fields: FIELDS_2_5 }
   ],
   // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
   // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means. Nor
   // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means. Nor a 2.2
   // record: no kept words is what every record before #467 means, and its why may hold words nobody marked (S18). Nor a
-  // 2.3 record: no reply mark is what every record before #485 means (S55).
-  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields, "2.3": (fields) => fields }
+  // 2.3 record: no reply mark is what every record before #485 means (S55). Nor a 2.4 record: no trail is what every
+  // record before #474 means, and its summary is not an earlier wording of anything.
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields, "2.3": (fields) => fields, "2.4": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -36719,6 +36722,13 @@ var appliesWhenSchema = external_exports.strictObject({
 });
 var markSchema = external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() });
 var replyMarkSchema = external_exports.strictObject({ phrases: external_exports.array(external_exports.string()) });
+var trailEntrySchema = external_exports.strictObject({
+  changed: external_exports.string().min(1),
+  title: external_exports.string().optional(),
+  summary: external_exports.string().optional(),
+  why: external_exports.string().optional(),
+  body: external_exports.string().optional()
+});
 var frontmatterSchema = external_exports.strictObject({
   id: memoryId,
   title: external_exports.string().trim().min(1),
@@ -36747,7 +36757,10 @@ var frontmatterSchema = external_exports.strictObject({
   userWords: external_exports.array(external_exports.string()).optional(),
   // #485, format 2.4: the mark about Claude's reply, a top-level field of its own; a hand-edited phrase that cannot be
   // matched still loads and is skipped by the matcher (S50).
-  reply: replyMarkSchema.optional()
+  reply: replyMarkSchema.optional(),
+  // #474, format 2.5: the trail of earlier wordings, oldest first. Not judged the way a save's own text is (#322,
+  // #345): a stored one loads and shows through shownText, as every other stored text does.
+  trail: external_exports.array(trailEntrySchema).optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36899,12 +36912,29 @@ function findByIdPrefix(memories, prefix, unloadedIds = []) {
   if (count2 > 1) return { error: `id ${wanted} matches ${count2} memories; give more characters` };
   return { memory: matches[0] };
 }
+function canonicalTrail(trail) {
+  const kept = [];
+  for (const entry of trail ?? []) {
+    const text = (field) => field === void 0 ? void 0 : field.trim();
+    const [title, summary, why, body] = [text(entry.title), text(entry.summary), text(entry.why), text(entry.body)];
+    if (title === void 0 && summary === void 0 && why === void 0 && body === void 0) continue;
+    kept.push({
+      changed: entry.changed,
+      ...title === void 0 ? {} : { title },
+      ...summary === void 0 ? {} : { summary },
+      ...why === void 0 ? {} : { why },
+      ...body === void 0 ? {} : { body }
+    });
+  }
+  return kept.length === 0 ? void 0 : kept;
+}
 function toFrontmatter(memory) {
   const canonical = canonicalCondition(memory.appliesWhen);
   const mark = canonicalMark(memory.failure, "failure");
   const callMark = canonicalMark(memory.callInput, "callInput");
   const replyMark = canonicalReply(memory.reply);
   const words = (memory.userWords ?? []).map((entry) => entry.trim()).filter((entry) => entry !== "");
+  const trail = canonicalTrail(memory.trail);
   return {
     id: memory.id,
     title: memory.title,
@@ -36930,7 +36960,9 @@ function toFrontmatter(memory) {
     // #467: absent when no words are kept, so a record without them keeps exactly the 2.2 keys.
     ...words.length === 0 ? {} : { userWords: words },
     // #485: absent when the memory is about no reply, so a record without one keeps exactly the 2.3 keys.
-    ...replyMark === void 0 ? {} : { reply: replyMark }
+    ...replyMark === void 0 ? {} : { reply: replyMark },
+    // #474: absent when it was never rewritten, so a record without a trail keeps exactly the 2.4 keys.
+    ...trail === void 0 ? {} : { trail }
   };
 }
 function issueMessages(issues) {
@@ -46237,7 +46269,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.8.0",
+  version: "0.9.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48758,7 +48790,7 @@ var NOTHING_TO_SHOW = "Add nothing about memories to your reply to the user.";
 var NOTHING_CHECKED = "Say to the user, in your reply, what the check could not check and why (the reasons above); never say that no memory pointed the other way.";
 function nextWords(show, nothingElse) {
   if (show.length === 0) return nothingElse ? NOTHING_TO_SHOW : NOTHING_CHECKED;
-  return `Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. Ask whether they want to sharpen it, delete it or dismiss the flag. Sharpen: update_memory or update_rule with only the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked.`;
+  return `Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. Start the therapy skill for these memories now, before asking for a choice: it names the dysfunction each one shows, with the evidence for it, and only then the treatment it proposes. Then offer, in one line, to treat any of these memories now: the therapy skill makes the change it diagnosed there (words that say other than its why, an intent that no longer holds, or words that do not land) and rewords or reframes it with the user on their answer. Ask whether they want to treat it, sharpen it, delete it or dismiss the flag. Treat: write on their yes the wording you proposed in the skill, with the correcting words above added to its userWords, so the trail of what was said and what changed stays. For a rule, offer no treatment: the skill proposes no wording for a rule, so give the diagnosis and its evidence and say the user can change the rule itself on their own ask, which Claude Code asks them to confirm. Never write a rule wording for them. Sharpen: update_memory or update_rule with the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked.`;
 }
 async function correctionAnswer(input2) {
   const { delivered, today, place } = input2;
@@ -49279,7 +49311,8 @@ function wordsIn(text) {
   return words;
 }
 function memoryText(memory) {
-  return [memory.title, memory.summary, memory.body, ...memory.userWords ?? []].join(String.fromCharCode(10));
+  const earlier = (memory.trail ?? []).flatMap((entry) => [entry.title, entry.summary, entry.why, entry.body]);
+  return [memory.title, memory.summary, memory.body, ...memory.userWords ?? [], ...earlier.filter((text) => text !== void 0)].join(String.fromCharCode(10));
 }
 function leaks(text, names) {
   const words = wordsIn(text);
@@ -49512,7 +49545,7 @@ function describePlan(plan) {
   if (plan.shorten.length > 0) {
     const today = lengthSpan(plan.shorten.map((one) => one.summaryLength.today)).text;
     const after = lengthSpan(plan.shorten.map((one) => one.summaryLength.after));
-    const tail = "with get_memory for its revision and then update_memory with the shorter summary (the old text is not kept, so copy it first if you may want it back)";
+    const tail = "with get_memory for its revision and then update_memory with the shorter summary (the summary it has now stays readable with the memory, so it can be put back by hand)";
     parts.push(
       plan.shorten.length === 1 ? `rewrite one summary of ${today} so that ${after.text} of it ${after.one ? "remains" : "remain"} (its summaryLength.after), ${tail}` : `rewrite ${plan.shorten.length} summaries of ${today} so that ${after.text} of each ${after.one ? "remains" : "remain"} (each memory's summaryLength.after), each ${tail}`
     );
@@ -51580,6 +51613,8 @@ ${TRACK_LOST_LINE}`;
       // #467: left out, the stored words stay; new ones join them (How line 3), so a correction keeps the trail (S15).
       ...joinedWords(previous.userWords, args2.userWords) === void 0 ? {} : { userWords: joinedWords(previous.userWords, args2.userWords) }
     };
+    const trail = trailedWords(previous, memory);
+    if (trail !== void 0) memory.trail = trail;
     const kept = unloadedLinks(memory, LINK_KINDS.filter((kind2) => args2[kind2] === void 0), memories, problems);
     const checked = (kind2) => memory[kind2].filter((id) => !kept.some((link2) => link2.kind === kind2 && link2.id === id));
     if (keptWords(args2.userWords) !== void 0) {
@@ -51617,11 +51652,11 @@ ${TRACK_LOST_LINE}`;
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
       ...kept.map((link2) => link2.line)
     ];
-    const showNext = keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT;
+    const showNext = [keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT, trail !== void 0 && trail !== previous.trail ? TRAIL_READABLE : void 0].filter((line) => line !== void 0).join(" ");
     return ok({
-      updated: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), revision },
+      updated: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), ...shownTrail(memory), revision },
       warning: warnings.length > 0 ? warnings.join("\n") : void 0,
-      next: showNext,
+      next: showNext === "" ? void 0 : showNext,
       affects: confirmation?.affects
     });
   };
@@ -52623,7 +52658,10 @@ function shownMemory({ memory, revision }, resolution, here) {
     // #467 AC1, S34, S46: the user's own words beside the rule, marked for what they are. Absent when none are kept, so
     // a memory saved before this version answers exactly as before (S18), and a search result and a delete show nothing
     // because they go through entryOf, not through here (S47, S48).
-    ...shownWords(memory)
+    ...shownWords(memory),
+    // #474 AC3, S35, S36: the earlier wordings, with when each changed. Absent for a memory never rewritten, so a record
+    // before 2.5 answers exactly as before; a search result and a delete still show nothing, going through entryOf.
+    ...shownTrail(memory)
   };
 }
 function refusal(action, error62, memory) {
@@ -52949,10 +52987,36 @@ function shownWords(memory) {
   const words = keptWords(memory.userWords);
   return words === void 0 ? {} : { userWords: words.map((entry) => shownText(entry)), userWordsNote: USER_WORDS_NOTE };
 }
+var TRAIL_READABLE = "The text this memory had before is kept with it, readable with get_memory: only deleting the memory removes an earlier wording.";
+function shownTrail(memory) {
+  const trail = memory.trail;
+  if (trail === void 0 || trail.length === 0) return {};
+  const shownEntry = (entry) => {
+    const [title, summary, why, body] = [entry.title, entry.summary, entry.why, entry.body];
+    return {
+      changed: entry.changed,
+      ...title === void 0 ? {} : { title: shownText(title) },
+      ...summary === void 0 ? {} : { summary: shownText(summary) },
+      ...why === void 0 ? {} : { why: shownText(why) },
+      ...body === void 0 ? {} : { body: shownText(body) }
+    };
+  };
+  return { earlierWordings: trail.map(shownEntry) };
+}
 function joinedWords(stored, added) {
   const kept = keptWords(stored) ?? [];
   for (const entry of keptWords(added) ?? []) if (!kept.includes(entry)) kept.push(entry);
   return kept.length === 0 ? void 0 : kept;
+}
+var TRAIL_FIELDS = ["title", "summary", "why", "body"];
+function trailedWords(previous, memory) {
+  const changed = TRAIL_FIELDS.filter((field) => memory[field] !== previous[field]);
+  if (changed.length === 0) return previous.trail;
+  const entry = {
+    changed: memory.updated,
+    ...Object.fromEntries(changed.map((field) => [field, previous[field]]))
+  };
+  return [...previous.trail ?? [], entry];
 }
 function ok(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };

@@ -126,7 +126,8 @@ said and passed.
   `update_memory.delivery=on-demand` and the entry's `revision` as `update_memory.revision`.
 - **A rewrite** (an entry under `shorten`): show the summary today and a shorter one you propose, of at least 120
   characters and at most the entry's `summaryLength` `after` (its length `today` is the one now), with both lengths.
-  It stays at the start with that summary; the old summary is not kept, so the user may copy it first. For a user
+  It stays at the start with that summary; the summary it has now stays readable with the memory afterwards, so it can
+  be put back by hand. For a user
   memory every other place shows the shorter summary too. On yes: `update_memory` with `update_memory.summary` and the
   entry's `revision` as `update_memory.revision`. When the user gives a summary of their own, show it back and write
   it as given; when it is longer than `after`, say the start may no longer fit.

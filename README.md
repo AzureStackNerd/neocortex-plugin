@@ -426,7 +426,7 @@ answer to one of them -- reject and keep-both change no memory, accept writes th
 a write makes load, `memories_in_play`, which names the memories NeoCortex delivered into this conversation and
 changes nothing (see [Which memories were in play](#which-memories-were-in-play)), `correction_check`, which answers
 when the user corrects Claude with the delivered memories that may have pointed it the other way and the evidence for
-each, and changes nothing either: the user sharpens, deletes or dismisses, and the answer says so, and `hook_context`, which
+each, and changes nothing either: the user treats, sharpens, deletes or dismisses, and the answer says so, and `hook_context`, which
 is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
 memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule
