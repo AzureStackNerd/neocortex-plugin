@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.10.0 - 2026-11-21
+
+- Added: `/neocortex:therapy`, one command (or the same ask in words) that goes through every memory this place
+  sees. Before anything changes it lists the memories whose words mislead Claude or do not land, each with the
+  evidence for it, grouped by problem when more than about ten show one; you pick what to work on, and each memory
+  changes only on your answer for it. A rule is named with its evidence and offered no wording. When a memory
+  arrives (never, too late, or ignored) is not treated by the command yet (#500).
+- Added: `search_memories` takes an `offset` and answers `nextOffset`, so a sitting reads on past 50 memories
+  (#500).
+- Changed: the plugin README describes therapy at a correction and in the command, and the trail of earlier
+  wordings a treated memory keeps (#505).
+
 ## 0.9.0 - 2026-11-20
 
 - Added: therapy at a correction. When you correct Claude and the correction check suspects a memory, Claude now

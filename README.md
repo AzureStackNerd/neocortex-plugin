@@ -319,7 +319,8 @@ memory delivered `on-demand` is reachable this way, so choosing that delivery hi
 It also reports the memories that exist but could not be read, with how many and which of their stored text matches, so
 a memory that did not load never looks like no match. Its `includeInactive` returns the expired, replaced and
 overridden ones too, which the default search leaves out; use it to find what an `expires` date or a `supersedes` link
-took out of context, before deciding whether to change it.
+took out of context, before deciding whether to change it. It lists at most 50 matches a page: when more remain, the
+answer's `nextOffset` is where the next page starts, and passing it back as `offset` reads on from there.
 
 Because every word narrows, the server's instructions tell Claude to use your own words in any search. Only when that
 finds too little does it swap one of them for a synonym or a broader word, and it tells you which.
@@ -339,6 +340,47 @@ Claude is told to delete a memory only when you ask; to have Claude Code ask you
 the allow rule (see [Permissions](#permissions)). A deleted memory moves to the folder `deleted` in your memory folder,
 under the same path, from where you can put it back by hand. When that folder already holds a deleted copy of the same
 memory, the later one is `<id>.2.md`, then `<id>.3.md`; rename it to `<id>.md` when you put it back.
+
+### Why a memory keeps misleading Claude: `/neocortex:therapy`
+
+Type `/neocortex:therapy`, or ask Claude to go through your memories, and it sits down with you over every memory this
+project sees. First it looks, then it shows one list, and only then does it treat anything.
+
+**The list comes first, with nothing changed yet.** Each memory on it is named by title and short id with what is
+wrong with it and the evidence for it, said as what the evidence suggests and never as a verdict, so you can disagree.
+Three things it looks for: a summary that says other than the memory's `why`, a summary nobody can act on (a list of
+keywords, no verb), and a memory you name yourself as outdated. A long list is grouped by what is wrong with each
+memory, the largest group first, and it names ten of a group at a time.
+
+**One treatment at a time, and nothing changes without your answer.** For a memory whose words drifted, it offers a
+rewording back to the intent; for one that did not land, a clearer wording with the same meaning; for one you call
+outdated, a reframe that keeps the `why` and changes the conclusion. A rule gets its diagnosis and no proposed
+wording: the rule's own words are yours to set, and Claude Code asks you to confirm the change it affects. Your answer
+is for one memory at a time: pick one to have it diagnosed in full, say a memory is not a problem or that you are
+unsure, give a wording of your own instead of Claude's, ask for "all the rest" in one reply, or ask for the next ten of
+a group. A "not a problem" leaves that memory off this sitting's list, unchanged.
+
+**What it read, and what it did not.** It judges a memory from its summary and `why`. A shown memory, and every rule,
+is read in full, so its `body` is in front of you before you decide. It says how many memories it read. A store with
+more than a hundred memories is read two pages at a time, and it tells you how many are left; the rest come on your
+word.
+
+**Nothing here is lost, and nothing is remembered as said.** A treatment keeps the memory's `why` and every earlier
+wording, readable with `get_memory`, until you delete the memory; only a delete removes them. In this sitting you did
+not correct Claude, so a yes to a wording Claude proposed writes that wording only: no words of yours are stored that
+you did not say. When you give a wording of your own, that is what joins your words.
+
+**It changes what a memory says, not when it arrives.** A memory that never comes up when it should, or arrives too
+late, is a different problem; this command treats the words. A rewording leaves where the memory arrives as it is. A
+reframe changes the conclusion or narrows where it applies, and a narrowed condition is a real change in arrival: the
+memory then comes up at fewer places, and its offer says where. Mostly, though, it changes what a memory says, not
+when it arrives.
+
+**At a correction it still works as it always has.** When you correct Claude and NeoCortex suspects a memory, Claude
+treats that memory beside your correction: the same diagnosis and the same treatments, with your correcting words as
+evidence. It writes nothing there either until you answer.
+
+The command is listed in the `/` menu. Claude can start it too, when you ask in words to go through your memories.
 
 ### Which memories were in play
 

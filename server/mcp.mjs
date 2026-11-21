@@ -46269,7 +46269,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.9.0",
+  version: "0.10.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -51693,11 +51693,12 @@ ${TRACK_LOST_LINE}`;
     "search_memories",
     {
       title: "Search NeoCortex memories",
-      description: "Find user and project memories. Every word of query and every label must match. Returns index entries; use get_memory for the full text. Also reports memories that exist but could not be read: their count and the ones whose stored text matches.",
+      description: `Find user and project memories. Every word of query and every label must match. Returns index entries; use get_memory for the full text. Also reports memories that exist but could not be read: their count and the ones whose stored text matches. At most ${SEARCH_LIMIT} results are listed; total counts every match, and nextOffset is where the next page starts, so pass it back as offset to read on.`,
       inputSchema: {
         query: external_exports.string().optional().describe("Words that must all appear in title, why, body or labels"),
         labels: external_exports.array(external_exports.string()).optional().describe("Labels that must all be present"),
-        includeInactive: external_exports.boolean().default(false).describe("Also return expired, replaced and overridden memories; a memory that is not here is found either way, marked notHere")
+        includeInactive: external_exports.boolean().default(false).describe("Also return expired, replaced and overridden memories; a memory that is not here is found either way, marked notHere"),
+        offset: external_exports.number().int().min(0).default(0).describe("How many matches to skip, from nextOffset of an earlier answer; the matches themselves are found the same way whatever this is")
       }
     },
     (args2) => guarded(async () => {
@@ -51712,12 +51713,19 @@ ${TRACK_LOST_LINE}`;
         return words.every((word) => text.includes(word)) && wanted.every((label) => carriesLabel(memory, label));
       });
       const unreadable = unreadablePart(memories, problems, words, wanted);
-      const shown2 = results.slice(0, SEARCH_LIMIT).map((memory) => ({
+      const page = results.slice(args2.offset, args2.offset + SEARCH_LIMIT);
+      const shown2 = page.map((memory) => ({
         ...entryOf(memory),
         ...notHere(memory) ? { notHere: notHereWords(memory.appliesWhen ?? {}, here) } : {},
         revision: baseOf(stored, memory).revision
       }));
-      return ok({ total: results.length, results: shown2, ...unreadable === void 0 ? {} : { unreadable } });
+      const nextOffset = args2.offset + page.length;
+      return ok({
+        total: results.length,
+        results: shown2,
+        ...nextOffset < results.length ? { nextOffset } : {},
+        ...unreadable === void 0 ? {} : { unreadable }
+      });
     })
   );
   server.registerTool(
