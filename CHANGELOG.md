@@ -2,6 +2,21 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.12.0 - 2026-11-22
+
+- Added: when you correct Claude, a memory whose arrival stopped a call in this conversation (also a stop your
+  correction is not about), or that you say disturbs your work, is named **arrives in a way that hurts** with its
+  evidence (the stopped call and when, how often and at which moments it arrived, your words) and offered a form
+  that hurts less in place of the moment that hurt: a narrower cue, a failure mark, a reply mark or its index line,
+  each with what it gives up. Keeping it as it is stays your answer; nothing changes without your answer; a rule is
+  only offered moments at which it still loads in full, through Claude Code's confirmation (#510).
+- Changed: a conversation's record keeps each call a memory stopped (record format 2), so a stop is named after a
+  compaction too; a record written before the update is still read, never as "nothing arrived" (#510).
+- Changed: the start's correction line says that a memory that gets in your way is treated when you correct Claude
+  (#510).
+- Changed: `correction_check` takes the memories you say disturb you (`disturbing`) and lists each memory's moments
+  in this conversation beside its count (#510).
+
 ## 0.11.0 - 2026-11-22
 
 - Added: when you correct Claude, it looks for a memory of this place about what you corrected that never reached it

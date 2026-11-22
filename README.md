@@ -370,11 +370,40 @@ wording, readable with `get_memory`, until you delete the memory; only a delete 
 not correct Claude, so a yes to a wording Claude proposed writes that wording only: no words of yours are stored that
 you did not say. When you give a wording of your own, that is what joins your words.
 
-**This sitting treats the words, not the timing.** A memory that arrives too late, in a way that hurts, or is ignored
-is a different problem, and this command does not treat it yet; it says so and lists that memory's wording fault if it
-has one. A rewording leaves where the memory arrives as it is. A reframe changes the conclusion or narrows where it
-applies, and a narrowed condition is a real change in arrival: the memory then comes up at fewer places, and its offer
-says where.
+**This sitting treats the words, not the timing.** A memory that arrives too late, or is ignored, is a different
+problem, and this command does not treat it yet; it says so and lists that memory's wording fault if it has one. A
+memory whose arrival hurts is treated where you correct Claude, as the next paragraph says. A rewording leaves where
+the memory arrives as it is. A reframe changes the conclusion or narrows where it applies, and a narrowed condition is
+a real change in arrival: the memory then comes up at fewer places, and its offer says where.
+
+**At a correction, a memory whose arrival hurts is given a form that hurts less.** When you correct Claude, the check
+names a memory whose arrival stopped a call in this conversation, or one you say disturbs your work, and it opens its
+diagnosis with **arrives in a way that hurts**, in bold. A stop is treated at every correction, also one your
+correction is not about and one that did what it was set to do: you are offered its forms, and keeping it as it is
+stays your answer to give. Outside a correction, a remark that a memory disturbs your
+work gets one line: a memory that hurts is treated when you correct Claude, and nothing is treated for it in a turn of
+your own. The evidence
+is yours: your own words, the refused call as Claude saw it (or, once it has left Claude's context, the tool and the
+time the record kept), and how often and at which moments the memory arrived, with what the record could not read said
+as such. The form offered takes the place of the moment that hurt, and each form says what it gives up before you
+answer: a narrower cue (the tool and pattern or the phrases, as they are and as proposed, with which calls it still
+meets and which it no longer does), a failure mark (it then arrives only when such a call fails, beside its error,
+after the call has run), a reply mark (at the end of a reply that says its phrase, after the call), or its index line
+(it then arrives only as its one line at each session start, its text only when looked up). A form the memory already
+has is said as the moment kept, never as a second mark of that kind, and a memory with two or three marks keeps the
+ones that did not hurt. A **rule** is offered another moment at which it still loads in full, or a narrower condition,
+and never a wording; Claude Code asks you to confirm it with what it affects, and a mark or its index line only when
+you ask for one, since the rule then stops being a rule.
+
+**The new form fires at its next moment, not at once.** When the offer is written, the moment that hurt is gone in the
+same write, but a mark the memory keeps is recorded once per agent's context and cleared at a session start, so it
+first fires after the next session start, `/clear` or compaction, in a new subagent, or after a day without use in this
+conversation; a rule's new load moment holds from its next such moment. The offer and the end say so.
+
+**A memory that cannot have hurt here is never named that way.** One that is on demand with no mark, whose condition
+does not hold in this project, that expired or was replaced or overridden, a handoff, another project's, or one whose
+record does not load is not named as arriving in a way that hurts; when you name it, Claude says why it does not arrive
+here. A handoff is offered nothing, since the next handoff replaces it.
 
 **At a correction, a memory that did not arrive is found and given a moment of its own.** When you correct Claude, the
 correction check looks at what NeoCortex delivered before the mistake and at the memories of this project that bear on
@@ -390,10 +419,11 @@ offered another moment too, but only at moments at which it still loads, and Cla
 what it affects.
 
 **When the check could not read something, it says so rather than guessing.** If the record of what arrived cannot be
-read, some of it is damaged, this conversation began with a `/clear`, or this project's labels or repository cannot be
-read, the answer names what could not be checked and why, and never that no memory misfired. A memory whose timing was
-fine but whose words made Claude act wrongly is still treated here, as before: the two dysfunctions are named apart,
-each with its own evidence and its own offer.
+read, some of it is damaged, this conversation began with a `/clear`, NeoCortex was updated during this conversation so
+its earlier notes cannot be read, or this project's labels or repository cannot be read, the answer names what could
+not be checked and why, and never that no memory misfired or that none stopped a call. A memory whose timing was fine
+but whose words made Claude act wrongly is still treated here, as before: the two dysfunctions are named apart, each
+with its own evidence and its own offer.
 
 **Nothing changes without your answer.** A memory offered another moment is written only on your yes; a no changes
 nothing and it is not offered again in this conversation. The write's own answer says what changed and where the
@@ -422,9 +452,17 @@ Index part 1 names the conversation in a `Track record: conversation` line, whic
 behind it are one file per session in `.neocortex/track` in your home folder, on this machine only, removed 24 hours
 after their last write. Notes older than the 24 hours they are kept are no longer named, so a session you resume after a
 long gap answers with the notes since it, never with the ones from before. A note holds the moment, the tool's name, the
-time and the memory ids: never a memory's, prompt's, call's or error's text, and no file or folder path. When a note
-cannot be written, the delivery still arrives as before, Claude is told once, and the answer names those deliveries as
-unknown rather than as no memory.
+time, whether the call it is about was stopped, and the memory ids: never a memory's, prompt's, call's or error's text,
+and no file or folder path. When a note cannot be written, the delivery still arrives as before, Claude is told once, and
+the answer names those deliveries as unknown rather than as no memory.
+
+**After an update to NeoCortex, notes from before it are said to be unreadable, never counted as none.** A note's format
+is in its file's name, and a record of the previous format cannot be read by this version. When one lies beside the
+current session's record, the answer says that what arrived, and what a memory stopped, before the update cannot be
+checked here, and checks what was noted since; it never says that nothing arrived or that no memory stopped a call. With
+only the old record on disk the answer says the same, rather than that nothing was delivered. The old record is removed
+once it has not been written for the 24 hours a record is kept, and only when its session has no current record written
+within that period, so a conversation that runs on across the kept period does not lose it.
 
 ### Tidying your store: the Dreamer
 
