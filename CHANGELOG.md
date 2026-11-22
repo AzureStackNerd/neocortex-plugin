@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.11.0 - 2026-11-22
+
+- Added: when you correct Claude, it looks for a memory of this place about what you corrected that never reached it
+  before the mistake, shows it with the evidence (your words, what did reach Claude, the mistake) and offers it a
+  moment of its own that comes before such a mistake: a call, failure or reply mark, a file rule or a condition.
+  Nothing changes without your answer; a rule is only offered moments at which it stays a rule, through Claude
+  Code's confirmation (#502).
+- Added: a write that changes when a memory arrives says where it arrived before and where it arrives now (#502).
+- Changed: when the record of what arrived cannot tell, or NeoCortex is not connected, Claude says what it could
+  not check and never that no memory could have stopped the mistake (#502).
+
 ## 0.10.0 - 2026-11-21
 
 - Added: `/neocortex:therapy`, one command (or the same ask in words) that goes through every memory this place

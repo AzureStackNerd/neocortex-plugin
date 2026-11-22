@@ -370,15 +370,39 @@ wording, readable with `get_memory`, until you delete the memory; only a delete 
 not correct Claude, so a yes to a wording Claude proposed writes that wording only: no words of yours are stored that
 you did not say. When you give a wording of your own, that is what joins your words.
 
-**It changes what a memory says, not when it arrives.** A memory that never comes up when it should, or arrives too
-late, is a different problem; this command treats the words. A rewording leaves where the memory arrives as it is. A
-reframe changes the conclusion or narrows where it applies, and a narrowed condition is a real change in arrival: the
-memory then comes up at fewer places, and its offer says where. Mostly, though, it changes what a memory says, not
-when it arrives.
+**This sitting treats the words, not the timing.** A memory that arrives too late, in a way that hurts, or is ignored
+is a different problem, and this command does not treat it yet; it says so and lists that memory's wording fault if it
+has one. A rewording leaves where the memory arrives as it is. A reframe changes the conclusion or narrows where it
+applies, and a narrowed condition is a real change in arrival: the memory then comes up at fewer places, and its offer
+says where.
 
-**At a correction it still works as it always has.** When you correct Claude and NeoCortex suspects a memory, Claude
-treats that memory beside your correction: the same diagnosis and the same treatments, with your correcting words as
-evidence. It writes nothing there either until you answer.
+**At a correction, a memory that did not arrive is found and given a moment of its own.** When you correct Claude, the
+correction check looks at what NeoCortex delivered before the mistake and at the memories of this project that bear on
+what you corrected. A memory whose subject is exactly that, which did not arrive, is named as one that did not arrive
+when it should, said as what the evidence suggests and never as a verdict, from three sides: your correcting words,
+what reached Claude before the mistake (nothing, only its name in a warning, or only its title line cut short, and
+when), and the mistake itself. Its diagnosis opens with that label, in bold, and says where the memory arrives today
+in words: its delivery, the marks of its own, and the condition it applies at, worded the same way here and in the
+write's own answer. It then offers a moment that comes before such a mistake — a call, failure or reply mark's
+tool and pattern, a file rule, or a condition that takes this project in — and nothing changes until you answer. The
+moment is added beside the one the memory already has, never in place of it, and the answer says both. A **rule** is
+offered another moment too, but only at moments at which it still loads, and Claude Code asks you to confirm it with
+what it affects.
+
+**When the check could not read something, it says so rather than guessing.** If the record of what arrived cannot be
+read, some of it is damaged, this conversation began with a `/clear`, or this project's labels or repository cannot be
+read, the answer names what could not be checked and why, and never that no memory misfired. A memory whose timing was
+fine but whose words made Claude act wrongly is still treated here, as before: the two dysfunctions are named apart,
+each with its own evidence and its own offer.
+
+**Nothing changes without your answer.** A memory offered another moment is written only on your yes; a no changes
+nothing and it is not offered again in this conversation. The write's own answer says what changed and where the
+memory now arrives, naming the moment it had and the one it has now.
+
+**At a correction it works beside your correction, not as this sitting.** Claude treats the memories that answer named
+alone, with your correcting words as the evidence, and offers no list of the project and no ask to look it over. It
+writes nothing there either until you answer. What changed with this version is what it can treat there: a memory that
+did not arrive is given a moment, as the paragraph above says, and a memory whose words misfired is reworded as before.
 
 The command is listed in the `/` menu. Claude can start it too, when you ask in words to go through your memories.
 

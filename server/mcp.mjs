@@ -46269,7 +46269,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.10.0",
+  version: "0.11.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47723,7 +47723,7 @@ function arrivalsOf(placed, how, named = []) {
 function trackLine(conversation) {
   return `Track record: conversation ${conversation}`;
 }
-var CORRECTION_LINE = "Corrections: when the user corrects you, or asks whether a memory made you do what they corrected, call correction_check with their correcting words and any memory of those in play that may have pointed you the other way; with no suspect too, and say what it could not check.";
+var CORRECTION_LINE = "Corrections: when the user corrects you, or asks whether a memory made you do what they corrected, call correction_check with their correcting words, any memory of those in play that may have pointed you the other way, and any memory you find with search_memories that is about what they corrected; with none too, and say what it could not check. If that check is not among your tools, say the memories cannot be checked and that /neocortex:status says why, and never that no memory could have stopped the mistake, whatever another memory folder holds.";
 function trackLines(conversation) {
   return [trackLine(conversation), CORRECTION_LINE];
 }
@@ -48219,6 +48219,33 @@ function loadedText(memory, byId) {
       throw new Error(`unknown delivery ${JSON.stringify(memory.delivery)}`);
   }
 }
+var DELIVERY_WHERE = {
+  index: "as its index line at every session start",
+  startup: "in full at every session start",
+  prompt: "in full at every prompt",
+  question: "in full at a short question",
+  subagent: "in full when a subagent starts",
+  edit: "in full at every edit of a file",
+  "on-demand": ""
+};
+function arrivesWords(memory) {
+  const delivery = DELIVERY_WHERE[memory.delivery];
+  const mark = hasOwnMoment(memory) ? arrivalWords(memory) : memory.delivery === "on-demand" ? SEARCH_ONLY : "";
+  const condition = conditionWords(memory.appliesWhen);
+  return [delivery, mark, condition === "" ? "" : `only where: ${condition}`].filter((part) => part !== "").join("; ");
+}
+function placeUnknownWords(memory, here) {
+  const canonical = canonicalCondition(memory.appliesWhen);
+  if (canonical === void 0) return "";
+  const sentences = [];
+  if ((canonical.labels ?? []).length > 0 && here.labels === "unknown") {
+    sentences.push("This place's labels cannot be read now, so whether this memory's condition holds here cannot be told.");
+  }
+  if (canonical.inRepo === true && here.inRepo === "unknown") {
+    sentences.push("This place's repository cannot be read now, so whether this memory's condition holds here cannot be told.");
+  }
+  return sentences.join(" ");
+}
 function fullBlock(memory, byId) {
   const tag = `${memory.enforced ? `${memory.scope.kind}, enforced` : memory.scope.kind}${conditionOf(memory)}`;
   const lines = [`### [${tag}] ${shownCut(memory.title, 80)} \xB7 ${shortId(memory.id)}`, `Why: ${memory.why}`];
@@ -48681,6 +48708,7 @@ function deliveredOnes(record2, agent, pending, until) {
   const boundary = compactionBoundary(notes);
   const arrived = /* @__PURE__ */ new Map();
   const named = /* @__PURE__ */ new Map();
+  const textless = /* @__PURE__ */ new Map();
   for (const [at, note] of notes.entries()) {
     for (const memory of note.memories) {
       const previous = arrived.get(memory.id);
@@ -48697,6 +48725,7 @@ function deliveredOnes(record2, agent, pending, until) {
         beforeCompaction: boundary >= 0 && at < boundary
       });
       named.set(memory.id, (named.get(memory.id) ?? true) && memory.how === "named");
+      textless.set(memory.id, (textless.get(memory.id) ?? true) && (memory.how === "named" || memory.how === "short"));
     }
   }
   return {
@@ -48704,6 +48733,7 @@ function deliveredOnes(record2, agent, pending, until) {
     notes,
     arrived,
     onlyNamed: new Set([...named.entries()].filter(([, only]) => only).map(([id]) => id)),
+    textless: new Set([...textless.entries()].filter(([, only]) => only).map(([id]) => id)),
     damaged: record2.damaged,
     lost: notes.reduce((sum, note) => sum + (note.lostBefore ?? 0), 0) + pending,
     expired: record2.expired.filter((note) => note.agent === agent && inTime(note.time)).length,
@@ -48749,6 +48779,7 @@ function emptyDelivery(state, pending) {
     notes: [],
     arrived: /* @__PURE__ */ new Map(),
     onlyNamed: /* @__PURE__ */ new Set(),
+    textless: /* @__PURE__ */ new Set(),
     damaged: 0,
     lost: pending,
     expired: 0,
@@ -48790,7 +48821,7 @@ var NOTHING_TO_SHOW = "Add nothing about memories to your reply to the user.";
 var NOTHING_CHECKED = "Say to the user, in your reply, what the check could not check and why (the reasons above); never say that no memory pointed the other way.";
 function nextWords(show, nothingElse) {
   if (show.length === 0) return nothingElse ? NOTHING_TO_SHOW : NOTHING_CHECKED;
-  return `Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. Start the therapy skill for these memories now, before asking for a choice: it names the dysfunction each one shows, with the evidence for it, and only then the treatment it proposes. Then offer, in one line, to treat any of these memories now: the therapy skill makes the change it diagnosed there (words that say other than its why, an intent that no longer holds, or words that do not land) and rewords or reframes it with the user on their answer. Ask whether they want to treat it, sharpen it, delete it or dismiss the flag. Treat: write on their yes the wording you proposed in the skill, with the correcting words above added to its userWords, so the trail of what was said and what changed stays. For a rule, offer no treatment: the skill proposes no wording for a rule, so give the diagnosis and its evidence and say the user can change the rule itself on their own ask, which Claude Code asks them to confirm. Never write a rule wording for them. Sharpen: update_memory or update_rule with the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked.`;
+  return `Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. A memory above whose didNotArrive is "did-not-arrive" is named as one that did not arrive when it should: say it as what the evidence suggests, never as a verdict, from the three sides (their correcting words, what reached you before the mistake, and the mistake itself). A memory whose didNotArrive is "may-have" may have arrived in what the record could not read: say that, never flatly that it did not arrive. Before you name any of them one that did not arrive, check whether you looked that memory up yourself in this conversation before the mistake, with get_memory or search_memories: if you did, its text was in front of you, so say you read it yourself and when, and that the record covers only what NeoCortex delivered; it is not one that did not arrive, and it is offered no moment. A memory with notHere does not hold at this place: say the condition beside it as the reason, and offer to widen its condition so it takes this place in, shown before and after with every other place it then reaches. A memory with placeUnknown carries what this place could not be read for: say that sentence, and propose no condition change on that reading. Start the therapy skill for these memories now, before asking for a choice: it names the dysfunction each one shows, with the evidence for it, and only then the treatment it proposes. Then offer, in one line, to treat any of these memories now: the therapy skill makes the change it diagnosed there (words that say other than its why, an intent that no longer holds, or words that do not land) and rewords or reframes it with the user on their answer. Ask whether they want to treat it, sharpen it, delete it or dismiss the flag. Treat: write on their yes the wording you proposed in the skill, with the correcting words above added to its userWords, so the trail of what was said and what changed stays. For a rule, offer no treatment: the skill proposes no wording for a rule, so give the diagnosis and its evidence and say the user can change the rule itself on their own ask, which Claude Code asks them to confirm. Never write a rule wording for them. Sharpen: update_memory or update_rule with the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked, and that whether a memory did not arrive cannot be told for its work.`;
 }
 async function correctionAnswer(input2) {
   const { delivered, today, place } = input2;
@@ -48800,6 +48831,7 @@ async function correctionAnswer(input2) {
   const stored = new Map(today?.memories.map((one) => [one.memory.id, one]) ?? []);
   const byId = new Map(today?.memories.map((one) => [one.memory.id, one.memory]) ?? []);
   const readable = delivered.state === "read";
+  const certain = readable && delivered.damaged === 0 && delivered.lost === 0 && delivered.expired === 0 && !delivered.cleared && delivered.missingParts.length === 0;
   if (delivered.state === "newer") couldNotCheck.push("The notes of this conversation were written by a newer NeoCortex, which this one cannot read; update NeoCortex on this machine.");
   else if (delivered.state === "unreadable") couldNotCheck.push("The notes of this conversation cannot be read now.");
   else if (delivered.notes.length === 0) couldNotCheck.push("NeoCortex has nothing noted for this conversation: nothing has been delivered yet, or its notes passed the 24 hours they are kept.");
@@ -48813,23 +48845,127 @@ async function correctionAnswer(input2) {
   if (delivered.damaged > 0) unknown2.push(`${delivered.damaged} ${delivered.damaged === 1 ? "note" : "notes"} of this session cannot be read, so what ${delivered.damaged === 1 ? "it names is" : "they name is"} unknown.`);
   if (delivered.lost > 0) unknown2.push(`${delivered.lost} ${delivered.lost === 1 ? "delivery" : "deliveries"} of this conversation could not be noted, so what ${delivered.lost === 1 ? "it" : "they"} brought is unknown.`);
   const show = [];
-  for (const asked of input2.suspects) {
+  const answered = /* @__PURE__ */ new Set();
+  const askedList = [];
+  const askedAt = /* @__PURE__ */ new Map();
+  for (const [list, about] of [
+    [input2.about ?? [], true],
+    [input2.suspects, false]
+  ]) {
+    for (const ask of list) {
+      const key = ask.trim().toLowerCase();
+      const at = askedAt.get(key);
+      if (at === void 0) {
+        askedAt.set(key, askedList.length);
+        askedList.push({ ask, about });
+      } else if (about) askedList[at] = { ask, about: true };
+    }
+  }
+  for (const { ask: asked, about } of askedList) {
     const deliveredId = matchId(asked, delivered.arrived);
     const inToday = deliveredId === null ? matchId(asked, stored) : null;
     const anywhere = deliveredId === null && inToday === null ? await recordOf(input2.recordOf, asked) : void 0;
     const id = deliveredId ?? inToday ?? anywhere?.record?.memory.id ?? null;
     if (id === null) {
-      if (anywhere?.unreadable === true) couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} cannot be looked up now: its record cannot be read, so whether it is a memory here cannot be checked.`);
+      if (anywhere?.unreadable === true && about) {
+        couldNotCheck.push(
+          `${JSON.stringify(shownCut(asked, 80))} cannot be read now, so nothing is named for it: repair the record the index names, or update NeoCortex on this machine if a newer one wrote it.`
+        );
+      } else if (anywhere?.unreadable === true) couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} cannot be looked up now: its record cannot be read, so whether it is a memory here cannot be checked.`);
       else if (anywhere?.refused === true || input2.recordOf === void 0) couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} could not be looked up: the store could not be read now, so whether it is a memory here cannot be checked.`);
       else couldNotCheck.push(`${JSON.stringify(shownCut(asked, 80))} is no memory in this store (${place}), so nothing is named for it.`);
       continue;
     }
+    if (answered.has(id)) continue;
+    answered.add(id);
     const arrival = deliveredId === null ? void 0 : delivered.arrived.get(deliveredId);
     const loaded = stored.get(id) ?? (anywhere?.record?.memory.id === id ? anywhere.record : (await recordOf(input2.recordOf, id)).record);
     const broken = (anywhere?.unreadable ?? false) || today !== void 0 && today.problems.some((problem) => problem.id === id && problem.copy !== true);
     const title = loaded === void 0 ? "" : shownCut(loaded.memory.title, 80);
+    if (about) {
+      const memory = loaded?.memory;
+      const entry = {
+        id,
+        shortId: shortId(id),
+        title,
+        ...memory === void 0 ? {} : { arrives: arrivesWords(memory) },
+        ...memory === void 0 || input2.placeState === void 0 ? {} : { placeUnknown: orAbsent(placeUnknownWords(memory, input2.placeState.here)) }
+      };
+      if (memory === void 0 || broken) {
+        couldNotCheck.push(
+          `"${title}" (${shortId(id)}) cannot be read now, so nothing is named for it: repair the record the index names, or update NeoCortex on this machine if a newer one wrote it.`
+        );
+        continue;
+      }
+      const standing = input2.placeState === void 0 ? "unknown" : standingOf(input2.placeState.resolution, id);
+      if (standing === "expired") {
+        couldNotCheck.push(`"${title}" (${shortId(id)}) expired${memory.expires === null ? "" : ` on ${memory.expires}`}, so it arrives nowhere by design; it is not one that did not arrive.`);
+        continue;
+      }
+      if (standing === "superseded" || standing === "overridden") {
+        const hider = hiderOf(input2.placeState.resolution, id, standing);
+        couldNotCheck.push(
+          `"${title}" (${shortId(id)}) is ${standing === "superseded" ? "replaced" : "overridden"} by ${hider === void 0 ? "another memory" : `"${shownCut(hider.title, 80)}" (${shortId(hider.id)})`} here, so it arrives nowhere by design; diagnose that memory instead.`
+        );
+        continue;
+      }
+      if (standing === "other") {
+        couldNotCheck.push(`"${title}" (${shortId(id)}) is no memory this place loads, so nothing is named for it.`);
+        continue;
+      }
+      if (arrival === void 0) {
+        if (!readable) {
+          couldNotCheck.push(
+            standing === "elsewhere" ? `"${title}" (${shortId(id)}) does not hold at this place, but the record of this conversation cannot be read, so whether it did not arrive cannot be told; if you read it yourself before the mistake, its text was in front of you.` : `"${title}" (${shortId(id)}) was not noted as delivered into this conversation, but the record cannot be read, so whether it did not arrive cannot be told; if you read it yourself before the mistake, its text was in front of you.`
+          );
+          continue;
+        }
+        if (standing === "unknown") {
+          couldNotCheck.push(
+            `"${title}" (${shortId(id)}) was not noted as delivered into this conversation, but this place's standing could not be read, so whether it did not arrive here cannot be told; if you read it yourself before the mistake, its text was in front of you.`
+          );
+          continue;
+        }
+        if (standing === "elsewhere") {
+          const why = notHereWords(memory.appliesWhen ?? {}, input2.placeState.here);
+          show.push({
+            ...entry,
+            didNotArrive: certain ? "did-not-arrive" : "may-have",
+            notHere: why === "" ? "its condition does not hold at this place" : why
+          });
+          continue;
+        }
+        show.push({ ...entry, didNotArrive: certain ? "did-not-arrive" : "may-have" });
+        continue;
+      }
+      if (delivered.onlyNamed.has(id)) {
+        show.push({ ...entry, didNotArrive: "did-not-arrive" });
+        continue;
+      }
+      if (delivered.textless.has(id)) {
+        const brought3 = arrival.textArrival ?? { how: arrival.how, moment: arrival.moment, kind: arrival.kind, time: arrival.time };
+        show.push({
+          ...entry,
+          rule: arrivalText(memory, byId, brought3.how, brought3.kind),
+          didNotArrive: certain ? "did-not-arrive" : "may-have",
+          arrived: { how: arrival.how, moment: arrival.moment, time: arrival.time, count: arrival.count }
+        });
+        continue;
+      }
+      const since2 = arrival.revision !== void 0 && loaded !== void 0 && loaded.revision !== arrival.revision ? "changed" : void 0;
+      const brought2 = arrival.textArrival ?? { how: arrival.how, moment: arrival.moment, kind: arrival.kind, time: arrival.time };
+      show.push({
+        ...entry,
+        rule: arrivalText(memory, byId, brought2.how, brought2.kind),
+        arrived: { how: arrival.how, moment: arrival.moment, time: arrival.time, count: arrival.count },
+        ...arrival.textArrival === void 0 || arrival.textArrival.time === arrival.time ? {} : { ruleArrived: { how: arrival.textArrival.how, moment: arrival.textArrival.moment, time: arrival.textArrival.time } },
+        ...since2 === void 0 ? {} : { since: since2 },
+        ...arrival.beforeCompaction ? { beforeCompaction: true } : {}
+      });
+      continue;
+    }
     if (arrival === void 0) {
-      if (readable) couldNotCheck.push(`"${title}" (${shortId(id)}) was not delivered into this conversation, so it cannot have steered Claude here; see the scope above.`);
+      if (readable) couldNotCheck.push(`"${title}" (${shortId(id)}) was not delivered into this conversation, so it cannot have steered Claude here \u2014 it may not have arrived; if it is about what the user corrected, pass it in about; see the scope above.`);
       else couldNotCheck.push(`"${title}" (${shortId(id)}) is in this store, but whether it reached this conversation cannot be checked; see above.`);
       continue;
     }
@@ -48872,6 +49008,21 @@ async function correctionAnswer(input2) {
     checked: readable ? "made" : "not made",
     next: nextWords(show, nothingElse)
   };
+}
+function standingOf(resolution, id) {
+  if (resolution.expired.some((one) => one.id === id)) return "expired";
+  if (resolution.active.some((one) => one.id === id)) return "active";
+  if (resolution.elsewhere.some((one) => one.id === id)) return "elsewhere";
+  const known = resolution.byId.get(id);
+  if (known === void 0) return "other";
+  return resolution.current.some((one) => one.id === id) ? "overridden" : "superseded";
+}
+function hiderOf(resolution, id, kind) {
+  const link2 = kind === "superseded" ? "supersedes" : "overrides";
+  return [...resolution.byId.values()].find((one) => one.id !== id && one[link2].includes(id) && !resolution.expired.includes(one));
+}
+function orAbsent(words) {
+  return words === "" ? void 0 : words;
 }
 async function recordOf(ask, id) {
   if (ask === void 0) return { record: void 0, unreadable: false, refused: false };
@@ -50873,11 +51024,14 @@ var IN_PLAY_INPUT = {
   conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
   until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
 };
-var CORRECTION_DESCRIPTION = "When the user corrects you, or asks whether a memory made you do what they corrected, call this with their correcting words and the memories you judge may have pointed you the other way. It answers each suspect with the evidence: the rule as you actually read it, when, at which moment and how it arrived, and whether it changed since; your words safe to show back; what it could not check; and what to say to the user. Call it at every correction you recognise, also when you name no suspect: the answer says what could not be checked, which you must say too, and never that no memory pointed the other way. It covers what NeoCortex delivered into this conversation, not what you looked up yourself. It writes nothing: the user sharpens, deletes or dismisses, and only they do.";
+var CORRECTION_DESCRIPTION = "When the user corrects you, or asks whether a memory made you do what they corrected, call this with their correcting words, the memories you judge may have pointed you the other way, and any memory you found that is about what they corrected but never arrived. It answers each with the evidence: the rule as you actually read it, when, at which moment and how it arrived, and whether it changed since; where a memory arrives today, for one that did not arrive; your words safe to show back; what it could not check; and what to say to the user. Call it at every correction you recognise, also when you name none: the answer says what could not be checked, which you must say too, and never that no memory pointed the other way. It covers what NeoCortex delivered into this conversation, not what you looked up yourself. It writes nothing: the user sharpens, deletes or dismisses, and only they do.";
 var CORRECTION_INPUT = {
   conversation: external_exports.string().describe(`The id the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line; use the main conversation's)`),
   suspects: external_exports.array(external_exports.string()).default([]).describe(
     "The ids (or 8-character short ids) of the memories you judge may have pointed you the other way, from those the memories in play name for this conversation. Empty when you judge that none did"
+  ),
+  about: external_exports.array(external_exports.string()).default([]).describe(
+    "The ids (or 8-character short ids) of memories you found that are about what the user corrected but that did not arrive before the mistake. Search for them at every correction, also when you suspect none: search_memories with one or two subject words of what they corrected, then once more with a broader word when nothing comes back. Pass only the ones whose own words are about that subject. An id in both lists is answered once, as about"
   ),
   words: external_exports.array(external_exports.string()).default([]).describe("The user's correcting words, copied exactly as they wrote them, one entry per sentence or message. Not your paraphrase; the answer shows them back marked as the user's own words")
 };
@@ -50920,6 +51074,7 @@ var READING_WORDS = 'Only when the rule rests on your reading of what the user m
 var USER_WORDS_NOTE = "The user's own words, as Claude quoted them; they are no part of the rule that loads.";
 var USER_WORDS_SHOW_NEXT = "Show the user the rule you saved beside these words of theirs, exactly as they said them, in your reply: if the rule reads them differently than they meant, they can correct it now.";
 var USER_WORDS_SUMMARY_NEXT = "Your new words were added but the summary did not change: check that it still says what they said.";
+var MOMENT_CHANGED = (before, after, changedWording) => `This write changed when this memory arrives${changedWording.length === 0 ? ", not what it says: its summary stays as it was on purpose" : `, and also what it says: its ${changedWording.join(" and ")}`}. It arrived ${before} before this write; it now arrives ${after}.`;
 var readingRefusal = (question) => `ask the user this before saving, then call again: ${question} Save again with their answer added to userWords and no reading; if nobody can answer (a subagent, a run without them), save again unchanged and the memory is kept as you read it.`;
 var SAVE_INPUT = {
   scope: external_exports.enum(SCOPES).describe("user: applies in every project; project: only in this repository"),
@@ -51641,7 +51796,8 @@ ${TRACK_LOST_LINE}`;
       return fail(refused);
     }
     const bodyOnly = args2.body !== void 0 && args2.body !== previous.body && args2.summary === void 0;
-    const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0;
+    const momentChanged = memory.delivery !== previous.delivery || memory.enforced !== previous.enforced || !sameCondition(memory.appliesWhen, previous.appliesWhen) || !sameMark(memory.failure, previous.failure, "failure") || !sameMark(memory.callInput, previous.callInput, "callInput") || !sameReply(memory.reply, previous.reply);
+    const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0 && !momentChanged;
     const hidden = ["title", "summary"].filter(
       (field) => args2[field] === void 0 && (unshownCharOf(previous[field]) !== null || loneSurrogateOf(previous[field]) !== null)
     );
@@ -51652,7 +51808,12 @@ ${TRACK_LOST_LINE}`;
       ...hidden.length > 0 ? [`The stored ${hidden.join(" and ")} ${both ? "hold" : "holds"} an invisible or control character, shown as U+FFFD; replace ${both ? "them" : "it"} with update_memory.`] : [],
       ...kept.map((link2) => link2.line)
     ];
-    const showNext = [keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT, trail !== void 0 && trail !== previous.trail ? TRAIL_READABLE : void 0].filter((line) => line !== void 0).join(" ");
+    const changedWording = TRAIL_FIELDS.filter((field) => memory[field] !== previous[field]);
+    const showNext = [
+      keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT,
+      trail !== void 0 && trail !== previous.trail ? TRAIL_READABLE : void 0,
+      momentChanged ? MOMENT_CHANGED(arrivesWords(previous), arrivesWords(memory), changedWording) : void 0
+    ].filter((line) => line !== void 0).join(" ");
     return ok({
       updated: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), ...shownTrail(memory), revision },
       warning: warnings.length > 0 ? warnings.join("\n") : void 0,
@@ -52249,20 +52410,20 @@ ${line}`;
   server.registerTool(
     "correction_check",
     { title: "Which delivered memories may have pointed Claude the wrong way", description: CORRECTION_DESCRIPTION, inputSchema: CORRECTION_INPUT },
-    ({ conversation: conversation2, suspects, words }) => guarded(async () => {
+    ({ conversation: conversation2, suspects, about, words }) => guarded(async () => {
       const who = conversationOf(conversation2);
       if ("error" in who) return fail(who.error);
       const place = placeName(placeRefOf(deps.session.place));
-      const today = await reader.load(visibleScopes(deps.session)).then(
-        ({ memories, problems }) => ({ memories, problems }),
-        () => void 0
+      const loaded = await load().then(
+        ({ stored, problems, resolution, here }) => ({ today: { memories: stored, problems }, placeState: { resolution, here } }),
+        () => ({ today: void 0, placeState: void 0 })
       );
       if (deps.track === void 0) {
-        return ok(await correctionAnswer({ delivered: deliveredOnes({ state: "none" }, who.agent, 0), today, recordOf: recordOfId, suspects, words, place }));
+        return ok(await correctionAnswer({ delivered: deliveredOnes({ state: "none" }, who.agent, 0), ...loaded, recordOf: recordOfId, suspects, about, words, place }));
       }
       const record2 = await deps.track.read(who.session);
       const pending = trackLost.get(`${who.session}/${who.agent}`)?.count ?? 0;
-      return ok(await correctionAnswer({ delivered: deliveredOnes(record2, who.agent, pending), today, recordOf: recordOfId, suspects, words, place }));
+      return ok(await correctionAnswer({ delivered: deliveredOnes(record2, who.agent, pending), ...loaded, recordOf: recordOfId, suspects, about, words, place }));
     })
   );
   const deleteCall = async ({ id, revision }, confirmation) => {

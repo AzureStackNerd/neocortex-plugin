@@ -1,22 +1,24 @@
 ---
 name: therapy
-description: "At a correction, when the correction check's answer names a suspect or the user says a memory misled Claude, diagnose that memory beside the correction and reword or reframe it on the user's answer: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) with the evidence for it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
+description: "At a correction, when the correction check's answer names a suspect or a memory that never arrived, or the user says a memory misled Claude, diagnose that memory beside the correction, with the evidence for it: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) and reword or reframe it on the user's answer, or, for a memory that did not arrive when it should, propose the moment of its arrival and write it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
 allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__dream_report
 ---
 
 # Treating a memory that made Claude act wrongly
 
-You treat memories whose **words** made Claude act wrongly, with the user. Three dysfunctions, and each has one
-treatment:
+You treat memories that made Claude act wrongly, with the user. Four dysfunctions, and each has one treatment:
 
 | Dysfunction | What shows it | Treatment |
 | --- | --- | --- |
+| 1. does not arrive when it should | a memory of this place whose subject is what the user corrected did not reach you before the mistake: it did not arrive, reached you only as its name in a warning, or its moment did not come | give it a moment of its own: a call, failure or reply mark, or a condition that takes this place in |
 | 5. misleads: worded wrongly | its summary or body says other than its why and the user's own words | reword it back to the intent |
 | 6. wrong at heart | the intent no longer holds: the code, doc or skill it names says otherwise, what it names is gone, or the user's later words contradict it | reframe it: keep the why, change the conclusion or narrow where it applies |
 | 7. right but does not land | it is vague, a list of keywords, or too long to show | reword it for clarity, same meaning |
 
-Anything about **when** a memory arrives (it never arrived, arrived too late, arrived and was ignored, or its arrival
-stopped a call) is not this skill's: say so in one line and do not treat it here.
+Anything else about **when** a memory arrives — it arrived too late, arrived in a way that hurts, arrived and was
+ignored, or its arrival stopped a call — is not this skill's yet: say so in one line and do not treat it here. A
+memory that did not arrive when it should is this skill's, as dysfunction 1, and its treatment is a moment, never a
+wording.
 
 The diagnosis is a hypothesis you show with its evidence, never a verdict. The user may dispute it and is right to.
 
@@ -24,16 +26,17 @@ The diagnosis is a hypothesis you show with its evidence, never a verdict. The u
 
 Two starts, and they are different sittings. Read this first, every time.
 
-**You started it, at a correction**, because the correction check's answer named a suspect or the user said a memory
-misled Claude. Treat that answer's suspects alone, beside the correction: go straight to section 1 and work through
-sections 1 to 6. Show no list of the store, offer no other memory, and ask nothing about looking the store over (S65).
-The correction's own words stay the evidence, as section 2 says.
+**You started it, at a correction**, because the correction check's answer named a suspect, a memory that did not
+arrive, or the user said a memory misled Claude. Treat what that answer named alone, beside the correction — its
+suspects and the memories it says did not arrive — and go straight to section 1, working through sections 1 to 6.
+Show no list of the store, offer no other memory, and ask nothing about looking the store over (S65). The
+correction's own words stay the evidence, as section 2 says.
 
 **This branch names the label.** The diagnosis here opens with the table's own label, verbatim and in bold —
-**misleads: worded wrongly**, **wrong at heart** or **right but does not land** — and never with a description in its
-place. It is the one sentence that may not be skipped at a correction, where 7 of 15 live runs described the
-dysfunction ("the wording is wrong", "the intent no longer holds") and never named it (S11 to S13). Section 2 says the
-same, in full, for both starts.
+**does not arrive when it should**, **misleads: worded wrongly**, **wrong at heart** or **right but does not land** —
+and never with a description in its place. It is the one sentence that may not be skipped at a correction, where 7 of
+15 live runs described the dysfunction ("the wording is wrong", "the intent no longer holds") and never named it (S11
+to S13). Section 2 says the same, in full, for both starts.
 
 **The user started it**, by typing `/neocortex:therapy` or by asking you in words to go through their memories. That
 is the sitting over this place, from section 7 on. The words they typed after the command are here, and nothing else
@@ -81,15 +84,29 @@ in this conversation named (S77) has that correction as its evidence: quote the 
 from this conversation, beside the memory's own words.
 
 **Name the dysfunction in its own words from the table above**, as that label, in bold, on the diagnosis's own first
-line: "misleads: worded wrongly", "wrong at heart" or "right but does not land". So the user hears which of the three it
-is and not only a description of it. Describe the dysfunction after that label, never in place of it: "the wording is
-wrong", "the intent no longer holds" and "it's a list of keywords" are descriptions of the same three, and a reader who
-gets only those cannot tell which one the skill diagnosed. **This holds at a correction too, and it is the one thing
-that may not be skipped there** (S65: nothing the user sees at a correction changes). Starting the skill is not
-optional either: `Skill`, with `neocortex:therapy`, runs before the diagnosis, as section 0 says.
+line: "does not arrive when it should", "misleads: worded wrongly", "wrong at heart" or "right but does not land". So
+the user hears which one it is and not only a description of it. Describe the dysfunction after that label, never in
+place of it: "the wording is wrong", "the intent no longer holds" and "it's a list of keywords" are descriptions of
+the same ones, and a reader who gets only those cannot tell which one the skill diagnosed. **This holds at a
+correction too, and it is the one thing that may not be skipped there** (S65: nothing the user sees at a correction
+changes). Starting the skill is not optional either: `Skill`, with `neocortex:therapy`, runs before the diagnosis, as
+section 0 says.
 
 For each dysfunction, show what you actually have — never what you would expect:
 
+- **1, does not arrive when it should**: the three sides, all at once — the user's correcting words; what reached you
+  before the mistake, from the correction check's answer (nothing, or only the memory's title, and when); and the
+  mistake itself, the call or the reply as it happened. Beside them, where it arrives today, as the check's `arrives`
+  field words it. When the check said some notes of this conversation could not be read, say so: it may have arrived
+  in one of them, and the dysfunction is not certain. A memory with `notHere` does not hold at this place: say the
+  condition the check gives as the reason.
+  - When its moment came before the mistake — its mark meets the very call that went wrong — and it still did not
+    arrive there, say its mark beside that call and that the record shows no arrival there. The record does not keep
+    why: no room at that moment is one cause it does not record. Never say that the memory has no moment; it has one,
+    and it did not arrive at it. Offer no second moment for the same call: say "none that fits", as such (S135).
+  - A memory you looked up yourself before the mistake, with `get_memory` or `search_memories`, is never named one that
+    did not arrive: say that you read it yourself and when, as this conversation shows, and that the record covers only
+    what NeoCortex delivered. Its text was in front of you, so offer it no moment (S106).
 - **5, worded wrongly**: the `summary` and `body` beside the `why` and the `userWords`, all at once. Name the kind
   of difference, and ask the method's question of the memory's own words:
   - a **deletion** — what the wording left out: *"… about what, specifically?"*
@@ -113,6 +130,21 @@ One offer per treatment, each answered on its own. Show before and after, so the
   say what to do, not only what not to do. Give both lengths when the length is the problem.
 - **A reframe** (6): the why stays; either the conclusion changes, or where the memory applies narrows (its condition
   or its scope).
+- **A moment** (1): a moment of its own that comes before such a mistake as this one, said as the cue it fires on —
+  the tool and pattern of a call or failure mark, the file of a file rule, or the phrase of a reply mark — and what
+  that moment does: at a shell command or another tool call that changes something, it stops that call once and the
+  call made again runs; at a write, an edit, a read or a skill, and at a reply, it arrives beside the result, after
+  the call or the reply has run. Show it before and after, and say where the memory then arrives besides the moment it
+  keeps: a call, failure or reply mark and a wider condition are added beside the one it has, never in place of it.
+  - When the memory's condition does not hold at this place (`notHere`), the moment to propose is a condition that
+    takes this place in, shown before and after with every other place it then reaches.
+  - When the check could not read this place's labels or repository (`placeUnknown`), propose **no** condition change
+    on that reading: say what could not be read, and offer a mark instead, or wait until the place can be read.
+  - What this memory can take: a call, failure or reply mark, and a condition, on an index or on-demand memory of
+    either scope. A project memory takes no condition and no file rule (its project already fixes where it applies);
+    the file patterns of an `edit` memory belong to a rule. A mark cannot be set on a rule.
+  - A moment this memory cannot take is refused, and you say why and offer the one it can take, never writing a
+    different one without the user's answer.
 - **A rule gets no proposed wording at all.** A rule is any memory that loads in full at the start, at a prompt or at an
   edit, or is `enforced`. For a rule you show the diagnosis and its evidence, and you propose **no wording** — not a
   rewording, not one "with the same meaning", not a reframe, and not a suggestion of the words to use. Say that therapy
@@ -122,7 +154,15 @@ One offer per treatment, each answered on its own. Show before and after, so the
     set. "Same meaning" is no exception, because every loosened rule reads as the same meaning to the one who loosens it.
   - A rule whose intent no longer holds, or whose wording drifted from its `why`, is changed or deleted by the user on
     their own ask. Neither is a therapy treatment: treat the diagnosis as the whole of what you give.
+  - **A rule may be offered another moment** (dysfunction 1): only at moments at which it still loads, and never a
+    mark, which a rule cannot carry. Say beforehand that Claude Code asks the user to confirm the change with what it
+    affects; on their decline nothing changes and you say so. A moment change never makes a rule a memory that is no
+    rule, and a rule is never offered a wording afterwards.
 - **A user memory** reaches every place, not only this one; say so before they answer.
+- **Making it a rule**: a moment that would make an ordinary memory load in full at the start, at a prompt, at a
+  question, at a subagent's start or at an edit (a file rule among them) makes it a rule. Say beforehand that Claude
+  Code asks the user to confirm it with what it affects, and name the call, failure or reply mark it loses, since a
+  rule keeps none.
 - When the proposed wording says otherwise than **another memory** that arrives at the same moment or in the same
   place, name that memory and quote what it says before they answer; they may treat both, one or neither.
 
@@ -137,12 +177,16 @@ nothing.
 - **No** → nothing changes, and you do not offer that treatment again in this conversation.
 - **A question or an unclear word** ("maybe", "what does that do?") → answer it and ask again, until they give a clear
   answer for that offer; record nothing until then.
+- **A cue of their own** ("at a push, not at every commit") → show it back as the cue it fires on, and which calls,
+  files or replies it meets, and write it as given on their word. A cue NeoCortex cannot use — a call mark whose tool
+  names nothing, a failure mark holding a call mark's `|` — is refused: say why and ask for another.
 - **"All the rest"** → show every remaining offer in one reply, each with what it changes and where its memory then
   arrives; that answer stands for exactly those offers, and each write still goes on its own.
 - **They dispute the diagnosis** → nothing changes on it; ask what they see instead, and treat a diagnosis they give
   with its evidence like any other.
 - **They ask for a treatment of another kind** → say what it changes and what it leaves as it is (a rewording keeps
-  the conclusion a reframe would change), and write it on their word.
+  the conclusion a reframe would change, and leaves when the memory arrives as it is; a moment leaves what it says),
+  and write it on their word. A rule still gets no wording.
 - **They ask to change the why** → no: a treatment keeps the why, so the trail of what was said stays. A change to the
   why is their own ask outside therapy, as a delete is.
 - **They go on with their work or stop** → nothing changes; go on with their work, and say which offers were not
@@ -155,6 +199,15 @@ rule you write only the user's own words, never one you proposed, since you prop
 
 - On a yes to a wording you proposed, write that wording, and pass the user's correcting words in `userWords` when
   this sitting has a correction behind it (as the correction check gave them).
+- **A moment** is written on the memory itself, never as a second memory saved beside it unless the user asks for
+  one: `callInput` or `failure` for a mark, `reply` for a reply mark, `appliesWhen` for a condition. Pass only what
+  changes: a field the call leaves out stays as it is, and a mark or condition the memory already has stays beside
+  the new one. Pass the user's correcting words in `userWords` too, when this sitting has a correction behind it, as a
+  wording write does (S110, S37): the words are what the trail keeps beside the change, and a moment write keeps them
+  the same way. That is the one field a moment write carries beyond the moment. A write that changes a moment and
+  nothing else writes no summary, and its answer says the summary stays on purpose: say that, and never tell the user
+  their words came without a new summary. When the answer instead says the write changed what the memory says as well,
+  quote that sentence: this call changed wording too, and you do not claim it stayed.
 - **`userWords` gets only words the user said in this conversation.** In the sitting over the store there is no
   correction, so a yes to your wording adds no `userWords` at all and the stored ones stay as they are; when the user
   gives a wording of their own, write theirs and pass theirs (S79). Say this when it matters, so they know a yes to
@@ -162,13 +215,17 @@ rule you write only the user's own words, never one you proposed, since you prop
 - **Never change the `why`.** Never save a second memory beside the misfiring one unless they ask for it; if they do,
   say the old one still arrives as before until it is treated too.
 - An update keeps the earlier wording, readable with `get_memory`, and says so: only deleting the memory removes it.
-- Say what changed **and where that memory now arrives**: at which moments and in which places it will come back, from
-  its condition and its marks. A treatment changed what it says, so the moments it already had are unchanged.
+- Say what changed **and where that memory now arrives**: for a moment change, quote the sentence the write's own
+  answer gives, which names the moments it had and the ones it has now; for a wording change, the moments it already
+  had are unchanged.
 
 A write can be refused. Say why in plain words and offer the way out it names:
 
-- the memory changed since you read it → read it again and offer it on its new text, or say the dysfunction is gone;
+- the memory changed since you read it → read it again and offer the moment on its new record, or say the dysfunction
+  is gone;
 - it is gone → say so and pass it;
+- the moment this memory cannot take → say why in plain words and offer the moment it can take, never writing a
+  different one without the user's answer;
 - the user's words hold what looks like a secret → say so, and let them give the words without it;
 - the wording is longer than a summary may be (300 characters), or their words longer than a memory keeps (2,000) →
   say the limit and offer a shorter one; never cut their words without their word;
@@ -183,7 +240,11 @@ Show the memory's text as the tool gives it. Where it shows through a stand-in (
 
 When every offer is answered, or they go on with their work, say per memory what changed and what did not, in the
 words they answered with, and for each change how they will see it worked: what the memory should no longer make
-Claude do. Say too that this changed what the memory says, not when it arrives. In the sitting over the store, add
+Claude do. A correction that treated both a memory that did not arrive and one that misled says each for its own
+treatment. For a **moment** change that wrote no wording, say that it changed when the memory arrives and not what it
+says, and how the user will see it worked: the next time such a call, file or reply comes, the memory arrives before
+the mistake. A write that changed the wording too says both, as the write's own answer does (S136). For a
+**wording** change, say that this changed what the memory says, not when it arrives. In the sitting over the store, add
 which listed memories were not looked at or not answered, and that the next `/neocortex:therapy` reaches them (S87).
 
 Do not check later in this conversation whether it worked; that is not part of this sitting.
@@ -316,9 +377,12 @@ matches words, not which lines a start cut.
 
 ### 7.6 A memory that arrives at the wrong time
 
-If the user says a memory never arrives, arrives too late, arrives in a way that hurts, or is ignored, say in one
-line that this command does not treat when a memory arrives yet, and treat nothing for it. A wording dysfunction the
-same memory shows is still listed, with its evidence (S76).
+If the user says a memory arrives too late, arrives in a way that hurts, or is ignored, say in one line that this
+command does not treat that yet, and treat nothing for it in this sitting. A wording dysfunction the same memory shows
+is still listed, with its evidence (S76).
+
+A memory that did not arrive when it should is treated at a correction, at the mistake it should have prevented, not
+in this sitting: say that in the same line, and that `/neocortex:therapy` here treats what a memory's words say.
 
 ## 8. When NeoCortex is not connected
 
