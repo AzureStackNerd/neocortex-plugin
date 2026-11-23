@@ -2,6 +2,17 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.12.1 - 2026-11-23
+
+- Fixed: saving or changing a memory or rule with a failure mark that names no tool (empty or only spaces) was
+  answered as a success while the mark was dropped, so the memory then arrived at no failed call. It is now refused:
+  name the tool, or leave the mark out (#513).
+- Fixed: when you correct Claude, a memory that reached Claude in this conversation and was deleted since is said to
+  be deleted, instead of sending you to repair its record (#514).
+- Fixed: when you correct Claude and the conversation's record has lost part of the conversation (after a `/clear`,
+  past 24 hours, or when some of its notes could not be read or written), a suspected memory is no longer ruled out as
+  "cannot have steered Claude": the check says it may have arrived in the part that was lost (#512).
+
 ## 0.12.0 - 2026-11-22
 
 - Added: when you correct Claude, a memory whose arrival stopped a call in this conversation (also a stop your

@@ -421,9 +421,10 @@ what it affects.
 **When the check could not read something, it says so rather than guessing.** If the record of what arrived cannot be
 read, some of it is damaged, this conversation began with a `/clear`, NeoCortex was updated during this conversation so
 its earlier notes cannot be read, or this project's labels or repository cannot be read, the answer names what could
-not be checked and why, and never that no memory misfired or that none stopped a call. A memory whose timing was fine
-but whose words made Claude act wrongly is still treated here, as before: the two dysfunctions are named apart, each
-with its own evidence and its own offer.
+not be checked and why, and never that no memory misfired or that none stopped a call. A memory you deleted since is
+said to be deleted, never sent to repair its record or to look itself up; one that only reached Claude by name in a
+warning is said so too. A memory whose timing was fine but whose words made Claude act wrongly is still treated here,
+as before: the two dysfunctions are named apart, each with its own evidence and its own offer.
 
 **Nothing changes without your answer.** A memory offered another moment is written only on your yes; a no changes
 nothing and it is not offered again in this conversation. The write's own answer says what changed and where the

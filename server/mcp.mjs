@@ -36521,14 +36521,17 @@ function holderOf(marks) {
 }
 var MARK_KINDS = [
   // A failure mark whose tool holds the `|` of a call mark: the failure moment reads it as one literal name and never
-  // matches it, so it would silently never fire.
+  // matches it, so it would silently never fire. #513: and one whose tool names nothing, which `canonicalMark` drops
+  // (#459's reading of "a mark naming no tool is no mark"), so the save looks like it worked and the stored mark is gone;
+  // refused instead, as #466's S44 refuses the call mark, since the memory would then arrive at no failed call at all.
+  // The `|` is judged first, as before, and the two cannot both hold (`'|'.trim()` names a tool).
   toolMarkKind(
     "failure",
     "a failure",
     "failure",
     "FailureMark",
     "arrives at a call judging the failure",
-    (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : void 0
+    (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : toolsOf(mark, "failure").length === 0 ? "failure: this mark names no tool, so it would never arrive at a failed call; name the tool exactly as Claude Code names it, such as Bash or Read, or leave the mark out; on an update, null removes the stored mark" : void 0
   ),
   // A call mark whose tool names nothing after its split (`|`, `| |`, `  `), which could never meet a call.
   toolMarkKind(
@@ -46269,7 +46272,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.12.0",
+  version: "0.12.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48844,6 +48847,8 @@ function flagWords(entries, max = WORDS_MAX) {
   return why === void 0 ? { words: kept } : { words: kept, note: why };
 }
 var CHECK_SCOPE = "This covers what NeoCortex delivered into this conversation, not what Claude looked up itself with get_memory or search_memories.";
+var MAY_HAVE_ARRIVED = "it may have arrived in what this conversation's record lost";
+var MAY_HAVE_ARRIVED_IN_FULL = "it may have arrived in full in what was lost";
 var NOTHING_TO_SHOW = "Add nothing about memories to your reply to the user.";
 var NOTHING_CHECKED = "Say to the user, in your reply, what the check could not check and why (the reasons above); never say that no memory pointed the other way.";
 function ownGaps(delivered) {
@@ -48984,8 +48989,14 @@ async function correctionAnswer(input2) {
     if (answered.has(id)) continue;
     answered.add(id);
     const arrival = deliveredId === null ? void 0 : delivered.arrived.get(deliveredId);
-    const loaded = stored.get(id) ?? (anywhere?.record?.memory.id === id ? anywhere.record : (await recordOf(input2.recordOf, id)).record);
+    const fromToday = stored.get(id);
+    const foundOutThere = anywhere?.record?.memory.id === id ? anywhere.record : void 0;
+    const reread = fromToday !== void 0 || foundOutThere !== void 0 ? void 0 : await recordOf(input2.recordOf, id);
+    const loaded = fromToday ?? foundOutThere ?? reread?.record;
     const broken = (anywhere?.unreadable ?? false) || today !== void 0 && today.problems.some((problem) => problem.id === id && problem.copy !== true);
+    const lookupUnreadable = (anywhere?.unreadable ?? false) || (reread?.unreadable ?? false);
+    const lookupUnasked = loaded === void 0 && (input2.recordOf === void 0 || anywhere?.refused === true || reread?.refused === true);
+    const gone = loaded === void 0 && !broken && !lookupUnreadable && !lookupUnasked;
     const title = loaded === void 0 ? "" : shownCut(loaded.memory.title, 80);
     const hurt = hurtOf(arrival, disturbing, delivered);
     const stops = hurt.stops ?? [];
@@ -49008,9 +49019,15 @@ async function correctionAnswer(input2) {
         ...cannotHurt === void 0 ? hurt : {}
       };
       const didNotArrive = (verdict) => disturbing && cannotHurt === void 0 ? {} : { didNotArrive: verdict };
-      if (memory === void 0 || broken) {
+      if (broken || lookupUnreadable) {
         couldNotCheck.push(
           `${namesMemory(id, title)} cannot be read now, so nothing is named for it: repair the record the index names, or update NeoCortex on this machine if a newer one wrote it.`
+        );
+        continue;
+      }
+      if (memory === void 0) {
+        couldNotCheck.push(
+          gone ? `${namesMemory(id, title)} is deleted since, or no longer loading here, so nothing is named for it and nothing is offered: what it did in this conversation stands as the record keeps it.` : `${namesMemory(id, title)} could not be looked up: the store could not be read now, so what it says, and whether it is still a memory here, cannot be checked.`
         );
         continue;
       }
@@ -49055,7 +49072,7 @@ async function correctionAnswer(input2) {
         continue;
       }
       if (delivered.onlyNamed.has(id)) {
-        show.push({ ...entry, ...didNotArrive("did-not-arrive") });
+        show.push({ ...entry, ...didNotArrive(certain ? "did-not-arrive" : "may-have") });
         continue;
       }
       if (delivered.textless.has(id)) {
@@ -49114,12 +49131,21 @@ async function correctionAnswer(input2) {
       continue;
     }
     if (arrival === void 0) {
-      if (readable) couldNotCheck.push(`${namesMemory(id, title)} was not delivered into this conversation, so it cannot have steered Claude here \u2014 it may not have arrived; if it is about what the user corrected, pass it in about; see the scope above.`);
-      else couldNotCheck.push(`${namesMemory(id, title)} is in this store, but whether it reached this conversation cannot be checked; see above.`);
+      if (!readable) couldNotCheck.push(`${namesMemory(id, title)} is in this store, but whether it reached this conversation cannot be checked; see above.`);
+      else if (!certain) couldNotCheck.push(`${namesMemory(id, title)} was not noted as delivered into this conversation, and ${MAY_HAVE_ARRIVED}: ${ownGaps(delivered).join("; ")}; if it is about what the user corrected, pass it in about; see the scope above.`);
+      else couldNotCheck.push(`${namesMemory(id, title)} was not delivered into this conversation, so it cannot have steered Claude here \u2014 it may not have arrived; if it is about what the user corrected, pass it in about; see the scope above.`);
       continue;
     }
     if (delivered.onlyNamed.has(id)) {
-      couldNotCheck.push(`${namesMemory(id, title)} arrived only as a name in a warning, so its text was never in Claude's context; look at the memory itself with get_memory.`);
+      if (gone) {
+        couldNotCheck.push(
+          certain ? `${namesMemory(id, title)} arrived only as a name in a warning and is deleted since, or no longer loading here, so there is nothing to look at.` : `${namesMemory(id, title)} arrived only as a name in a warning in the notes this conversation's record still holds, and ${MAY_HAVE_ARRIVED_IN_FULL}: ${ownGaps(delivered).join("; ")}; it is deleted since, or no longer loading here, so there is nothing to look at.`
+        );
+        continue;
+      }
+      couldNotCheck.push(
+        certain ? `${namesMemory(id, title)} arrived only as a name in a warning, so its text was never in Claude's context; look at the memory itself with get_memory.` : `${namesMemory(id, title)} arrived only as a name in a warning in the notes this conversation's record still holds, and ${MAY_HAVE_ARRIVED_IN_FULL}: ${ownGaps(delivered).join("; ")}; look at the memory itself with get_memory.`
+      );
       continue;
     }
     const stillHere = stored.has(id);
