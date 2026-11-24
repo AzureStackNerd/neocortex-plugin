@@ -1,7 +1,7 @@
 ---
 name: therapy
 description: "At a correction, when the correction check's answer names a suspect or a memory that never arrived, or a memory whose arrival hurt (one that stopped a call in this conversation, also when the correction is about something else), or the user says a memory misled Claude, diagnose that memory beside the correction, with the evidence for it: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) and reword or reframe it on the user's answer; for a memory that did not arrive when it should, propose the moment of its arrival and write it; for one whose arrival hurts, offer a form that hurts less in place of the moment that hurt (a narrower cue, a failure mark, a reply mark, its index line) with what it gives up, and write it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
-allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__dream_report
+allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__dream_report, mcp__plugin_neocortex_neocortex__count_cues
 ---
 
 # Treating a memory that made Claude act wrongly
@@ -154,6 +154,19 @@ One offer per treatment, each answered on its own. Show before and after, so the
   call made again runs; at a write, an edit, a read or a skill, and at a reply, it arrives beside the result, after
   the call or the reply has run. Show it before and after, and say where the memory then arrives besides the moment it
   keeps: a call, failure or reply mark and a wider condition are added beside the one it has, never in place of it.
+  - **Every cue comes with how often it met one.** Call `count_cues` once per offer, with the memory's id, the
+    conversation from the "Track record: conversation" line of your index, and every cue of that offer in the one call, so
+    they are counted over the same sessions. Say each cue's count beside it before they answer, in calls (or replies) met,
+    never as times it arrives: "met 12 calls in 4 of the last 40 sessions of this place" for a call or failure mark, and
+    "met 9 replies in 3 of the last 40 sessions of this place" for a reply mark. Name the sessions actually counted
+    (`sessionsCounted`), never the reach's 40: with 3 sessions on this machine say "in 2 of the 3 sessions here". When
+    `unreadable` is more than 0, say how many sessions could not be read, so they know what the count leaves out. Where
+    the count could not be made, say **could not be counted** and the reason it gives, and never that the cue fires. A cue
+    that met no call in those sessions is said as such, and it is never recommended: recommend one that did fire, or say
+    you found none. For a user memory, say that the count covers only this place's sessions, since its cue fires in every
+    place. A cue the answer says can never fire — a phrase NeoCortex never matches, a mark NeoCortex would not store, or a
+    memory whose files part stops it — is said as that, never as 0 times. Count and keep nothing: no call, reply or error
+    text of theirs is ever shown back.
   - When the memory's condition does not hold at this place (`notHere`), the moment to propose is a condition that
     takes this place in, shown before and after with every other place it then reaches.
   - When the check could not read this place's labels or repository (`placeUnknown`), propose **no** condition change
@@ -231,7 +244,8 @@ nothing.
   answer for that offer; record nothing until then.
 - **A cue of their own** ("at a push, not at every commit") → show it back as the cue it fires on, and which calls,
   files or replies it meets, and write it as given on their word. A cue NeoCortex cannot use — a call mark whose tool
-  names nothing, a failure mark holding a call mark's `|` — is refused: say why and ask for another.
+  names nothing, a failure mark holding a call mark's `|` — is refused: say why and ask for another. Show it back with its
+  count too, through `count_cues`, as an offered cue is: at 0 say so, and write it only on their word.
 - **"All the rest"** → show every remaining offer in one reply, each with what it changes and where its memory then
   arrives; that answer stands for exactly those offers, and each write still goes on its own.
 - **They dispute the diagnosis** → nothing changes on it; ask what they see instead, and treat a diagnosis they give

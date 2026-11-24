@@ -14537,7 +14537,7 @@ var require_dist2 = __commonJS({
 
 // src/mcp.ts
 import { homedir as homedir2 } from "node:os";
-import { isAbsolute as isAbsolute2 } from "node:path";
+import { isAbsolute as isAbsolute3 } from "node:path";
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
 import process2 from "node:process";
@@ -36431,6 +36431,7 @@ function callPathOf(tool, json2) {
   const named = ["Write", "Edit", "MultiEdit", "Read"].includes(tool.trim()) ? fieldOf(data, "file_path") : tool.trim() === "NotebookEdit" ? fieldOf(data, "notebook_path") : ["Grep", "Glob"].includes(tool.trim()) ? fieldOf(data, "path") : "";
   return named.trim() === "" ? void 0 : named.replaceAll("\\", "/");
 }
+var OWN_TOOL_RE = /^mcp__(plugin_neocortex_neocortex|neocortex)__/;
 function aboutMark(mark, kind, tool, calls) {
   const canonical = canonicalMark(mark, kind);
   if (canonical === void 0 || !toolsOf(canonical, kind).includes(tool.trim())) return false;
@@ -46272,7 +46273,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.12.1",
+  version: "0.13.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47978,6 +47979,20 @@ function fileRulesAt(active, edit) {
 }
 var NO_TARGET = { kind: "no-target" };
 var NO_FAILURE = { kind: "call", tool: "", call: "", problems: [] };
+function failureCaseOf(tool, own2, input2, fieldGiven) {
+  const named = tool.trim();
+  if (named === "") return "no-fields";
+  if (OWN_TOOL_RE.test(named)) return void 0;
+  if (!fieldGiven) return "no-fields";
+  const own_ = (own2 ?? "").trim().replaceAll("\\", "/");
+  return {
+    kind: "call",
+    tool: named,
+    call: callStringsOf({ tool: named, call: own2 ?? "", json: input2 ?? "" })[0] ?? "",
+    ...own_ === "" ? {} : { filePath: own_ },
+    problems: []
+  };
+}
 function claimAll(ask, settle2) {
   return { deliver: new Set(ask.seen), recorded: false, answer: settle2(ask) };
 }
@@ -49292,6 +49307,98 @@ ${memory.body}`;
     if (!STOP_WORDS.has(word) && !KIND_LABELS.has(word)) words.add(word);
   }
   return words;
+}
+
+// src/cue-count.ts
+var NOT_A_FAILURE = [
+  // A PreToolUse hook's own denial; the entry's reason follows the colon.
+  "PreToolUse:",
+  // A rejection before any hook ran: an unknown tool, or input that failed schema or tool-specific validation.
+  "<tool_use_error>",
+  // A permission denial.
+  "Permission for this action w",
+  // The user's own decline or interruption of a call that was about to run (main's measurement 5).
+  "The user doesn't want to proceed",
+  "The user doesn't want to take this action",
+  // UNVERIFIED, kept out so the count can only under-count (see above).
+  "MCP error"
+];
+function isRealFailure(text) {
+  const trimmed = text.trimStart();
+  return !NOT_A_FAILURE.some((opening) => trimmed.startsWith(opening));
+}
+function rejectedBeforeHooks(outcome) {
+  return "failed" in outcome && outcome.failed.trimStart().startsWith("<tool_use_error>");
+}
+function filesPartOf(memory) {
+  const files = editFiles(memory);
+  if (files.state === "none") return { none: true };
+  const patterns = files.state === "judged" ? files.usable : files.patterns;
+  return { none: false, judged: files.state === "judged", words: patterns.map((pattern) => JSON.stringify(pattern)).join(" or ") };
+}
+function neverFiresOf(memory, cue) {
+  const files = filesPartOf(memory);
+  if ("reply" in cue) {
+    const carries = replyPhrases({ ...memory, reply: canonicalReply(cue.reply) });
+    return files.none === false && carries.length === 0 ? "a memory with a files part never arrives at a reply" : void 0;
+  }
+  if (files.none) return void 0;
+  if (!files.judged) return `the memory's files part cannot be judged, so no call brings it: ${files.words}`;
+  return void 0;
+}
+function canNeverMatch(cue) {
+  if (!("reply" in cue)) return false;
+  return usablePhrases(canonicalReply(cue.reply)).length === 0;
+}
+function cueRefusal(cue) {
+  if ("reply" in cue) return void 0;
+  const kind = "failure" in cue ? "failure" : "callInput";
+  const mark = "failure" in cue ? cue.failure : cue.callInput;
+  const namesNoTool = "this cue names no tool, so NeoCortex would refuse to store it; name the tool exactly, or leave the cue out";
+  if (canonicalMark(mark, kind) === void 0) return namesNoTool;
+  if (kind === "failure" && mark.tool.includes("|")) return "a failure cue names one tool, and | is for a call cue; give it one tool name, or offer it as a call cue";
+  return void 0;
+}
+function markOf(cue) {
+  if ("reply" in cue) return void 0;
+  const kind = "failure" in cue ? "failure" : "callInput";
+  const mark = canonicalMark("failure" in cue ? cue.failure : cue.callInput, kind);
+  return mark === void 0 ? void 0 : { mark, kind };
+}
+var FAILURE_OWN_FIELD = /* @__PURE__ */ new Set(["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"]);
+function inputCallOf(entry) {
+  if (OWN_TOOL_RE.test(entry.tool)) return void 0;
+  const calls = callStringsOf({ tool: entry.tool, json: entry.json });
+  const filePath = callPathOf(entry.tool, entry.json);
+  return { tool: entry.tool, calls, ...filePath === void 0 ? {} : { filePath } };
+}
+function failureCallOf(entry) {
+  const own2 = FAILURE_OWN_FIELD.has(entry.tool) ? entry.filePath : void 0;
+  const judged = failureCaseOf(entry.tool, own2, entry.json, true);
+  return judged === void 0 || judged === "no-fields" ? void 0 : judged;
+}
+function countInSession(memory, cues, entries) {
+  return cues.map((cue) => {
+    if (neverFiresOf(memory, cue) !== void 0 || canNeverMatch(cue) || cueRefusal(cue) !== void 0) return 0;
+    if ("reply" in cue) {
+      const mark = canonicalReply(cue.reply);
+      if (mark === void 0) return 0;
+      return entries.filter((entry) => entry.kind === "reply" && matchesReply(mark, entry.text)).length;
+    }
+    const marked = markOf(cue);
+    if (marked === void 0) return 0;
+    return entries.filter((entry) => {
+      if (entry.kind !== "call") return false;
+      if (marked.kind === "failure") {
+        if (!("failed" in entry.outcome) || !isRealFailure(entry.outcome.failed)) return false;
+        const call2 = failureCallOf(entry);
+        return call2 !== void 0 && aboutMark(marked.mark, "failure", call2.tool, [call2.call]) && filesHoldAtFailure(memory, call2);
+      }
+      if (rejectedBeforeHooks(entry.outcome)) return false;
+      const call = inputCallOf(entry);
+      return call !== void 0 && aboutMark(marked.mark, "callInput", call.tool, call.calls) && filesHoldAtInput(memory, call);
+    }).length;
+  });
 }
 
 // src/hooks.ts
@@ -51214,6 +51321,18 @@ var IN_PLAY_INPUT = {
   conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
   until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
 };
+var COUNT_DESCRIPTION = "How many calls or replies each cue you are considering for one memory met in this place's recent sessions, so no memory is given a moment that never comes. Call it in /neocortex:therapy before you offer a cue, and pass every cue of that one offer in a single call so they are compared over the same sessions. Each answer says how many calls or replies a cue met and in how many sessions, or why it can never bring this memory, or why the count could not be made at all. Say the count in calls met, never as times it arrives; say how many sessions were counted (sessionsCounted, which may be fewer than the reach) and how many could not be read (unreadable); and never say a cue fires when the count could not be made. It reads session logs and keeps none of them: no call, reply or error text, and no path, reaches its answer.";
+var COUNT_INPUT = {
+  memory: external_exports.string().describe("The id of the memory the cues are for, or its first 8 characters as the index shows it"),
+  cues: external_exports.array(
+    external_exports.strictObject({
+      callInput: external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() }).optional(),
+      failure: external_exports.strictObject({ tool: external_exports.string(), pattern: external_exports.string() }).optional(),
+      reply: external_exports.strictObject({ phrases: external_exports.array(external_exports.string()) }).optional()
+    })
+  ).describe("The cues to count, one to four, each the mark you would write: callInput, failure or reply"),
+  conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names')
+};
 var CORRECTION_DESCRIPTION = "When the user corrects you, or asks whether a memory made you do what they corrected, call this with their correcting words, the memories you judge may have pointed you the other way, any memory you found that is about what they corrected but never arrived, and any memory they say disturbs their work. It answers each with the evidence: the rule as you actually read it, when, at which moment and how it arrived, and whether it changed since; where a memory arrives today, for one that did not arrive; every call a memory stopped in this conversation, with its tool and when; the moments a disturbing memory arrived at and the count, with what the record leaves out; your words safe to show back; what it could not check; and what to say to the user. Call it at every correction you recognise, also when you name none: the answer says what could not be checked, which you must say too, and never that no memory pointed the other way or that none stopped a call. A memory that stopped a call in this conversation is named at every correction, whether or not the correction is about that stop, and you diagnose it and offer its forms through the therapy skill; keeping it as it is stays the user's answer. It covers what NeoCortex delivered into this conversation, not what you looked up yourself. It writes nothing: the user sharpens, deletes or dismisses, and only they do.";
 var CORRECTION_INPUT = {
   conversation: external_exports.string().describe(`The id the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line; use the main conversation's)`),
@@ -51230,7 +51349,6 @@ var CORRECTION_INPUT = {
 };
 var ID = external_exports.string().min(8).describe("Memory id, or its first 8 characters as shown in the index");
 var LINK_IDS = external_exports.array(external_exports.string()).describe("Memory ids, or their first 8 characters");
-var OWN_TOOL_RE = /^mcp__(plugin_neocortex_neocortex|neocortex)__/;
 var CONDITION = external_exports.strictObject({
   inRepo: external_exports.literal(true).optional().describe("true: only in a session inside a git repository"),
   labels: external_exports.array(external_exports.string()).optional().describe("Context labels of a place; the place must carry every one of them, not just one"),
@@ -51550,19 +51668,14 @@ function createServer(deps) {
   const failedCallOf = (tool, own2, input2, problems, interrupted, active) => {
     const named = given(tool);
     if (named === void 0) return "unjudged";
-    if (interrupted || OWN_TOOL_RE.test(named)) return void 0;
-    const own_ = (own2 ?? "").trim().replaceAll(String.fromCharCode(92), "/");
+    if (interrupted) return void 0;
     const fieldGiven = given(own2) !== void 0 || given(input2) !== void 0;
-    if (!fieldGiven) return active.some((memory) => canonicalMark(memory.failure, "failure")?.tool === named) ? "unjudged" : void 0;
-    return {
-      kind: "call",
-      tool: named,
-      call: callStringsOf({ tool: named, call: own2 ?? "", json: input2 ?? "" })[0] ?? "",
-      ...own_ === "" ? {} : { filePath: own_ },
-      problems: problems.filter((problem) => problem.delivery !== void 0).map(problemKey)
-    };
+    const judged = failureCaseOf(named, own2, input2, fieldGiven);
+    if (judged === void 0) return void 0;
+    if (judged === "no-fields") return active.some((memory) => canonicalMark(memory.failure, "failure")?.tool === named) ? "unjudged" : void 0;
+    return { ...judged, problems: problems.filter((problem) => problem.delivery !== void 0).map(problemKey) };
   };
-  const inputCallOf = (tool, input2, problems, active) => {
+  const inputCallOf2 = (tool, input2, problems, active) => {
     const named = given(tool);
     if (named !== void 0 && OWN_TOOL_RE.test(named)) return void 0;
     const json2 = input2 ?? "";
@@ -52463,7 +52576,7 @@ ${TRACK_LOST_LINE}`;
         }
         const failed = judged === void 0 ? void 0 : judged;
         const failure2 = failed === void 0 ? void 0 : { ...failed, claim: await claimed(key, failureAsk(delivery.resolution.active, delivery.problems, failed), failureSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, failed)) };
-        const callInput = moment === "input" ? inputCallOf(tool, input2, delivery.problems, delivery.resolution.active) : void 0;
+        const callInput = moment === "input" ? inputCallOf2(tool, input2, delivery.problems, delivery.resolution.active) : void 0;
         if (callInput === "unjudged") {
           const missing = given(tool) === void 0 ? "no tool name" : "no input for the call";
           return { content: [{ type: "text", text: hookOutput(event, unjudgedInputWarning(missing)) }] };
@@ -52588,6 +52701,53 @@ ${line}`;
       );
       const pending = trackLost.get(`${session}/${agent}`)?.count ?? 0;
       return { content: [{ type: "text", text: inPlayAnswer({ conversation: conversation2.trim(), agent, place, record: record2, today, pending, ...cut === void 0 ? {} : { until: cut } }) }] };
+    })
+  );
+  server.registerTool(
+    "count_cues",
+    { title: "How many calls or replies a cue offered for a memory met", description: COUNT_DESCRIPTION, inputSchema: COUNT_INPUT },
+    ({ memory, cues, conversation: conversation2 }) => guarded(async () => {
+      const who = conversationOf(conversation2);
+      if ("error" in who) return fail(who.error);
+      const place = placeName(placeRefOf(deps.session.place));
+      const loaded = await reader.load(visibleScopes(deps.session));
+      const found = lookup(loaded.memories.map((stored) => stored.memory), loaded.problems, memory);
+      if ("error" in found) return fail(found.error);
+      const target = found.memory;
+      const read2 = [];
+      for (const cue of cues) {
+        const one = cueOf(cue);
+        if (typeof one === "string") return fail(one);
+        read2.push(one);
+      }
+      const settled = read2.map((cue) => {
+        const neverFires = neverFiresOf(target, cue);
+        if (neverFires !== void 0) return { neverFires };
+        const refused = cueRefusal(cue);
+        if (refused !== void 0) return { neverFires: refused, canNeverMatch: true };
+        if (canNeverMatch(cue)) return { canNeverMatch: true };
+        return void 0;
+      });
+      const met = read2.map(() => 0);
+      const inSessions = read2.map(() => 0);
+      const counting = (entries) => {
+        read2.forEach((cue, at) => {
+          if (settled[at] !== void 0) return;
+          const count2 = countInSession(target, [cue], entries)[0] ?? 0;
+          met[at] += count2;
+          if (count2 > 0) inSessions[at] += 1;
+        });
+      };
+      const counted2 = deps.logs === void 0 ? { kind: "none", why: "this NeoCortex server keeps no reader of session logs, so it cannot count a cue" } : await deps.logs.count(who.session, counting);
+      const counts = read2.map((cue, at) => settled[at] ?? (counted2.kind === "counted" ? { met: met[at], inSessions: inSessions[at] } : {}));
+      const answer = {
+        scope: `${target.scope.kind} \u2014 ${target.scope.kind === "project" ? `the cues of a project memory are counted over this place's sessions, ${place}` : "only this place's sessions were counted, though a user memory's cue fires in every place"}`,
+        sessionsCounted: counted2.kind === "counted" ? counted2.sessions : 0,
+        unreadable: counted2.kind === "counted" ? counted2.unreadable : counted2.unreadable ?? 0,
+        ...counted2.kind === "counted" ? {} : { why: counted2.why },
+        cues: counts
+      };
+      return ok(answer);
     })
   );
   const recordOfId = async (id) => {
@@ -52959,6 +53119,13 @@ function lookup(memories, problems, prefix) {
 }
 function unloaded(memories, problems) {
   return problems.filter((problem) => !memories.some((memory) => problemNames(problem, memory.id)));
+}
+function cueOf(cue) {
+  const kinds = [cue.callInput === void 0 ? "" : "callInput", cue.failure === void 0 ? "" : "failure", cue.reply === void 0 ? "" : "reply"].filter((one) => one !== "");
+  if (kinds.length !== 1) return "each cue names exactly one of callInput, failure or reply";
+  if (cue.callInput !== void 0) return { callInput: cue.callInput };
+  if (cue.failure !== void 0) return { failure: cue.failure };
+  return { reply: { phrases: cue.reply.phrases } };
 }
 function unreadablePart(memories, problems, words, labels) {
   const counted2 = unloaded(memories, problems);
@@ -53403,13 +53570,236 @@ function message(error62) {
   return error62 instanceof Error ? error62.message : String(error62);
 }
 
+// src/session-logs.ts
+import { readFile as readFile3, readdir as readdir2, realpath, stat as stat3 } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, join as join4 } from "node:path";
+var REACH = 40;
+var SESSION_FILE_MAX = 64 * 1024 * 1024;
+var CONFIG_NOT_ABSOLUTE = "CLAUDE_CONFIG_DIR is set to a path that is not absolute, so Claude Code's session logs cannot be found";
+var SHARED_FOLDER = "a shared transcript folder is set, so this place's sessions are not kept in a folder of their own";
+var OWN_LOG_NOT_FOUND = "this conversation's own log was not found";
+var NO_EARLIER_SESSION = "no earlier session of this place was found";
+var NONE_READABLE = "no session of this place could be read";
+async function folderOf(options, session) {
+  if (options.configDir !== void 0 && !isAbsolute2(options.configDir)) return { folder: void 0, why: CONFIG_NOT_ABSOLUTE };
+  if (options.pinnedName !== void 0) return { folder: void 0, why: SHARED_FOLDER };
+  const config2 = options.configDir ?? join4(options.home, ".claude");
+  const projects = join4(config2, "projects");
+  const names_ = [options.placeDir, await realPathOf(options.placeDir)].filter((one) => one !== void 0);
+  const wanted = [...new Set(names_.map((one) => encodePath(one)))].map(wantedName);
+  let names;
+  try {
+    names = (await readdir2(projects, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    return { folder: void 0, why: OWN_LOG_NOT_FOUND };
+  }
+  let matched;
+  try {
+    matched = matchFolders(names, wanted, options.platform);
+  } catch {
+    return { folder: void 0, why: OWN_LOG_NOT_FOUND };
+  }
+  for (const name of matched) {
+    const candidate = join4(projects, name);
+    const own2 = await isFile2(join4(candidate, `${session}.jsonl`));
+    if (own2) return { folder: candidate };
+  }
+  return { folder: void 0, why: OWN_LOG_NOT_FOUND };
+}
+async function isFile2(path) {
+  try {
+    return (await stat3(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+async function realPathOf(folder) {
+  try {
+    return await realpath(folder);
+  } catch {
+    return void 0;
+  }
+}
+async function sessionFiles(folder, own2, reach) {
+  let names;
+  try {
+    names = (await readdir2(folder)).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+  const files = [];
+  for (const name of names) {
+    const id = name.slice(0, -".jsonl".length);
+    if (id === own2) continue;
+    const path = join4(folder, name);
+    try {
+      const info = await stat3(path);
+      if (!info.isFile() || info.size === 0) continue;
+      files.push({ id, path, mtime: info.mtimeMs });
+    } catch {
+    }
+  }
+  files.sort((a, b) => b.mtime - a.mtime || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return files.slice(0, reach);
+}
+function filePathOf(tool, input2) {
+  const field = tool === "NotebookEdit" ? "notebook_path" : "file_path";
+  const value = input2[field];
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function parseLine(line) {
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return "unreadable";
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "unreadable";
+  const line_ = value;
+  const message2 = line_.message;
+  if (typeof message2 !== "object" || message2 === null) return [{ kind: "other" }];
+  const { content, stop_reason: stopReason } = message2;
+  if (line_.type === "assistant") {
+    if (!Array.isArray(content)) return "unreadable";
+    return parseAssistant(content, stopReason);
+  }
+  if (line_.type === "user") {
+    if (typeof content === "string") return [{ kind: "other" }];
+    if (!Array.isArray(content)) return [{ kind: "other" }];
+    return parseResults(content);
+  }
+  return [{ kind: "other" }];
+}
+function parseAssistant(blocks, stopReason) {
+  const uses = blocks.filter((block) => block.type === "tool_use");
+  if (uses.length > 0) {
+    const out = [];
+    for (const use of uses) {
+      const { id, name, input: input2 } = use;
+      if (typeof id !== "string" || typeof name !== "string" || typeof input2 !== "object" || input2 === null) return "unreadable";
+      const called = filePathOf(name, input2);
+      out.push({ kind: "tool_use", id, tool: name, json: JSON.stringify(input2), ...called === void 0 ? {} : { filePath: called } });
+    }
+    return out;
+  }
+  if (stopReason !== "end_turn") return [{ kind: "other" }];
+  const texts = blocks.filter((block) => block.type === "text" && typeof block.text === "string").map((block) => String(block.text));
+  return texts.length === 0 ? [{ kind: "other" }] : [{ kind: "reply", text: texts.join("\n") }];
+}
+function parseResults(blocks) {
+  const results = blocks.filter((block) => block.type === "tool_result");
+  const out = [];
+  for (const result of results) {
+    const { tool_use_id: useId, is_error: isError, content } = result;
+    if (typeof useId !== "string") return "unreadable";
+    if (isError !== true) continue;
+    const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((part) => typeof part === "object" && part !== null && typeof part.text === "string" ? String(part.text) : "").join("") : "";
+    out.push({ kind: "tool_result", id: useId, text });
+  }
+  return out.length === 0 ? [{ kind: "other" }] : out;
+}
+async function readFileEntries(path) {
+  let text;
+  try {
+    const info = await stat3(path);
+    if (info.size > SESSION_FILE_MAX) return "unreadable";
+    text = await readFile3(path, "utf8");
+  } catch {
+    return "unreadable";
+  }
+  const calls = /* @__PURE__ */ new Map();
+  const entries = [];
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    const parsed = parseLine(line);
+    if (parsed === "unreadable") return "unreadable";
+    for (const one of parsed) {
+      if (one.kind === "other") continue;
+      if (one.kind === "tool_use") {
+        const entry = {
+          kind: "call",
+          tool: one.tool,
+          json: one.json,
+          ...one.filePath === void 0 ? {} : { filePath: one.filePath },
+          outcome: { ran: true }
+        };
+        calls.set(one.id, entry);
+        entries.push(entry);
+      } else if (one.kind === "tool_result") {
+        const call = calls.get(one.id);
+        if (call === void 0) continue;
+        const at = entries.indexOf(call);
+        const failed = { ...call, outcome: { failed: one.text } };
+        calls.set(one.id, failed);
+        entries[at] = failed;
+      } else {
+        entries.push({ kind: "reply", text: one.text });
+      }
+    }
+  }
+  return entries;
+}
+async function sessionEntries(file2) {
+  const own2 = await readFileEntries(file2.path);
+  if (own2 === "unreadable") return "unreadable";
+  const subagents = join4(file2.path.slice(0, -".jsonl".length), "subagents");
+  let names;
+  try {
+    names = (await readdir2(subagents)).filter((name) => name.endsWith(".jsonl") && name.startsWith("agent-"));
+  } catch {
+    return own2;
+  }
+  const entries = [...own2];
+  for (const name of names) {
+    const more = await readFileEntries(join4(subagents, name));
+    if (more === "unreadable") return "unreadable";
+    entries.push(...more);
+  }
+  return entries;
+}
+function createLogsReader(options) {
+  return {
+    async count(session, read2) {
+      const lookup2 = await folderOf(options, session);
+      if (lookup2.folder === void 0) return { kind: "none", why: lookup2.why ?? OWN_LOG_NOT_FOUND };
+      const files = await sessionFiles(lookup2.folder, session, REACH);
+      if (files.length === 0) return { kind: "none", why: NO_EARLIER_SESSION };
+      let counted2 = 0;
+      let unreadable = 0;
+      for (const file2 of files) {
+        const entries = await sessionEntries(file2);
+        if (entries === "unreadable") {
+          unreadable += 1;
+          continue;
+        }
+        read2(entries);
+        counted2 += 1;
+      }
+      if (counted2 === 0) return { kind: "none", why: NONE_READABLE, unreadable };
+      return { kind: "counted", sessions: counted2, unreadable };
+    }
+  };
+}
+function logsOptionsFromEnv(env, home, placeDir, platform = process.platform) {
+  const set2 = (value) => value?.trim() || void 0;
+  const configDir = set2(env.CLAUDE_CONFIG_DIR);
+  return {
+    configDir,
+    // Claude Code ignores CLAUDE_CODE_PROJECT_DIR_NAME when CLAUDE_CONFIG_DIR is unset (sessions docs, F2).
+    pinnedName: configDir === void 0 ? void 0 : set2(env.CLAUDE_CODE_PROJECT_DIR_NAME),
+    home,
+    placeDir,
+    platform
+  };
+}
+
 // src/store.ts
 var import_yaml4 = __toESM(require_dist(), 1);
 import { createHash as createHash5, randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { realpathSync as realpathSync2 } from "node:fs";
-import { link, lstat, mkdir as mkdir2, open as open3, readdir as readdir2, readFile as readFile3, rename as rename2, rm as rm2, rmdir, stat as stat3, writeFile as writeFile2 } from "node:fs/promises";
+import { link, lstat, mkdir as mkdir2, open as open3, readdir as readdir3, readFile as readFile4, rename as rename2, rm as rm2, rmdir, stat as stat4, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname as dirname2, join as join4, relative } from "node:path";
+import { dirname as dirname2, join as join5, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 var PLACES = PLACE_AREA;
 var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
@@ -53443,12 +53833,12 @@ function markerOf(text) {
 function userLockBase(warn = () => {
 }, account = userInfo, home = homedir) {
   try {
-    return join4(account().homedir, ".neocortex", "locks");
+    return join5(account().homedir, ".neocortex", "locks");
   } catch (error62) {
-    let fallback = join4(tmpdir(), "neocortex-locks");
+    let fallback = join5(tmpdir(), "neocortex-locks");
     try {
       const folder = home();
-      if (folder !== "") fallback = join4(folder, ".neocortex", "locks");
+      if (folder !== "") fallback = join5(folder, ".neocortex", "locks");
     } catch {
     }
     const reason = error62 instanceof Error ? error62.message : String(error62);
@@ -53493,16 +53883,16 @@ var FileStore = class {
     this.root = root2;
     this.registry = options.registry ?? REGISTRY;
     this.placeRegistry = options.placeRegistry ?? PLACE_REGISTRY;
-    this.lockBase = options.lockBase ?? join4(tmpdir(), "neocortex-locks");
+    this.lockBase = options.lockBase ?? join5(tmpdir(), "neocortex-locks");
     this.busyBudgetMs = options.busyBudgetMs ?? 2e3;
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
-    this.readListed = options.readListed ?? ((path) => readFile3(path, "utf8"));
-    this.lookUp = options.lookUp ?? ((path) => stat3(path));
-    this.readStored = options.readStored ?? ((path) => readFile3(path));
+    this.readListed = options.readListed ?? ((path) => readFile4(path, "utf8"));
+    this.lookUp = options.lookUp ?? ((path) => stat4(path));
+    this.readStored = options.readStored ?? ((path) => readFile4(path));
     this.copySeams = { linkFile: options.linkFile, renameFile: options.renameFile };
     this.clock = options.clock ?? Date.now;
-    this.statListed = options.statListed ?? ((path) => stat3(path, { bigint: true }));
+    this.statListed = options.statListed ?? ((path) => stat4(path, { bigint: true }));
   }
   get location() {
     return this.root;
@@ -53536,7 +53926,7 @@ var FileStore = class {
     await this.assertRoot();
     let entries;
     try {
-      entries = await readdir2(join4(this.root, "projects"), { withFileTypes: true });
+      entries = await readdir3(join5(this.root, "projects"), { withFileTypes: true });
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -53554,7 +53944,7 @@ var FileStore = class {
   async holdsRecord(parts) {
     let names;
     try {
-      names = await readdir2(join4(this.root, ...parts));
+      names = await readdir3(join5(this.root, ...parts));
     } catch (error62) {
       if (isNotFound(error62)) return false;
       throw error62;
@@ -53570,7 +53960,7 @@ var FileStore = class {
   async sweep() {
     await this.assertRoot();
     const current = currentOf(this.registry);
-    const markerBefore = markerOf(await this.readIfPresent(join4(this.root, MARKER_FILE)).catch(() => void 0)).marker;
+    const markerBefore = markerOf(await this.readIfPresent(join5(this.root, MARKER_FILE)).catch(() => void 0)).marker;
     if (compareFormats(markerBefore, current) >= 0) return { markerBefore, upgraded: 0, left: [], complete: true };
     const left = [];
     let upgraded = 0;
@@ -53582,10 +53972,10 @@ var FileStore = class {
       complete = false;
     }
     for (const scope of [USER, ...keys.map((key) => projectScope(parseProjectKey(key)))]) {
-      const folder = join4(this.root, ...foldersOf(scope));
+      const folder = join5(this.root, ...foldersOf(scope));
       let names;
       try {
-        names = await readdir2(folder);
+        names = await readdir3(folder);
       } catch (error62) {
         if (!isNotFound(error62)) complete = false;
         continue;
@@ -53594,7 +53984,7 @@ var FileStore = class {
         const id = name.slice(0, -".md".length);
         if (!name.toLowerCase().endsWith(".md") || !UUID_RE.test(id)) continue;
         try {
-          const outcome = await this.upgradeOne(join4(folder, name), scope, id, current);
+          const outcome = await this.upgradeOne(join5(folder, name), scope, id, current);
           if (outcome === "upgraded") upgraded += 1;
           else if (outcome !== "skipped") left.push({ scope, id, reason: outcome.left });
         } catch (error62) {
@@ -53609,7 +53999,7 @@ var FileStore = class {
   /** The record of the pass, read only (MemoryStore.sweepState); its left entries only while it is behind. */
   async sweepState() {
     await this.assertRoot();
-    const state = markerOf(await this.readIfPresent(join4(this.root, MARKER_FILE)));
+    const state = markerOf(await this.readIfPresent(join5(this.root, MARKER_FILE)));
     return compareFormats(state.marker, currentOf(this.registry)) >= 0 ? { marker: state.marker, left: [] } : state;
   }
   /**
@@ -53650,7 +54040,7 @@ var FileStore = class {
    * current format or a newer one, nor over one the OS will not let this read.
    */
   async recordSweep(current, left, complete) {
-    const path = join4(this.root, MARKER_FILE);
+    const path = join5(this.root, MARKER_FILE);
     await this.withLock("format-marker", async () => {
       const now = markerOf(await this.readIfPresent(path));
       if (compareFormats(now.marker, current) >= 0) return;
@@ -53709,7 +54099,7 @@ var FileStore = class {
   async remove(base) {
     await this.assertRoot();
     const source = this.pathFor(base.memory);
-    const folder = join4(this.root, "deleted", ...foldersOf(base.memory.scope));
+    const folder = join5(this.root, "deleted", ...foldersOf(base.memory.scope));
     await this.withLock(base.memory.id, async () => {
       await this.checkBase(source, base);
       const target = await this.freeDeletedPath(folder, base.memory.id);
@@ -53724,7 +54114,7 @@ var FileStore = class {
    */
   async freeDeletedPath(folder, id) {
     for (let n = 1; ; n += 1) {
-      const path = join4(folder, n === 1 ? `${id}.md` : `${id}.${n}.md`);
+      const path = join5(folder, n === 1 ? `${id}.md` : `${id}.${n}.md`);
       try {
         await this.lookUp(path);
       } catch (error62) {
@@ -53744,7 +54134,7 @@ var FileStore = class {
     const reads = await Promise.all(
       scopes.map(async (scope) => {
         const parts = [...foldersOf(scope), `${id}.md`];
-        const read2 = await this.readRecord(join4(this.root, ...parts), parts.join("/"), scope, id);
+        const read2 = await this.readRecord(join5(this.root, ...parts), parts.join("/"), scope, id);
         return read2 === void 0 ? [] : [{ scope, ...read2 }];
       })
     );
@@ -53764,9 +54154,9 @@ var FileStore = class {
       requests.map(async ({ scope, id }) => {
         const parts = foldersOf(scope);
         const key = parts.join("/");
-        if (!listings.has(key)) listings.set(key, this.idsListed(join4(this.root, ...parts)));
+        if (!listings.has(key)) listings.set(key, this.idsListed(join5(this.root, ...parts)));
         if (!(await listings.get(key))?.has(id)) return void 0;
-        return this.readRecord(join4(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
+        return this.readRecord(join5(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
       })
     );
   }
@@ -53774,7 +54164,7 @@ var FileStore = class {
   async idsListed(folder) {
     let names;
     try {
-      names = await readdir2(folder);
+      names = await readdir3(folder);
     } catch (error62) {
       if (isNotFound(error62)) return /* @__PURE__ */ new Set();
       throw error62;
@@ -53849,7 +54239,7 @@ var FileStore = class {
   async placeFiles() {
     let names;
     try {
-      names = await readdir2(join4(this.root, PLACES));
+      names = await readdir3(join5(this.root, PLACES));
     } catch (error62) {
       if (isNotFound(error62)) return { stems: [], strays: [] };
       return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf3(error62) ?? messageOf2(error62)})` } };
@@ -53896,7 +54286,7 @@ var FileStore = class {
     return compareFormats(stored.format, current) > 0 ? stored : { format: current, unknown: {} };
   }
   placePath(stem) {
-    return join4(this.root, PLACES, `${stem}.yaml`);
+    return join5(this.root, PLACES, `${stem}.yaml`);
   }
   /** Takes one lock file, failing when it exists: withLock's open, a method so a test can answer it with an error (#499). */
   openLock(path) {
@@ -53912,7 +54302,7 @@ var FileStore = class {
     if (this.locks === void 0) {
       const real = realpathSync2.native(this.root);
       const key = process.platform === "win32" ? real.toLowerCase() : real;
-      this.locks = join4(this.lockBase, createHash5("sha256").update(key).digest("hex").slice(0, 16));
+      this.locks = join5(this.lockBase, createHash5("sha256").update(key).digest("hex").slice(0, 16));
     }
     return this.locks;
   }
@@ -53923,7 +54313,7 @@ var FileStore = class {
    * folder's pass may answer from what earlier loads with reuse kept, and loads at once share it.
    */
   async loadFolder(parts, location, result, loaded, called) {
-    const folder = join4(this.root, ...parts);
+    const folder = join5(this.root, ...parts);
     const listed3 = called === void 0 ? await this.pass(folder, parts, location.scope, false) : await this.shared(folder, called, () => this.pass(folder, parts, location.scope, true));
     for (const one of listed3) {
       if (one.notAnId !== void 0) {
@@ -53981,7 +54371,7 @@ var FileStore = class {
   async pass(folder, parts, scope, reuse) {
     let names;
     try {
-      names = await readdir2(folder);
+      names = await readdir3(folder);
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -53990,7 +54380,7 @@ var FileStore = class {
     const pending = [];
     for (const name of names) {
       const id = TEMP_RE.exec(name)?.[1];
-      if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join4(folder, name))) pending.push(`${id}.md`);
+      if (id !== void 0 && UUID_RE.test(id) && !lower.has(`${id}.md`) && !await this.isStaleTemp(join5(folder, name))) pending.push(`${id}.md`);
     }
     const listed3 = [];
     for (const name of [.../* @__PURE__ */ new Set([...names, ...pending])].sort()) {
@@ -54015,9 +54405,9 @@ var FileStore = class {
    * answer's order; the caller's walk does.
    */
   async readAll(folder, records, scope) {
-    const reads = await this.readMany(records.map((one) => join4(folder, one.name)));
+    const reads = await this.readMany(records.map((one) => join5(folder, one.name)));
     const out = [];
-    for (const [n, { name, file: file2, id }] of records.entries()) out.push(await this.settle(reads[n], join4(folder, name), file2, scope, id));
+    for (const [n, { name, file: file2, id }] of records.entries()) out.push(await this.settle(reads[n], join5(folder, name), file2, scope, id));
     return out;
   }
   /**
@@ -54033,7 +54423,7 @@ var FileStore = class {
     const settledBefore = (BigInt(Math.floor(this.clock())) - BigInt(SETTLED_MS)) * 1000000n;
     const stats = await Promise.all(
       records.map(
-        (one) => this.statListed(join4(folder, one.name)).then(
+        (one) => this.statListed(join5(folder, one.name)).then(
           (found) => found,
           () => void 0
         )
@@ -54050,10 +54440,10 @@ var FileStore = class {
         next.set(one.name, kept);
       } else toRead.push(n);
     }
-    const reads = await this.readMany(toRead.map((n) => join4(folder, records[n].name)));
+    const reads = await this.readMany(toRead.map((n) => join5(folder, records[n].name)));
     for (const [k, n] of toRead.entries()) {
       const { name, file: file2, id } = records[n];
-      const outcome = frozen(await this.settle(reads[k], join4(folder, name), file2, scope, id));
+      const outcome = frozen(await this.settle(reads[k], join5(folder, name), file2, scope, id));
       out[n] = outcome;
       const found = stats[n];
       if (found !== void 0 && outcome !== void 0 && fromBytes(outcome) && found.ctimeNs < settledBefore && found.mtimeNs < settledBefore) {
@@ -54139,7 +54529,7 @@ var FileStore = class {
    */
   async isStaleTemp(path) {
     try {
-      return Date.now() - (await stat3(path)).mtimeMs > 2 * this.busyBudgetMs;
+      return Date.now() - (await stat4(path)).mtimeMs > 2 * this.busyBudgetMs;
     } catch {
       return false;
     }
@@ -54163,7 +54553,7 @@ var FileStore = class {
   async holdersOf(id) {
     const found = await Promise.all(
       (await this.scopesFor(id)).map(async (scope) => {
-        const path = join4(this.root, ...foldersOf(scope), `${id}.md`);
+        const path = join5(this.root, ...foldersOf(scope), `${id}.md`);
         try {
           await this.lookUp(path);
           return [{ scope, path }];
@@ -54199,7 +54589,7 @@ var FileStore = class {
    * busy error of its path, whose text would name the store's folders (#388).
    */
   async keepCopy(format, scope, id, bytes) {
-    const copy = join4(this.root, PREVIOUS, `format-${format}`, ...foldersOf(scope), `${id}.md`);
+    const copy = join5(this.root, PREVIOUS, `format-${format}`, ...foldersOf(scope), `${id}.md`);
     try {
       await writeCreateOnly(copy, bytes, { ...this.copySeams, busyBudgetMs: this.busyBudgetMs });
     } catch (error62) {
@@ -54214,7 +54604,7 @@ var FileStore = class {
    * the lock file proceeds.
    */
   async withLock(id, run) {
-    const path = join4(this.lockFolderPath(), `${id}.lock`);
+    const path = join5(this.lockFolderPath(), `${id}.lock`);
     const deadline = Date.now() + this.busyBudgetMs;
     let contended = false;
     for (; ; ) {
@@ -54263,8 +54653,8 @@ var FileStore = class {
     let age;
     let text;
     try {
-      age = Date.now() - (await stat3(path)).mtimeMs;
-      text = await readFile3(path, "utf8");
+      age = Date.now() - (await stat4(path)).mtimeMs;
+      text = await readFile4(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return true;
       if (isBusy(codeOf3(error62))) return false;
@@ -54296,7 +54686,7 @@ var FileStore = class {
   }
   async readIfPresent(path) {
     try {
-      return await readFile3(path, "utf8");
+      return await readFile4(path, "utf8");
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
@@ -54305,14 +54695,14 @@ var FileStore = class {
   /** readIfPresent as bytes: what a copy as it was keeps, which a utf8 round trip would change (#452, S1). */
   async readBytesIfPresent(path) {
     try {
-      return await readFile3(path);
+      return await readFile4(path);
     } catch (error62) {
       if (isNotFound(error62)) return void 0;
       throw error62;
     }
   }
   pathFor(memory) {
-    return join4(this.root, ...this.relativeParts(memory));
+    return join5(this.root, ...this.relativeParts(memory));
   }
   relative(path) {
     return relative(this.root, path).replace(/\\/g, "/");
@@ -54323,7 +54713,7 @@ var FileStore = class {
     return [...foldersOf(memory.scope), `${memory.id}.md`];
   }
   async assertRoot() {
-    const info = await stat3(this.root).catch((error62) => {
+    const info = await stat4(this.root).catch((error62) => {
       if (isNotFound(error62)) return null;
       throw error62;
     });
@@ -54468,7 +54858,7 @@ var FileProposalStore = class {
       const record2 = kind;
       let text;
       try {
-        text = await readFile3(join4(this.root, PROPOSAL_AREA, name), "utf8");
+        text = await readFile4(join5(this.root, PROPOSAL_AREA, name), "utf8");
       } catch (error62) {
         problems.push({ record: record2, proposal: id, reason: systemErrorCode(error62) ?? messageOf2(error62) });
         continue;
@@ -54482,7 +54872,7 @@ var FileProposalStore = class {
   /** The names in the area that could be a record, sorted; a missing area holds none, any other failure is the store's. */
   async names() {
     try {
-      return (await readdir2(join4(this.root, PROPOSAL_AREA))).filter((name) => PROPOSAL_FILE_RE.test(name)).sort();
+      return (await readdir3(join5(this.root, PROPOSAL_AREA))).filter((name) => PROPOSAL_FILE_RE.test(name)).sort();
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -54495,7 +54885,7 @@ var FileProposalStore = class {
     return this.names().then((all) => all.some((name) => taken.test(name)));
   }
   pathOf(id, record2) {
-    return join4(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
+    return join5(this.root, PROPOSAL_AREA, proposalFileName(id, record2));
   }
   /** Writes a new record file, create-only and atomically (writeCreateOnly), through this store's seams. */
   async write(path, text) {
@@ -54552,7 +54942,7 @@ var FileRunStore = class {
   constructor(root2, lock, options = {}) {
     this.root = root2;
     this.lock = lock;
-    this.readText = options.readText ?? ((path) => readFile3(path, "utf8"));
+    this.readText = options.readText ?? ((path) => readFile4(path, "utf8"));
   }
   async read() {
     let text;
@@ -54612,7 +55002,7 @@ var FileRunStore = class {
     await writeAtomically(this.path(), (0, import_yaml4.stringify)(record2), "dream-run", (id, op) => retryWhileBusy(id, op, DEFAULT_BUSY_BUDGET_MS));
   }
   path() {
-    return join4(this.root, DREAM_AREA, DREAM_RUN_FILE);
+    return join5(this.root, DREAM_AREA, DREAM_RUN_FILE);
   }
 };
 function recordOf2(fields) {
@@ -54758,8 +55148,8 @@ async function isGone(path) {
 }
 
 // src/track.ts
-import { appendFile, mkdir as mkdir3, readFile as readFile4, readdir as readdir3, rm as rm3, stat as stat4 } from "node:fs/promises";
-import { join as join5 } from "node:path";
+import { appendFile, mkdir as mkdir3, readFile as readFile5, readdir as readdir4, rm as rm3, stat as stat5 } from "node:fs/promises";
+import { join as join6 } from "node:path";
 var TRACK_FORMAT = 2;
 var TRACK_KEEP_MS = 24 * 60 * 60 * 1e3;
 var TRACK_SESSION_RE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -54807,10 +55197,10 @@ var FileTrack = class {
     this.folder = options.folder;
     this.now = options.now ?? (() => Date.now());
     this.appendText = options.appendText ?? ((path, text) => appendFile(path, text, "utf8"));
-    this.readText = options.readText ?? ((path) => readFile4(path, "utf8"));
+    this.readText = options.readText ?? ((path) => readFile5(path, "utf8"));
   }
   path(session, format = TRACK_FORMAT) {
-    return join5(this.folder, `${session}.v${format}.jsonl`);
+    return join6(this.folder, `${session}.v${format}.jsonl`);
   }
   /** Appends one note as one line; any failure throws, and the caller counts the note as lost (How line 9). */
   async note(session, note) {
@@ -54834,7 +55224,7 @@ var FileTrack = class {
     if (!TRACK_SESSION_RE.test(session)) return { state: "none" };
     let names;
     try {
-      names = await readdir3(this.folder);
+      names = await readdir4(this.folder);
     } catch (error62) {
       if (codeOf4(error62) === "ENOENT") return { state: "none" };
       return { state: "unreadable" };
@@ -54878,14 +55268,14 @@ var FileTrack = class {
   async sweep() {
     let names;
     try {
-      names = await readdir3(this.folder);
+      names = await readdir4(this.folder);
     } catch {
       return;
     }
     const cut = this.now() - TRACK_KEEP_MS;
     const writtenAt = async (name) => {
       try {
-        return (await stat4(join5(this.folder, name))).mtimeMs;
+        return (await stat5(join6(this.folder, name))).mtimeMs;
       } catch (error62) {
         return codeOf4(error62) === "ENOENT" ? "absent" : "unknown";
       }
@@ -54902,14 +55292,14 @@ var FileTrack = class {
         if (current !== "absent" && (typeof current !== "number" || current >= cut)) continue;
       }
       try {
-        await rm3(join5(this.folder, name), { force: true });
+        await rm3(join6(this.folder, name), { force: true });
       } catch {
       }
     }
   }
 };
 function trackFolder(home) {
-  return join5(home, ".neocortex", "track");
+  return join6(home, ".neocortex", "track");
 }
 
 // src/mcp.ts
@@ -54926,7 +55316,7 @@ if (root === void 0) {
   console.error(`NeoCortex: NEOCORTEX_ROOT is not set (in the plugin: its option memory_folder); ${stopped}.`);
   process.exit(1);
 }
-var fullPath = (path) => isAbsolute2(path) && (process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(path));
+var fullPath = (path) => isAbsolute3(path) && (process.platform !== "win32" || /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(path));
 if (!fullPath(root)) {
   console.error(`NeoCortex: the memory folder ${JSON.stringify(root)} is not an absolute path; set the plugin option memory_folder, or NEOCORTEX_ROOT, to the full path of the folder; ${stopped}.`);
   process.exit(1);
@@ -54952,6 +55342,7 @@ if (move) {
     process.exit(1);
   }
   const autoMemory = createAutoMemorySource(sourceOptionsFromEnv(process.env, homedir2(), placeDir));
+  const logs = createLogsReader(logsOptionsFromEnv(process.env, homedir2(), placeDir));
   const proposals = new FileProposalStore(root, (id, run) => store.proposalLock(id, run));
   const runs = new FileRunStore(root, (run) => store.dreamLock(run));
   const upgrade2 = process.env[START_HOOK_ENV] === "1" ? void 0 : () => store.sweep().catch((error62) => {
@@ -54961,7 +55352,7 @@ if (move) {
   const statusClient = process.env[START_HOOK_ENV] === "1" && statusPlugin !== void 0 && statusPlugin !== "" ? { pluginId: statusPlugin } : void 0;
   const once = new FileOnce({ folder: onceFolder(homedir2()) });
   const track = new FileTrack({ folder: trackFolder(homedir2()) });
-  await createServer({ store, places: store, session, placeDir, autoMemory, proposals, upgrade: upgrade2, once, track, statusClient, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
+  await createServer({ store, places: store, session, placeDir, autoMemory, logs, proposals, upgrade: upgrade2, once, track, statusClient, dream: { runs, scopes: () => store.scopes(), places: store } }).connect(
     new StdioServerTransport()
   );
 }

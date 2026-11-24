@@ -370,6 +370,15 @@ wording, readable with `get_memory`, until you delete the memory; only a delete 
 not correct Claude, so a yes to a wording Claude proposed writes that wording only: no words of yours are stored that
 you did not say. When you give a wording of your own, that is what joins your words.
 
+**A cue comes with how many calls it met.** Before you answer, every call, failure or reply cue in an offer is
+counted against your own **recent sessions** of this project, and the offer says the number of calls or replies it met
+and the sessions it met them in: "met 12 calls in 4 of the last 40 sessions of this place". It is a count of calls and
+replies met, not of arrivals; it names the sessions actually counted, and says how many could not be read. A cue that
+met nothing is said as such and never recommended. Where the sessions cannot be read — none kept on this machine, a log
+NeoCortex cannot open, a shared transcript folder — the offer says it **could not count** the cue, and why, and never
+that the cue fires. It reads the session logs and keeps none of them: no call, reply or error text, and no path, ever
+reaches an answer. A user memory's cue is counted over this project's sessions only, and the offer says so.
+
 **This sitting treats the words, not the timing.** A memory that arrives too late, or is ignored, is a different
 problem, and this command does not treat it yet; it says so and lists that memory's wording fault if it has one. A
 memory whose arrival hurts is treated where you correct Claude, as the next paragraph says. A rewording leaves where
@@ -531,7 +540,10 @@ answer to one of them -- reject and keep-both change no memory, accept writes th
 a write makes load, `memories_in_play`, which names the memories NeoCortex delivered into this conversation and
 changes nothing (see [Which memories were in play](#which-memories-were-in-play)), `correction_check`, which answers
 when the user corrects Claude with the delivered memories that may have pointed it the other way and the evidence for
-each, and changes nothing either: the user treats, sharpens, deletes or dismisses, and the answer says so, and `hook_context`, which
+each, and changes nothing either: the user treats, sharpens, deletes or dismisses, and the answer says so, `count_cues`,
+which says how often each call, failure or reply cue offered for one memory would have fired in this place's recent
+sessions and keeps none of what it reads (see [Why a memory keeps misleading Claude](#why-a-memory-keeps-misleading-claude-neocortextherapy)),
+and `hook_context`, which
 is for the hooks, not for Claude. `import_auto_memory` previews the memories Claude Code's auto
 memory kept for this project, or those of the folder `autoMemoryDirectory` names, and imports
 the plan of a preview. In a permission rule

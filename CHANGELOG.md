@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.13.0 - 2026-11-24
+
+- New: when `/neocortex:therapy` offers a call, failure or reply cue for one of your memories, it now says how many
+  calls or replies that cue met in your last 40 earlier sessions of this place, and in how many of them, before you
+  answer, through the new read tool `count_cues`. A cue that met nothing is said as such and never recommended; where
+  the sessions cannot be read, the offer says it could not count and why, never a 0. Nothing read from the session
+  logs is kept. The count reads Claude Code's own session logs, whose format NeoCortex does not own: if that format
+  changes, the offer says it could not count (#520).
+
 ## 0.12.1 - 2026-11-23
 
 - Fixed: saving or changing a memory or rule with a failure mark that names no tool (empty or only spaces) was
