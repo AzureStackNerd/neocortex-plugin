@@ -1,7 +1,7 @@
 ---
 name: therapy
 description: "At a correction, when the correction check's answer names a suspect or a memory that never arrived, or a memory whose arrival hurt (one that stopped a call in this conversation, also when the correction is about something else), or the user says a memory misled Claude, diagnose that memory beside the correction, with the evidence for it: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) and reword or reframe it on the user's answer; for a memory that did not arrive when it should, propose the moment of its arrival and write it; for one whose arrival hurts, offer a form that hurts less in place of the moment that hurt (a narrower cue, a failure mark, a reply mark, its index line) with what it gives up, and write it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
-allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__dream_report, mcp__plugin_neocortex_neocortex__count_cues
+allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__count_cues
 ---
 
 # Treating a memory that made Claude act wrongly
@@ -352,6 +352,32 @@ memory this place sees. Walk it in pages:
    is read in full, `body` included, during the walk, and a candidate that read clears is dropped from the list (see
    "Every rule, in full" below).
 
+**Which lines showed only their title, and which of those arrive nowhere else.** Call `memories_in_play` once, with the
+conversation from the "Track record: conversation" line of your index, and hold its answer for the walk's join. A memory
+it lists as arriving "as its index line cut to its title" reached you at this start with nothing but its name, and the
+same line ends with what decides the rest: "it has a call, failure or reply of its own", "it has no call, failure or
+reply of its own", or that this cannot be told now. Both halves of a start-only memory's evidence are on that one line,
+so you never read a cut memory again to ask.
+
+- **Which start counts.** The answer splits at a compaction when the conversation had one: what it lists under
+  "Arrived before the compaction at … and no longer in context in full" is an earlier start's, not this one's. Take
+  only the lines before that heading.
+- **When the conversation line is not in view** — you were resumed or compacted and the line is gone — call neither
+  `memories_in_play` nor `count_cues`, and say that you cannot tell which memories reached you only as their title,
+  and why. Never say that none did. Draw up the rest of the list as these sections say.
+- **When `memories_in_play` cannot tell what this start cut** — its notes cannot be read, were written by a newer
+  NeoCortex, or hold no start of this conversation — say that it cannot tell which lines showed only their title and
+  why, never that none did, and name no start-only memory. The rest of the list is drawn up as usual.
+- **A line that cannot say whether it has a moment.** "whether it has a moment of its own cannot be told now" is said
+  of one memory whose record today's store cannot give (deleted since, or unreadable). The answer says which case it
+  is: when the store itself could not be read, it also carries "Whether these memories changed since they arrived
+  cannot be checked now: the store could not be read.", and that sentence — never the clauses alone — is what makes the
+  whole list unknown (S205). Without it, every line that says it is that memory's own, the other lines are decided by
+  their own clauses, and a start that cut only that one line is one memory unknown, not a store failure. A line that
+  says "it is expired now, so it no longer arrives at the start" (or replaced, or not here) has no moment and is no
+  start-only patient either (S217): that is this line's own answer, and no read of `get_memory` is needed for any of
+  these. 7.2 says what the list does with each.
+
 Finish the whole walk **before the first write**. Never call `search_memories` again after a write in this sitting;
 a treatment moves a memory in the order, and a page read afterwards both skips one and repeats one.
 
@@ -393,17 +419,54 @@ Judge every memory you read, and put on the list only those whose own words show
 Leave off, and say so where the row says to: a handoff (S82); a memory whose condition does not hold here, counted
 (S84). A memory whose record could not be read goes in the "cannot be read" group (S83).
 
-A memory that reaches Claude only as a "…" line is not left off for its length alone: it is listed when its own words
-show 5 or 7, and left off only when they show neither, so say how many index lines show only their title at this start
-and that `/neocortex:dreamer` goes through the start (S96).
+**A memory that reaches you only as its title.** A memory whose line the start cut to its title, and whose line says it
+has no call, failure or reply of its own, arrives nowhere but this start's one line: it is a patient for a moment of its
+own, and it is listed as that. Its evidence is these two things together: that its line showed only its title at this
+start, and that it has no call, failure or reply of its own, so it arrives nowhere else. Name the group for what it is —
+"Reaches you only as its title, and arrives nowhere else" — and say how many memories it holds. A memory whose line was
+cut and which also shows a dysfunction 5 or 7 is listed once, under that dysfunction, with "reaches you only as its
+title" named on its line, and each treatment is offered on its own.
+
+- **A mark that can never fire is its own evidence.** When `get_memory` shows a mark while its `ownMoment` is false,
+  that mark is one that can never fire — that is what the field means, and it needs no list of cases here. Say which
+  mark it is and that it can never fire, so the user is never told it has no mark while their record shows one. Its
+  moment replaces that mark with one that can fire, in one write, or you say that none fits. This is the one read
+  `get_memory` is still needed for in this group: the line at the start gives the verdict, and the record itself is
+  what shows a mark to name.
+- **A memory that is no longer active is not on this list.** A line that says it is "expired now", "not here now" or
+  "replaced or overridden now" is that memory's own answer: say that its line no longer reaches you at this start and
+  treat nothing for it here (S217), with no `get_memory` read. A handoff whose line showed only its title is not on this
+  list either: the next handoff replaces each (S82).
+- **A line that cannot say whether it has a moment is not on this list, and not counted as start-only.** When the
+  answer does not carry the store's own "the store could not be read" sentence, one such line is that memory's alone:
+  say that you cannot tell whether that memory has a moment of its own and why, never that none are start-only; every
+  other line is still decided by its own clause, and the rest of the list is drawn up as usual. When that sentence is
+  there, say that you cannot tell which of the lines it cut are start-only and why, and name none of them (S205). The
+  count 7.5 asks for still holds every such line, since "so far reached you only as their title" is true of it; what
+  the sitting cannot say is which of them arrive nowhere else.
+- **On the pick.** When the user picks one, diagnose it as sections 1 and 2 say, then offer it a moment as section 3
+  offers one: the cue in plain words, where it then arrives, the count of what the cue met, and that the cue first fires
+  after the next session start, `/clear` or compaction. When the moment is written, say that its title line still shows
+  at every start until `/neocortex:dreamer` moves it off.
+- **The others with no moment of their own arrive at every start.** Say that a memory with no moment of its own whose
+  line the start did not cut arrives at every start with its summary, so this list's number can be lower than the
+  Dreamer's, which counts every memory with no moment of its own whether its line was cut or not.
+- **What the count of these lines does not mean.** The count 7.5 asks for is every line this start noted cut to its
+  title, the memories with a moment of their own among them; the list names the others, the cut memories with no moment
+  of their own. Say both, so the number and the names never read as a contradiction.
+- **A memory that does arrive at its own cue gets no shorter summary offered here.** A cut memory with a moment of its
+  own is not on this list, and it is offered no shorter summary for its length alone: what it needs is nothing, since
+  its cue already brings it, and shortening its line is `/neocortex:dreamer`'s to offer, never this sitting's.
 
 A memory the user declined or left unanswered earlier in this conversation, and one a correction earlier in it named,
 is listed: quote **the correction's own sentence, as the user typed it in this conversation** — not the memory's stored
 `userWords`, which is a different thing and is already on the memory — as its evidence, mark the declined one "you said
 no to this earlier in this conversation", and offer it again only on their ask (S77).
 
-**If no memory shows a dysfunction with evidence**, say you found none, how many memories you read (none, in an empty
-store), and what you looked at (S3). Change nothing, offer nothing.
+**If no memory shows a dysfunction with evidence**, say you found none (never that you found a memory that shows no
+dysfunction when one reached you only as its title at this start), how many memories you read (none, in an empty
+store), and what you looked at (S3). A start-only memory is this sitting's, so its group is the list even when nothing
+else is on it. Change nothing, offer nothing.
 
 ### 7.3 Show the list
 
@@ -447,11 +510,13 @@ second named on its line; never in two groups (S68).
 
 ### 7.5 The count of "…" lines
 
-Those memories are not on the list for their length alone and get no shorter summary offered here: the Dreamer goes
-through the start. Call `dream_report` and use its `start.indexShortened`: that is the count of index lines at this
-place's start that show only their title, as the start would be now. Say the number, and that `/neocortex:dreamer`
-goes through the start (S96). Never try to name those memories from a search: no answer names them, and a search
-matches words, not which lines a start cut.
+The count comes from the same `memories_in_play` answer 7.1 already read, and never from `dream_report`: count the
+lines it lists as "as its index line cut to its title" that stand before the compaction heading, whatever the memory's
+marks. That is how many memories have **so far** reached you at this start only as their title; a memory whose mark
+fired later in the conversation has since arrived in full, so the number can be lower than it was at the first prompt,
+and "so far" is what keeps that from reading as a contradiction. Say the number, how many of those it names below as
+reaching you only as their title (S7), and that `/neocortex:dreamer` goes through the start (S96). Never try to name them
+from a search: a search matches words, not which lines a start cut.
 
 ### 7.6 A memory that arrives at the wrong time
 
@@ -460,8 +525,10 @@ and treat nothing for it in this sitting. A wording dysfunction the same memory 
 evidence (S76).
 
 A memory whose arrival hurts is treated at a correction, not in this sitting: say that in one line, and treat nothing
-for it here. A memory that did not arrive when it should is treated at a correction too, at the mistake it should have
-prevented: say that in the same line, and that `/neocortex:therapy` here treats what a memory's words say.
+for it here. A memory that did not arrive when it should, before a mistake this conversation shows, is treated at that
+correction, at the mistake it should have prevented: say that in one line, and treat nothing for it here. A memory whose
+line this start cut to its title and that has no moment of its own is not this case — it is this sitting's, as 7.2
+says, whether or not a correction named it.
 
 ## 8. When NeoCortex is not connected
 

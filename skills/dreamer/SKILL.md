@@ -105,7 +105,10 @@ After the proposals, call `dream_report` again, so the plan is priced on the sto
 
 - When the start fits its budget, say so; no change is offered.
 - `startOnly`: how many index memories reach Claude only at the start. None of them is offered to move; each needs a
-  moment of its own (a call, failure or reply mark, or a file rule) before it can leave the start.
+  moment of its own (a call, failure or reply mark, or a file rule) before it can leave the start. Where it is above
+  0, say also that the user can give those memories a moment of their own with `/neocortex:therapy`, which offers one
+  to the memories that show only their title at a session start. Where `startOnly` is 0, say no sentence about
+  start-only memories and point at no command for them.
 - When no plan fits (`fitting` under `plans` is empty), say no combination of shorter summaries and moves takes the
   start under its budget, with the report's reason and advice (the `next` of `plans`, and the budget's own `next`);
   offer no change of your own and delete nothing.

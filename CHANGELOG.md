@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.14.0 - 2026-11-25
+
+- New: `/neocortex:therapy` now lists the memories that reached Claude at this session's start only as their title
+  and arrive nowhere else (no call, failure or reply of their own), and offers each a moment of its own: a cue said
+  in plain words, where the memory then arrives, and how often that cue met a call or reply in your earlier
+  sessions. Nothing is written without your answer for that memory (#508).
+- New: `memories_in_play` says, for each line the start cut to its title, whether that memory has a moment of its
+  own, and `get_memory` answers `ownMoment`. `/neocortex:dreamer` points you to `/neocortex:therapy` for memories
+  that need a moment before they can leave the start (#508).
+
 ## 0.13.0 - 2026-11-24
 
 - New: when `/neocortex:therapy` offers a call, failure or reply cue for one of your memories, it now says how many

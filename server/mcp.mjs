@@ -46273,7 +46273,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.13.0",
+  version: "0.14.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -51316,7 +51316,7 @@ var TRACK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 var TRACK_WRITE_MS = 500;
 var TRACK_LOST_LINE = "NOTE: NeoCortex could not note this delivery in its track record, so memories_in_play will report some deliveries of this conversation as unknown.";
 var IN_PLAY_SCOPE = "This names what NeoCortex delivered into this conversation, not memories Claude fetched itself with get_memory or search_memories.";
-var IN_PLAY_DESCRIPTION = 'Which NeoCortex memories had reached this conversation, each with the moment it arrived, whether in full, as its index line or named in a warning, and whether it changed since. Call it when the user asks why you did something or which memories were in play. conversation is what the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line); until, an ISO time, names only what had arrived by then. It covers what NeoCortex delivered, not what you fetched yourself; say so.';
+var IN_PLAY_DESCRIPTION = 'Which NeoCortex memories had reached this conversation, each with the moment it arrived, whether in full, as its index line or named in a warning, and whether it changed since. Call it when the user asks why you did something or which memories were in play. conversation is what the "Track record: conversation" line of your NeoCortex index names (a subagent has its own line); until, an ISO time, names only what had arrived by then. A line cut to its title says whether that memory has a moment of its own (a call, failure or reply mark that can fire), or that this cannot be told now. It covers what NeoCortex delivered, not what you fetched yourself; say so.';
 var IN_PLAY_INPUT = {
   conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
   until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
@@ -52146,7 +52146,7 @@ ${TRACK_LOST_LINE}`;
     "get_memory",
     {
       title: "Get a NeoCortex memory",
-      description: "The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden, or not here (it exists and is valid, but its condition does not hold at this place; the text still comes back).",
+      description: "The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden, or not here (it exists and is valid, but its condition does not hold at this place; the text still comes back). ownMoment says whether it has a moment of its own: a call, failure or reply mark that can fire, so it arrives before a mistake or beside its result. False while a mark still shows means that mark can never fire. The therapy sitting reads it to tell a memory that reaches Claude only as its title apart from one that arrives at its own cue.",
       inputSchema: { id: ID }
     },
     ({ id }) => guarded(async () => {
@@ -52695,8 +52695,8 @@ ${line}`;
         return { content: [{ type: "text", text: `${IN_PLAY_SCOPE} This NeoCortex server keeps no track record (${place}), so it cannot say which memories were in play; that does not mean none were.` }] };
       }
       const record2 = await deps.track.read(session);
-      const today = await reader.load(visibleScopes(deps.session)).then(
-        ({ memories, problems }) => ({ memories, problems }),
+      const today = await load().then(
+        ({ stored, problems, resolution }) => ({ memories: stored, problems, resolution }),
         () => void 0
       );
       const pending = trackLost.get(`${session}/${agent}`)?.count ?? 0;
@@ -53171,13 +53171,23 @@ var CHANGE_TEXT = {
 function stale(error62, base, resolution) {
   return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };
 }
+function statusOf(memory, resolution) {
+  if (resolution.active.includes(memory)) return "active";
+  if (resolution.expired.includes(memory)) return "expired";
+  if (resolution.elsewhere.includes(memory)) return "not here";
+  return "replaced or overridden";
+}
 function shownMemory({ memory, revision }, resolution, here) {
-  const status = resolution.active.includes(memory) ? "active" : resolution.expired.includes(memory) ? "expired" : resolution.elsewhere.includes(memory) ? "not here" : "replaced or overridden";
+  const status = statusOf(memory, resolution);
   return {
     ...entryOf(memory),
     fullId: memory.id,
     revision,
     status,
+    // #508 How line 2, S7, S213: whether the memory has a moment of its own, by the one reader of that rule
+    // (hasOwnMoment, src/deliver.ts), so the sitting reads it instead of restating the rule in its text. A record that
+    // shows a mark while this is false holds a mark that can never fire (S213).
+    ownMoment: hasOwnMoment(memory),
     ...status === "not here" && here !== void 0 ? { notHere: notHereWords(memory.appliesWhen ?? {}, here) } : {},
     body: memory.body,
     supersedes: memory.supersedes.map(shortId),
@@ -53486,7 +53496,15 @@ function inPlayAnswer(input2) {
     const title = loaded === void 0 ? "" : ` "${shownCut(loaded.memory.title, 80)}"`;
     const times = entry.count > 1 ? `, ${entry.count} times in all` : "";
     const since = today === void 0 ? "" : loaded !== void 0 ? entry.revision !== void 0 && loaded.revision !== entry.revision ? "; changed since it arrived, so its text now is not what Claude read" : "" : today.problems.some((problem) => problem.id === id) ? "; its record cannot be read now" : "; deleted since it arrived, or no longer loading here";
-    return `- ${shortId(id)}${title}: ${HOW_WORDS[entry.how]} at ${momentWords(entry.note)}, ${entry.note.time}${times}${since}`;
+    const momentOf = () => {
+      if (entry.how !== "short") return "";
+      if (today === void 0 || loaded === void 0) return "; whether it has a moment of its own cannot be told now";
+      const status = statusOf(loaded.memory, today.resolution);
+      if (status !== "active") return `; it is ${status} now, so it no longer arrives at the start`;
+      return hasOwnMoment(loaded.memory) ? "; it has a call, failure or reply of its own" : "; it has no call, failure or reply of its own";
+    };
+    const moment = momentOf();
+    return `- ${shortId(id)}${title}: ${HOW_WORDS[entry.how]} at ${momentWords(entry.note)}, ${entry.note.time}${times}${since}${moment}`;
   };
   const entries = [...latest.entries()].sort((a, b) => a[1].at - b[1].at);
   const current = entries.filter(([, entry]) => entry.at >= boundary);

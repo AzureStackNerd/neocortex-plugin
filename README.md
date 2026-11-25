@@ -144,7 +144,8 @@ start with `update_memory` and `delivery on-demand` only when you agree, one mem
 a handoff, and they offer only a memory that still arrives at a
 call, a failure or a reply of its own: a move that would leave a memory reachable only by `search_memories` is never
 recommended, and when that leaves no way under the budget the report says so. Every report also counts the memories that
-reach Claude only at the start and says each needs a moment of its own before it can leave. A subagent gets part 1 alone
+reach Claude only at the start and says each needs a moment of its own before it can leave, and that `/neocortex:therapy`
+offers one to the memories that show only their title at a session start. A subagent gets part 1 alone
 and keeps every line whole, so it counts what does not
 fit instead of shortening. Memories
 delivered at startup come in full. Claude reads a memory in full when the detail matters. `/plugin:neocortex:neocortex:refresh` reloads your memories in a running session, for
@@ -314,7 +315,11 @@ on either side. To undo one, `update_memory` the memory that carries the link an
 
 `search_memories` takes a `query` and, optionally, `labels`. Every word of the query must appear in a memory's title,
 summary, why, body or labels, and every label you give must be on the memory, so two words narrow and do not widen. It
-returns each match's scope, title, summary and id, not its body: `get_memory` with the id gets the whole memory. A
+returns each match's scope, title, summary and id, not its body: `get_memory` with the id gets the whole memory, its
+own words included, plus its `ownMoment`: whether it has a moment of its own, meaning a call, failure or reply mark
+that can fire, so `/neocortex:therapy` can tell a memory that reaches Claude only as its title from one that arrives
+at its own cue. `ownMoment` false beside a mark the record shows means that mark can never fire, and the sitting names
+it as such. A
 memory delivered `on-demand` is reachable this way, so choosing that delivery hides it from a start without losing it.
 It also reports the memories that exist but could not be read, with how many and which of their stored text matches, so
 a memory that did not load never looks like no match. Its `includeInactive` returns the expired, replaced and
@@ -352,6 +357,18 @@ Three things it looks for: a summary that says other than the memory's `why`, a 
 keywords, no verb), and a memory you name yourself as outdated. A long list is grouped by what is wrong with each
 memory, the largest group first, and it names ten of a group at a time.
 
+**A memory that reaches you only as its title gets a moment of its own.** Some memories show at each session start as
+nothing but their title, because the start had no room for their summary, and one with no cue of its own arrives
+nowhere else. This sitting makes a group of them, says which line showed only its title and that it has no cue, and
+offers each a moment: a call, a failure or a reply it then arrives at, counted against your recent sessions before you
+answer, so a cue that met nothing is never the one recommended. Which cut memories have a cue is read from the same
+list of what arrived at your start, which says it for every line it cut, so a crowded start names all of them and not
+the first hundred. A memory that changed since the start (expired, replaced or overridden, deleted, or no longer
+holding here) is not offered one, and a handoff is not either; where that cannot be told, the sitting says it cannot
+tell rather than counting the memory as having no cue. A memory you corrected Claude about earlier in the conversation
+is still this sitting's: it is not "did not arrive", it has no cue. Writing a moment leaves the title line on the start
+until `/neocortex:dreamer` moves it off, so the memory arrives twice until then.
+
 **One treatment at a time, and nothing changes without your answer.** For a memory whose words drifted, it offers a
 rewording back to the intent; for one that did not land, a clearer wording with the same meaning; for one you call
 outdated, a reframe that keeps the `why` and changes the conclusion. A rule gets its diagnosis and no proposed
@@ -379,11 +396,12 @@ NeoCortex cannot open, a shared transcript folder — the offer says it **could 
 that the cue fires. It reads the session logs and keeps none of them: no call, reply or error text, and no path, ever
 reaches an answer. A user memory's cue is counted over this project's sessions only, and the offer says so.
 
-**This sitting treats the words, not the timing.** A memory that arrives too late, or is ignored, is a different
-problem, and this command does not treat it yet; it says so and lists that memory's wording fault if it has one. A
-memory whose arrival hurts is treated where you correct Claude, as the next paragraph says. A rewording leaves where
-the memory arrives as it is. A reframe changes the conclusion or narrows where it applies, and a narrowed condition is
-a real change in arrival: the memory then comes up at fewer places, and its offer says where.
+**This sitting treats the words, and the memories that arrive nowhere but a title.** A memory that arrives too late,
+or is ignored, is a different problem, and this command does not treat it yet; it says so and lists that memory's
+wording fault if it has one. A memory whose arrival hurts is treated where you correct Claude, as the next paragraph
+says. A rewording leaves where the memory arrives as it is. A reframe changes the conclusion or narrows where it
+applies, and a narrowed condition is a real change in arrival: the memory then comes up at fewer places, and its offer
+says where.
 
 **At a correction, a memory whose arrival hurts is given a form that hurts less.** When you correct Claude, the check
 names a memory whose arrival stopped a call in this conversation, or one you say disturbs your work, and it opens its
@@ -455,8 +473,13 @@ start, a prompt, an edit, a read, a search, a call or a failed call), its time, 
 line or only named in a warning, and how many times. A memory changed since it arrived says so, so you do not judge
 today's text as what Claude read; one deleted or no longer loading here says that too. After a compaction it names
 apart the memories that arrived before it and are no longer in context in full; after a `/clear` it names only what
-arrived since. A subagent's memories are its own. It covers what NeoCortex delivered, not a memory Claude fetched itself
-with `get_memory` or `search_memories`, and it says so.
+arrived since. A subagent's memories are its own. A memory whose index line the start cut to its title says so, and that
+line ends with whether the memory has a moment of its own — a call, failure or reply that still brings it — or that this
+cannot be told now, because the memory was deleted since or its record cannot be read; a memory that changed status
+since says that instead, so a line that no longer arrives at the start is never offered as one that arrives nowhere
+else. When the memory folder itself could not be read today, the answer says so in a sentence of its own, and only then
+is every line's moment unknown rather than one memory's. It covers what NeoCortex delivered, not a memory Claude fetched
+itself with `get_memory` or `search_memories`, and it says so.
 
 Index part 1 names the conversation in a `Track record: conversation` line, which is what Claude passes. The notes
 behind it are one file per session in `.neocortex/track` in your home folder, on this machine only, removed 24 hours
