@@ -46275,7 +46275,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.14.3",
+  version: "0.14.4",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -49771,8 +49771,23 @@ function leaks(text, names) {
   }
   return null;
 }
+var NAME_KINDS = ["label", "organisation", "repository"];
+function namesByKind(place) {
+  return {
+    label: place.labels.map((label) => label.name),
+    organisation: place.organisation === null ? [] : [place.organisation],
+    repository: place.repo === null ? [] : [place.repo]
+  };
+}
 function namesOf(place) {
-  return [...place.labels.map((label) => label.name), ...place.organisation === null ? [] : [place.organisation], ...place.repo === null ? [] : [place.repo]];
+  const byKind = namesByKind(place);
+  return [...byKind.label, ...byKind.organisation, ...byKind.repository];
+}
+function leakedKinds(text, places) {
+  return NAME_KINDS.filter((kind) => {
+    const names = places.flatMap((place) => namesByKind(place)[kind]);
+    return names.length > 0 && leaks(text, names) !== null;
+  });
 }
 function evidenceOf(records, project) {
   const found = records.find((record2) => record2.place.kind === "project" && record2.place.key === project);
@@ -52033,6 +52048,24 @@ ${TRACK_LOST_LINE}`;
     },
     ({ affects, ...args2 }) => guarded(() => saveCall(args2, { affects }))
   );
+  const placeNames = async () => {
+    const session = deps.session.place;
+    const own2 = session.kind === "project" ? [{ labels: [], organisation: session.organisation, repo: session.repo }] : [];
+    const { read: read2 } = await deps.places.readPlace(placeRefOf(session));
+    if (read2.state === "unreadable") return void 0;
+    const stored = read2.state === "stored" ? [{ labels: read2.stored.record.labels, organisation: read2.stored.record.organisation, repo: read2.stored.record.repo }] : [];
+    return [...stored, ...own2];
+  };
+  const moveProblem = async (memory, previous, args2, memories) => {
+    if (!(previous.scope.kind === "project" && memory.scope.kind === "user")) return void 0;
+    const places = await placeNames();
+    if (places === void 0) return MOVE_TEXT.unreadable;
+    const kinds = leakedKinds(memoryText(memory), places);
+    if (kinds.length === 0) return void 0;
+    const others = Object.keys(args2).some((field) => field !== "id" && field !== "revision" && field !== "scope");
+    const way = others && wayPasses({ ...memory, scope: previous.scope }, previous, memories);
+    return MOVE_TEXT.names(kinds, way) + MOVE_TEXT.reworded;
+  };
   const updateCall = async (args2, confirmation) => {
     if (args2.reading !== void 0 && !asked.claimed(AskedMap.key(conversation.session, `update:${args2.id}`, args2.reading))) {
       return fail(readingRefusal(args2.reading));
@@ -52084,8 +52117,10 @@ ${TRACK_LOST_LINE}`;
       const over = wordsOver(joinedWords(previous.userWords, args2.userWords));
       if (over !== void 0) return fail(over);
     }
+    const move2 = await moveProblem(memory, previous, args2, memories);
     const errors = [
       ...conditionProblems(memory, previous, resolution.current, memories),
+      ...move2 === void 0 ? [] : [move2],
       ...markProblems(memory, previous),
       ...unusableMarkProblems(args2),
       ...validateLinks({ ...memory, supersedes: checked("supersedes"), overrides: checked("overrides") }, memories)
@@ -53178,6 +53213,18 @@ var CHANGE_TEXT = {
   staleUpdate: (id, revision) => `conflict: memory ${id} changed since revision ${revision}; merge your change into "current" and call update_memory again with its revision`,
   staleDelete: (id, revision) => `conflict: memory ${id} changed since revision ${revision} and was not deleted; "current" is the memory as it is now: show the user what changed and ask before you delete it with delete_memory and its revision`,
   gone: (id) => `memory ${id} was moved or deleted after it was read; nothing was changed. Call get_memory ${id} to see whether it still exists, and ask the user before saving it as a new memory`
+};
+var MOVE_TEXT = {
+  /** The kinds as one phrase: "a context label", "a context label and an organisation", "a context label, an organisation and a repository". */
+  names: (kinds, way) => {
+    const words = kinds.map((kind) => kind === "label" ? "context label" : kind);
+    const phrase = words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+    return `scope: this memory names this place's ${phrase} as a word, in its title, summary, why, body, kept words or an earlier wording, and in user scope it would reach every project; nothing was changed, and it stays in this project` + (way ? "; to make this call's other changes, send it again without scope" : "");
+  },
+  /** How line 5's open point 2, settled 2026-11-25: the ending that names a way out that works on this call. */
+  reworded: ". Rewording does not clear this: an earlier wording and the user's kept words stay with the memory, and only deleting it removes them; to share the rule in every project, ask the user before saving it as a new memory in user scope, worded without this place's names",
+  /** How line 5's open point 1, settled 2026-11-25: a place that cannot be read is refused, failing closed (memory ea98b6b1). */
+  unreadable: `scope: this place's context labels cannot be read now, so whether this memory names one cannot be checked; nothing was changed, and it stays in this project`
 };
 function stale(error62, base, resolution) {
   return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };

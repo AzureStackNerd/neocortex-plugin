@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.14.4 - 2026-11-25
+
+- Fixed: moving a project memory to every project with `update_memory` or `update_rule` (scope user) carried a name of
+  the place it came from (a context label, the organisation or the repository) into every project, while the Dreamer's
+  promote refused the same memory. Such a move is now refused with the same check, and the refusal names the kind of
+  name, never the name itself. Rewording does not clear it, since earlier wordings and kept words stay with the memory;
+  to share the rule everywhere, Claude asks you before saving it as a new memory in user scope without those names.
+  When this place's labels cannot be read, the move is refused too (#529).
+
 ## 0.14.3 - 2026-11-25
 
 - Fixed: when a save was refused for a call mark or a reply mark, the refusal told Claude to send null to remove the
