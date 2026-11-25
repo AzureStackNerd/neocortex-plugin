@@ -46273,7 +46273,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.14.1",
+  version: "0.14.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -52146,14 +52146,23 @@ ${TRACK_LOST_LINE}`;
     "get_memory",
     {
       title: "Get a NeoCortex memory",
-      description: "The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden, or not here (it exists and is valid, but its condition does not hold at this place; the text still comes back). ownMoment says whether it has a moment of its own: a call, failure or reply mark that can fire, so it arrives before a mistake or beside its result. False while a mark still shows means that mark can never fire. The therapy sitting reads it to tell a memory that reaches Claude only as its title apart from one that arrives at its own cue.",
-      inputSchema: { id: ID }
+      description: `The full memory by id or 8-character short id, with whether it is active, expired, replaced or overridden, or not here (it exists and is valid, but its condition does not hold at this place; the text still comes back). ownMoment says whether it has a moment of its own: a call, failure or reply mark that can fire, so it arrives before a mistake or beside its result. False while a mark still shows means that mark can never fire. The therapy sitting reads it to tell a memory that reaches Claude only as its title apart from one that arrives at its own cue. A rewritten memory lists its ${TRAIL_SHOWN} newest earlier wordings, each body as its length, and counts the older ones; wording reads any earlier wording whole, listed or counted: 1 is the oldest.`,
+      inputSchema: {
+        id: ID,
+        wording: external_exports.number().int().min(1).optional().describe(
+          "An earlier wording's number, 1 for the oldest up to the newest, also one counted in earlierWordingsNotShown: the answer adds that wording whole as earlierWording"
+        )
+      }
     },
-    ({ id }) => guarded(async () => {
+    ({ id, wording }) => guarded(async () => {
       const { stored, memories, problems, resolution, here } = await load();
       const found = lookup(memories, problems, id);
       if ("error" in found) return fail(found.error);
-      return ok(shownMemory(baseOf(stored, found.memory), resolution, here));
+      const base = baseOf(stored, found.memory);
+      if (wording === void 0) return ok(shownMemory(base, resolution, here));
+      const whole2 = wholeWording(base.memory, wording);
+      if ("error" in whole2) return fail(whole2.error);
+      return ok({ ...shownMemory(base, resolution, here), ...whole2 });
     })
   );
   server.registerTool(
@@ -53539,20 +53548,37 @@ function shownWords(memory) {
   return words === void 0 ? {} : { userWords: words.map((entry) => shownText(entry)), userWordsNote: USER_WORDS_NOTE };
 }
 var TRAIL_READABLE = "The text this memory had before is kept with it, readable with get_memory: only deleting the memory removes an earlier wording.";
+var TRAIL_SHOWN = 10;
+var TRAIL_NOTE = "Each earlier wording shows its body as bodyCharacters, its length; get_memory with wording set to a number shows that wording whole, its body included. Any number from 1, the oldest, to the newest works, also one counted in earlierWordingsNotShown.";
+function shownEntry(entry, wording, whole2) {
+  const [title, summary, why, body] = [entry.title, entry.summary, entry.why, entry.body];
+  return {
+    wording,
+    changed: entry.changed,
+    ...title === void 0 ? {} : { title: shownText(title) },
+    ...summary === void 0 ? {} : { summary: shownText(summary) },
+    ...why === void 0 ? {} : { why: shownText(why) },
+    ...body === void 0 ? {} : whole2 ? { body: shownText(body) } : { bodyCharacters: body.length }
+  };
+}
 function shownTrail(memory) {
   const trail = memory.trail;
   if (trail === void 0 || trail.length === 0) return {};
-  const shownEntry = (entry) => {
-    const [title, summary, why, body] = [entry.title, entry.summary, entry.why, entry.body];
-    return {
-      changed: entry.changed,
-      ...title === void 0 ? {} : { title: shownText(title) },
-      ...summary === void 0 ? {} : { summary: shownText(summary) },
-      ...why === void 0 ? {} : { why: shownText(why) },
-      ...body === void 0 ? {} : { body: shownText(body) }
-    };
+  const first = Math.max(0, trail.length - TRAIL_SHOWN);
+  return {
+    earlierWordings: trail.slice(first).map((entry, i) => shownEntry(entry, first + i + 1, false)),
+    ...first === 0 ? {} : { earlierWordingsNotShown: first },
+    earlierWordingsNote: TRAIL_NOTE
   };
-  return { earlierWordings: trail.map(shownEntry) };
+}
+function wholeWording(memory, wording) {
+  const trail = memory.trail ?? [];
+  const entry = trail[wording - 1];
+  if (entry !== void 0) return { earlierWording: shownEntry(entry, wording, true) };
+  const id = shortId(memory.id);
+  return {
+    error: trail.length === 0 ? `memory ${id} has no earlier wording: it was never rewritten` : `memory ${id} has ${trail.length} earlier wordings: wording must be 1 to ${trail.length}`
+  };
 }
 function joinedWords(stored, added) {
   const kept = keptWords(stored) ?? [];

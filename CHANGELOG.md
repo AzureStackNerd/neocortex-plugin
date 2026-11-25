@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.14.2 - 2026-11-25
+
+- Fixed: `get_memory` on a memory rewritten many times, such as the session handoff, answered too much for Claude
+  Code to show (164,506 characters for one handoff), because every earlier wording was listed with its whole body.
+  Now `get_memory` and `update_memory` list the 10 newest earlier wordings, each with its number and its body as
+  its length, and count the older ones; `get_memory` with `wording` set to a number shows that wording whole. Every
+  earlier wording is still kept: only deleting the memory removes one (#527).
+
 ## 0.14.1 - 2026-11-25
 
 - Fixed: when a memory arrives at Claude's reply (its reply mark) and Claude checks the reply against it, the turn now
