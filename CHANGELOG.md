@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.14.1 - 2026-11-25
+
+- Fixed: when a memory arrives at Claude's reply (its reply mark) and Claude checks the reply against it, the turn now
+  ends on the reply's own status line, open question and closing line, so they stay the last thing you see. Before,
+  the check ended with one line of its own ("the reply already follows it") that pushed the reply out of view. When
+  nothing needs correcting, the check adds no word of its own; a correction, or a memory that did not fit, comes
+  first. A subagent hands its caller the whole report back instead of a check line (#526).
+
 ## 0.14.0 - 2026-11-25
 
 - New: `/neocortex:therapy` now lists the memories that reached Claude at this session's start only as their title

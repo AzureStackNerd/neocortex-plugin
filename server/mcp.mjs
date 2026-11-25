@@ -46273,7 +46273,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.14.0",
+  version: "0.14.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48457,7 +48457,7 @@ function unjudgedInputWarning(missing) {
   return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
 }
 function replyLead(event) {
-  return "NeoCortex: your reply above says what a memory you saved is about; it is below. Check that reply against it now: if the reply already follows it, end your turn with one short line saying so; if not, correct the reply " + (event === "SubagentStop" ? "before you hand back your report." : "before the user acts on it.");
+  return event === "SubagentStop" ? "NeoCortex: your report above says what a memory you saved is about; it is below. Check your report against it now. Unless the report needs a correction or a memory did not fit, hand the report back again, whole and unchanged, and nothing else: no word about this check or the memory, also when the memory does not apply to the report. If it needs a correction, or a memory did not fit, say that first, then hand the report back whole, corrected where needed, its own closing line last." : "NeoCortex: your reply above says what a memory you saved is about; it is below. Check your reply against it now. Its closing lines are its status line, open question and closing line, or simply its own last lines when it has none of these. Unless the reply needs a correction or a memory did not fit, reply again with those closing lines and nothing else: no word about this check or the memory, also when the memory does not apply to the reply. If it needs a correction, or a memory did not fit, say that first, then end with those closing lines as corrected, so they are the last words of the turn.";
 }
 function replyAsk(active, problems, reply, turn) {
   if (!active.some(hasReplyMark)) return { seen: [], named: [] };

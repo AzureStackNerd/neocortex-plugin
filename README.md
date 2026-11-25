@@ -187,12 +187,14 @@ one yet.
 
 A memory can carry a **reply mark** (`reply: {phrases}`) as well: the words of a situation in Claude's own reply, such as
 `["tests pass", "all green"]`. When the reply that ends a turn says any one of them, the turn does not end yet: the
-memory arrives in full and Claude checks that reply against it before you answer. Only the reply that ends a turn is
+memory arrives in full and Claude checks that reply against it, and the turn then ends with that reply's own closing
+lines still the last thing you read, when it needed no correction. Only the reply that ends a turn is
 heard, never text before an earlier tool call, a tool call's input or your own message. A phrase matches within one line
 of the reply, capitals ignored, `*` for any run of words, with a word boundary at its start; a phrase with no letter or
 digit is refused. It arrives once per agent's context and again after a compaction or `/clear`, and each time it fires
 it costs **one extra reply**, so NeoCortex keeps a turn going at most once per message you send. A subagent's final reply
-is heard the same way before it hands back; Claude Code's own helper agents are not. When NeoCortex cannot check a reply,
+is heard the same way before it hands back, and its whole report then reaches the session that started it; Claude Code's
+own helper agents are not. When NeoCortex cannot check a reply,
 you see one line at the end of the turn and the turn ends. A rule cannot carry one yet.
 
 **Rules.** A memory that loads on its own at a moment (`startup`, `prompt`, `question`, `subagent` or `edit`), or that
