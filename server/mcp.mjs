@@ -36535,13 +36535,15 @@ var MARK_KINDS = [
     (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : toolsOf(mark, "failure").length === 0 ? "failure: this mark names no tool, so it would never arrive at a failed call; name the tool exactly as Claude Code names it, such as Bash or Read, or leave the mark out; on an update, null removes the stored mark" : void 0
   ),
   // A call mark whose tool names nothing after its split (`|`, `| |`, `  `), which could never meet a call.
+  // #515: the way out is scoped as the failure mark's is (#513), since `callInput` is `.optional()` on a save and only
+  // `.nullable()` on an update: a null a save is told to send is a schema error, not a removal.
   toolMarkKind(
     "callInput",
     "a call's input",
     "input",
     "CallInputMark",
     "arrives at a call judging the call's own input",
-    (mark) => toolsOf(mark, "callInput").length === 0 ? "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; leave the mark out (null) to remove it" : void 0
+    (mark) => toolsOf(mark, "callInput").length === 0 ? "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; or leave the mark out; on an update, null removes the stored mark" : void 0
   ),
   {
     // A phrase with no letter or digit would bring the memory at nearly every reply, and a list with none usable at no
@@ -36552,7 +36554,7 @@ var MARK_KINDS = [
       const bad = phrases.filter((phrase) => !usablePhrase(phrase));
       if (bad.length === 0 && phrases.length > 0) return void 0;
       const which = bad.length === 0 ? "it gives no phrase" : `${bad.map((phrase) => JSON.stringify(phrase)).join(", ")} ${bad.length === 1 ? "holds" : "hold"} no letter or digit`;
-      return `reply: ${which}, so it would bring the memory at every reply or at none; give the words of the situation as Claude would say them, such as "tests pass", or leave the mark out (null removes it)`;
+      return `reply: ${which}, so it would bring the memory at every reply or at none; give the words of the situation as Claude would say them, such as "tests pass", or leave the mark out; on an update, null removes the stored mark`;
     },
     field: "reply",
     what: "Claude's reply",
@@ -46273,7 +46275,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.14.2",
+  version: "0.14.3",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -49760,7 +49762,7 @@ function wordsIn(text) {
 }
 function memoryText(memory) {
   const earlier = (memory.trail ?? []).flatMap((entry) => [entry.title, entry.summary, entry.why, entry.body]);
-  return [memory.title, memory.summary, memory.body, ...memory.userWords ?? [], ...earlier.filter((text) => text !== void 0)].join(String.fromCharCode(10));
+  return [memory.title, memory.summary, memory.why, memory.body, ...memory.userWords ?? [], ...earlier.filter((text) => text !== void 0)].join(String.fromCharCode(10));
 }
 function leaks(text, names) {
   const words = wordsIn(text);

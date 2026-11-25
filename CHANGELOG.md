@@ -2,6 +2,15 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.14.3 - 2026-11-25
+
+- Fixed: when a save was refused for a call mark or a reply mark, the refusal told Claude to send null to remove the
+  mark, which a save does not accept, so Claude's next call failed too. A refusal now says to leave the mark out, and
+  that null removes a stored mark only on an update (#515).
+- Fixed: a memory whose reason (its why) named a customer, organisation or repository of the place it came from could
+  still be promoted to every project, while the same name anywhere else in the memory stopped the promotion. The
+  promotion check now reads the why as well (#503).
+
 ## 0.14.2 - 2026-11-25
 
 - Fixed: `get_memory` on a memory rewritten many times, such as the session handoff, answered too much for Claude
