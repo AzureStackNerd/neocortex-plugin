@@ -169,7 +169,8 @@ default is `index`.
 A memory can also carry a **failure mark** (`failure: {tool, pattern}`). It then arrives when a tool call fails the way
 its tool and pattern say, once per agent and beside the tool's own error. The pattern is judged against the call's own
 input (a shell's command, a file tool's path, any other tool's arguments), never against the error text, and a rule
-cannot carry one yet.
+cannot carry one yet. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a failed call of
+them, so it would never arrive.
 
 A memory can carry a **call mark** (`callInput: {tool, pattern}`) instead, or as well. It then arrives in full at the
 first call in each agent's context whose own input the tool and pattern are about, once per agent and again after a
@@ -185,7 +186,8 @@ every memory saved before that choice existed. A refusal's reason is not held to
 gets, so every memory about that call is in it. Its `tool` may name several tools separated by `|`, such as
 `Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
 merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry
-one yet.
+one yet. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a call of them, so it would never
+arrive; one naming them beside other tools is refused whole, so the mark is given again without them.
 
 A memory can carry a **reply mark** (`reply: {phrases}`) as well: the words of a situation in Claude's own reply, such as
 `["tests pass", "all green"]`. When the reply that ends a turn says any one of them, the turn does not end yet: the

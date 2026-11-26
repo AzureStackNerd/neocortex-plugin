@@ -36435,6 +36435,9 @@ function callPathOf(tool, json2) {
   return named.trim() === "" ? void 0 : named.replaceAll("\\", "/");
 }
 var OWN_TOOL_RE = /^mcp__(plugin_neocortex_neocortex|neocortex)__/;
+function ownToolNamesIn(names) {
+  return names.filter((name) => OWN_TOOL_RE.test(name));
+}
 function aboutMark(mark, kind, tool, calls) {
   const canonical = canonicalMark(mark, kind);
   if (canonical === void 0 || !toolsOf(canonical, kind).includes(tool.trim())) return false;
@@ -36523,6 +36526,19 @@ function holderOf(marks) {
   for (const { kind, mark } of marks) out[kind.field] = mark;
   return out;
 }
+function ownToolProblem(kind, own2, namesOthers) {
+  const named = own2.join(", ");
+  const thatMoment = kind === "failure" ? "a failed call of NeoCortex's own tools" : "a call of NeoCortex's own tools";
+  const wayOut = "on an update, null removes the stored mark";
+  if (kind === "failure") {
+    return `failure: this mark names NeoCortex's own tool (${named}), and no NeoCortex hook sees ${thatMoment}, so the memory would never arrive there; name the tool you meant, such as Bash or Read, or leave the mark out; ${wayOut}`;
+  }
+  if (!namesOthers) {
+    return `callInput: this mark names only NeoCortex's own tools (${named}), and no NeoCortex hook sees ${thatMoment}, so the memory would never arrive there; name the tool you meant, such as Bash, or leave the mark out; ${wayOut}`;
+  }
+  const one = own2.length === 1;
+  return `callInput: this mark names NeoCortex's own ${one ? "tool" : "tools"} (${named}) beside other tools, and no NeoCortex hook sees ${thatMoment}, so ${one ? "that name would never bring the memory" : "those names would never bring the memory"}; give the mark without ${one ? "it" : "them"}; ${wayOut}`;
+}
 var MARK_KINDS = [
   // A failure mark whose tool holds the `|` of a call mark: the failure moment reads it as one literal name and never
   // matches it, so it would silently never fire. #513: and one whose tool names nothing, which `canonicalMark` drops
@@ -36535,19 +36551,19 @@ var MARK_KINDS = [
     "failure",
     "FailureMark",
     "arrives at a call judging the failure",
-    (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : toolsOf(mark, "failure").length === 0 ? "failure: this mark names no tool, so it would never arrive at a failed call; name the tool exactly as Claude Code names it, such as Bash or Read, or leave the mark out; on an update, null removes the stored mark" : void 0
+    (mark) => mark.tool.includes("|") ? "failure: a failure mark names one tool, and | is for a call mark (callInput), which reads it as several names; give this mark one tool name, or save the several-tool mark as a callInput instead" : toolsOf(mark, "failure").length === 0 ? "failure: this mark names no tool, so it would never arrive at a failed call; name the tool exactly as Claude Code names it, such as Bash or Read, or leave the mark out; on an update, null removes the stored mark" : ownToolNamesIn(toolsOf(mark, "failure")).length === 0 ? void 0 : ownToolProblem("failure", ownToolNamesIn(toolsOf(mark, "failure")), false)
   ),
   // A call mark whose tool names nothing after its split (`|`, `| |`, `  `), which could never meet a call.
   // #515: the way out is scoped as the failure mark's is (#513), since `callInput` is `.optional()` on a save and only
   // `.nullable()` on an update: a null a save is told to send is a schema error, not a removal.
-  toolMarkKind(
-    "callInput",
-    "a call's input",
-    "input",
-    "CallInputMark",
-    "arrives at a call judging the call's own input",
-    (mark) => toolsOf(mark, "callInput").length === 0 ? "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; or leave the mark out; on an update, null removes the stored mark" : void 0
-  ),
+  toolMarkKind("callInput", "a call's input", "input", "CallInputMark", "arrives at a call judging the call's own input", (mark) => {
+    const names = toolsOf(mark, "callInput");
+    if (names.length === 0) {
+      return "callInput: this mark names no tool, so it would never arrive at a call; name the tool exactly as Claude Code names it, such as Bash or Write, and write several as Bash|PowerShell; or leave the mark out; on an update, null removes the stored mark";
+    }
+    const own2 = ownToolNamesIn(names);
+    return own2.length === 0 ? void 0 : ownToolProblem("callInput", own2, own2.length < names.length);
+  }),
   {
     // A phrase with no letter or digit would bring the memory at nearly every reply, and a list with none usable at no
     // reply at all; both are refused rather than stored, since the write would otherwise look like it worked (S42).
@@ -46289,7 +46305,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.15.0",
+  version: "0.15.1",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47845,15 +47861,23 @@ function shortenable(memory, whole2 = indexLine(memory), short = indexLine(memor
 function arrivingMarks(memory) {
   const files = editFiles(memory);
   const filesHold = files.state === "none" || files.state === "judged" && files.usable.length > 0;
-  const calls = canonicalMark(memory.callInput, "callInput");
+  const calls = withoutOwnNames(canonicalMark(memory.callInput, "callInput"), "callInput");
   const failure2 = canonicalMark(memory.failure, "failure");
-  const failures = failure2 !== void 0 && failure2.tool.includes("|") ? void 0 : failure2;
+  const failures = failure2 !== void 0 && failure2.tool.includes("|") ? void 0 : withoutOwnNames(failure2, "failure");
   const replies = replyPhrases(memory);
   return filesHold ? { calls, failures, replies } : { calls: void 0, failures: void 0, replies };
+}
+function withoutOwnNames(mark, kind) {
+  if (mark === void 0) return void 0;
+  const kept = toolsOf(mark, kind).filter((name) => ownToolNamesIn([name]).length === 0);
+  return kept.length === 0 ? void 0 : canonicalMark({ tool: kept.join("|"), pattern: mark.pattern }, kind);
 }
 function hasOwnMoment(memory) {
   const { calls, failures, replies } = arrivingMarks(memory);
   return calls !== void 0 || failures !== void 0 || replies.length > 0;
+}
+function hasCallMark(memory) {
+  return arrivingMarks(memory).calls !== void 0;
 }
 var SEARCH_ONLY = "only when you search for it or read it by its id";
 function arrivalWords(memory) {
@@ -49379,9 +49403,13 @@ function cueRefusal(cue) {
   const kind = "failure" in cue ? "failure" : "callInput";
   const mark = "failure" in cue ? cue.failure : cue.callInput;
   const namesNoTool = "this cue names no tool, so NeoCortex would refuse to store it; name the tool exactly, or leave the cue out";
-  if (canonicalMark(mark, kind) === void 0) return namesNoTool;
+  const canonical = canonicalMark(mark, kind);
+  if (canonical === void 0) return namesNoTool;
   if (kind === "failure" && mark.tool.includes("|")) return "a failure cue names one tool, and | is for a call cue; give it one tool name, or offer it as a call cue";
-  return void 0;
+  const own2 = ownToolNamesIn(toolsOf(canonical, kind));
+  if (own2.length === 0) return void 0;
+  const one = own2.length === 1;
+  return `this cue names NeoCortex's own ${one ? "tool" : "tools"} (${own2.join(", ")}), and no NeoCortex hook sees a call of NeoCortex's own tools, so it can never fire and NeoCortex would refuse to store it; name another tool, or leave the cue out`;
 }
 function markOf(cue) {
   if ("reply" in cue) return void 0;
@@ -51360,7 +51388,7 @@ var IN_PLAY_INPUT = {
   conversation: external_exports.string().describe('The id the "Track record: conversation" line of your NeoCortex index names'),
   until: external_exports.string().optional().describe("An ISO date and time: only the memories that had arrived by then")
 };
-var COUNT_DESCRIPTION = "How many calls or replies each cue you are considering for one memory met in this place's recent sessions, so no memory is given a moment that never comes. Call it in /neocortex:therapy before you offer a cue, and pass every cue of that one offer in a single call so they are compared over the same sessions. Each answer says how many calls or replies a cue met and in how many sessions, or why it can never bring this memory, or why the count could not be made at all. Say the count in calls met, never as times it arrives; say how many sessions were counted (sessionsCounted, which may be fewer than the reach) and how many could not be read (unreadable); and never say a cue fires when the count could not be made. It reads session logs and keeps none of them: no call, reply or error text, and no path, reaches its answer.";
+var COUNT_DESCRIPTION = "How many calls or replies each cue you are considering for one memory met in this place's recent sessions, so no memory is given a moment that never comes. Call it in /neocortex:therapy before you offer a cue, and pass every cue of that one offer in a single call so they are compared over the same sessions. Each answer says how many calls or replies a cue met and in how many sessions, or why it can never bring this memory, or why the count could not be made at all. A cue naming NeoCortex's own tools can never fire, since no NeoCortex hook sees a call of them, and is answered as that rather than as a count of 0. Say the count in calls met, never as times it arrives; say how many sessions were counted (sessionsCounted, which may be fewer than the reach) and how many could not be read (unreadable); and never say a cue fires when the count could not be made. It reads session logs and keeps none of them: no call, reply or error text, and no path, reaches its answer.";
 var COUNT_INPUT = {
   memory: external_exports.string().describe("The id of the memory the cues are for, or its first 8 characters as the index shows it"),
   cues: external_exports.array(
@@ -51404,11 +51432,11 @@ var markSchema2 = (patternWords) => external_exports.strictObject({
 });
 var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
-var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
-var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call it is about is stopped once with this memory as the reason, and the call made again runs, only when the memory is set to be read first; otherwise it arrives beside that call's result too, after the call ran. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a failed call of them, so it would never arrive. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
+var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call it is about is stopped once with this memory as the reason, and the call made again runs, only when the memory is set to be read first; otherwise it arrives beside that call's result too, after the call ran. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a call of them, so it would never arrive. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
 var REPLY_WORDS = `The situation in Claude's own reply this memory is about, as phrasings Claude would write ("tests pass", "all green", "ready to release"): at the end of a turn whose final reply says any one of them, the memory arrives in full and Claude checks that reply against it before the user acts; once per agent's context, and each time it fires costs one extra reply. Matched within one line of the reply, capitals ignored, * as any run of words; each phrase needs a letter or digit. Set it unasked when a memory you save is about something Claude says (a claim, a report, a conclusion). A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).`;
 var READ_FIRST_WORDS = `Whether this memory's rule must be read before a call it is about runs. True stops the first such call that can change something, once in each agent, so Claude reads the memory first, and the call made again runs; a call NeoCortex knows only reads is never stopped and gets the memory beside its result. Left out or false, the memory arrives beside the call's result, after it ran. On an update, null takes it back exactly as false does; a save takes true or false. Set it only when the user says the rule must be read before the call, such as "read this before you run that"; never set it on your own judgement. It applies only to a memory with a callInput mark. Set true, it takes effect at the next matching call in each agent, also one that already had the memory beside it: it stops that call, and an agent where it already stopped a call is not stopped again until that agent's context is compacted or cleared. Set back to false, it stops no call from then on.`;
-var READ_FIRST_ONLY_CALL = "This memory is not set to be read first in any way that changes anything: the choice applies only to a memory about a call (one with a callInput mark), and this memory has none, so it arrives exactly as it did before.";
+var READ_FIRST_ONLY_CALL = "This memory is not set to be read first in any way that changes anything: the choice applies only to a memory about a call that can bring it, and this memory has no call mark that can, so it arrives exactly as it did before.";
 var REPLY_MARK = external_exports.strictObject({
   phrases: external_exports.array(external_exports.string()).describe('The phrasings of the situation, any one of which brings the memory, such as ["tests pass", "all green"]')
 });
@@ -52047,7 +52075,7 @@ ${TRACK_LOST_LINE}`;
     const id = shortId(memory.id);
     const next = [
       // #528 S38, S39: the field is stored, and the answer says it changes nothing on a memory with no call mark.
-      ...memory.readFirst === true && memory.callInput === void 0 ? [READ_FIRST_ONLY_CALL] : [],
+      ...memory.readFirst === true && !hasCallMark(memory) ? [READ_FIRST_ONLY_CALL] : [],
       // #528 S28: a saved memory with a call mark says how it arrives, in the one composer the update, the look-up and
       // the correction check use (arrivesWords), so the answer and what the call then does cannot drift apart.
       ...memory.callInput === void 0 ? [] : [`It arrives ${arrivesWords(memory)}.`],
@@ -52184,7 +52212,10 @@ ${TRACK_LOST_LINE}`;
     // call that repeats the stored value changes nothing and gets none. Compared as a plain boolean, since an unset
     // memory is the same as one set to false.
     memory.readFirst === true !== (previous.readFirst === true) || !sameCondition(memory.appliesWhen, previous.appliesWhen) || !sameMark(memory.failure, previous.failure, "failure") || !sameMark(memory.callInput, previous.callInput, "callInput") || !sameReply(memory.reply, previous.reply);
-    const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0 && !momentChanged;
+    const momentWordsBefore = arrivesWords(previous);
+    const momentWordsAfter = arrivesWords(memory);
+    const momentSaid = momentChanged && momentWordsBefore !== momentWordsAfter;
+    const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0 && !momentSaid;
     const hidden = ["title", "summary"].filter(
       (field) => args2[field] === void 0 && (unshownCharOf(previous[field]) !== null || loneSurrogateOf(previous[field]) !== null)
     );
@@ -52198,10 +52229,10 @@ ${TRACK_LOST_LINE}`;
     const changedWording = TRAIL_FIELDS.filter((field) => memory[field] !== previous[field]);
     const showNext = [
       // #528 S38, S39: a memory with no call mark is told the choice changes nothing, whichever way it was passed.
-      memory.readFirst === true && memory.callInput === void 0 && args2.readFirst !== void 0 ? READ_FIRST_ONLY_CALL : void 0,
+      memory.readFirst === true && !hasCallMark(memory) && args2.readFirst !== void 0 ? READ_FIRST_ONLY_CALL : void 0,
       keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT,
       trail !== void 0 && trail !== previous.trail ? TRAIL_READABLE : void 0,
-      momentChanged ? MOMENT_CHANGED(arrivesWords(previous), arrivesWords(memory), changedWording) : void 0
+      momentSaid ? MOMENT_CHANGED(momentWordsBefore, momentWordsAfter, changedWording) : void 0
     ].filter((line) => line !== void 0).join(" ");
     return ok({
       updated: { ...entryOf(memory), ...overridesOf(memory), ...shownWords(memory), ...shownTrail(memory), revision },

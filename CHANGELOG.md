@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.15.1 - 2026-11-26
+
+- Fixed: a call or failure mark naming NeoCortex's own tools (such as `mcp__plugin_neocortex_neocortex__save_memory`)
+  was stored and answered as if the memory would arrive at those calls, while no NeoCortex hook ever sees them. Such a
+  mark is now refused at every save or change, whole when it names other tools beside them, with the own tools named
+  and a way out that fits the call. A memory that already holds one keeps it, and every place that reads its moment
+  back (its look-up, the cue count, the correction check, memories in play, the therapy sitting and the Dreamer) says
+  it can never fire instead of counting it as 0 or as a moment of its own. A write whose arrival words do not change no
+  longer says it changed when the memory arrives (#523).
+
 ## 0.15.0 - 2026-11-26
 
 - Changed: a memory about a tool call now arrives beside the call's result, and the call runs, so your screen no longer
