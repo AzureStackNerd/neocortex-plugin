@@ -429,9 +429,14 @@ and never a wording; Claude Code asks you to confirm it with what it affects, an
 you ask for one, since the rule then stops being a rule.
 
 **The new form fires at its next moment, not at once.** When the offer is written, the moment that hurt is gone in the
-same write, but a mark the memory keeps is recorded once per agent's context and cleared at a session start, so it
-first fires after the next session start, `/clear` or compaction, in a new subagent, or after a day without use in this
-conversation; a rule's new load moment holds from its next such moment. The offer and the end say so.
+same write. A memory that has not arrived at a call, failure, read or reply in this conversation yet — including one
+whose moment hurt in an earlier session or in a subagent and that has not arrived here either — can arrive at the very
+next matching call, failure or reply, this turn included, though a reply mark waits for your next message when NeoCortex
+has already kept this turn going once. One that has already arrived here arrives again only after the next session
+start, `/clear` or compaction, in a subagent that has not had it, or after a day in which NeoCortex brought nothing new
+here; a resumed session is no such start. A new call mark on a memory set to be read first that has not stopped a call
+here yet stops the next matching call that can change something. A rule's new load moment holds from its next such
+moment. The offer and the end name both cases.
 
 **A memory that cannot have hurt here is never named that way.** One that is on demand with no mark, whose condition
 does not hold in this project, that expired or was replaced or overridden, a handoff, another project's, or one whose

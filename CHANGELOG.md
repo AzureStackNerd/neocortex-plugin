@@ -2,6 +2,18 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.15.2 - 2026-11-26
+
+- Fixed: the therapy sitting, the correction check and the plugin README said a memory's new mark first fires only
+  after the next session start, `/clear` or compaction, while a memory that has not yet arrived in this conversation
+  can arrive at its very next matching call, failure or reply, this turn included. Each place now names both cases: a
+  memory not yet here arrives at its next matching moment (a reply mark waits for your next message when NeoCortex has
+  already kept this turn going once); a memory already here arrives again only after the next session start, `/clear`
+  or compaction, in a subagent that has not had it, or after a day in which NeoCortex brought nothing new here, and a
+  resume is no such start. A new call mark on a memory set to be read first that has not stopped a call here yet stops
+  the next matching call that can change something. A condition offered as a moment now names only the moments the
+  memory has (#524).
+
 ## 0.15.1 - 2026-11-26
 
 - Fixed: a call or failure mark naming NeoCortex's own tools (such as `mcp__plugin_neocortex_neocortex__save_memory`)

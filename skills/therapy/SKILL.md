@@ -169,7 +169,14 @@ One offer per treatment, each answered on its own. Show before and after, so the
     memory whose files part stops it — is said as that, never as 0 times. Count and keep nothing: no call, reply or error
     text of theirs is ever shown back.
   - When the memory's condition does not hold at this place (`notHere`), the moment to propose is a condition that
-    takes this place in, shown before and after with every other place it then reaches.
+    takes this place in, shown before and after with every other place it then reaches, and say only the moments that
+    memory itself has, never one it has not: if it carries a call, failure or reply mark, it arrives at its next
+    matching call, failure, read or reply once the condition holds there, this turn included if it has not arrived here
+    yet (a reply mark waits for their next message when NeoCortex has already kept this turn going once), and otherwise
+    after the next session start, `/clear` or compaction, in a subagent that has not had it, or a day in which NeoCortex
+    brought nothing new here; if it is delivered at index (its line at each start), that index line shows there from the
+    next session start, `/clear` or compaction; a rule loads there from its next such moment; with none of these,
+    nothing arrives on its own there, and it is still reached only when looked up.
   - When the check could not read this place's labels or repository (`placeUnknown`), propose **no** condition change
     on that reading: say what could not be read, and offer a mark instead, or wait until the place can be read.
   - What this memory can take: a call, failure or reply mark, and a condition, on an index or on-demand memory of
@@ -196,7 +203,8 @@ One offer per treatment, each answered on its own. Show before and after, so the
     keeps every mark that did not hurt, and the offer names each. A form that would add arrivals — a mark on a memory
     with none — is never offered for a hurt. A memory with no mark has no cue to narrow: for a user memory offer a
     narrower condition (where its index line arrives), shown before and after with the places it then no longer
-    reaches; for a project memory, "none that fits", said as such. Never offer on demand or a delete unasked (a fix for
+    reaches, and that its index line follows the new condition from the next session start, `/clear` or compaction; for
+    a project memory, "none that fits", said as such. Never offer on demand or a delete unasked (a fix for
     a noisy delivery changes how a memory arrives, never whether): if they ask for one, say what it gives up, and that
     a delete is their own ask outside therapy. For a memory that stopped a call, say the user may keep it, and that
     NeoCortex has no form that arrives at such a call without stopping it once.
@@ -207,10 +215,16 @@ One offer per treatment, each answered on its own. Show before and after, so the
     when the user asks for one, and the offer then says beforehand that it stops being a rule and no longer loads in
     full. Say that Claude Code asks the user to confirm the change with what it affects; on their decline nothing
     changes and you say so.
-  - The new form fires at its next moment, not at once: a mark is recorded once per agent's context and cleared at a
-    session start, so it first fires after the next session start, `/clear` or compaction, in a new subagent, or after
-    a day without use in this conversation — say exactly that, so "the next such call runs without the stop" is never
-    read as the new form arriving at once. A rule's new load moment holds from its next such moment.
+  - The new form fires at its next moment, not at once, so name both cases. A memory that has not arrived at a call,
+    failure, read or reply in this conversation yet — one that reached you only as its title or by a lookup, or whose
+    moment hurt in an earlier session or in a subagent and that has not arrived here either — can arrive at the very
+    next matching call, failure or reply, this turn included; a reply mark waits for their next message when NeoCortex
+    has already kept this turn going once.
+    A memory that has already arrived here arrives again only after the next session start, `/clear` or compaction, in a
+    subagent that has not had it, or after a day in which NeoCortex brought nothing new here, and a resume is no such
+    start. A new call mark on a memory set to be read first that has not stopped a call here yet stops the next matching
+    call that can change something, in this conversation. Never say only that it waits for a new session, and never that
+    it arrives at once for a memory that already arrived here. A rule's new load moment holds from its next such moment.
 - **A rule gets no proposed wording at all.** A rule is any memory that loads in full at the start, at a prompt or at an
   edit, or is `enforced`. For a rule you show the diagnosis and its evidence, and you propose **no wording** — not a
   rewording, not one "with the same meaning", not a reframe, and not a suggestion of the words to use. Say that therapy
@@ -322,9 +336,15 @@ says, and how the user will see it worked: the next time such a call, file or re
 the mistake. A write that changed the wording too says both, as the write's own answer does (S136). For a
 **wording** change, say that this changed what the memory says, not when it arrives. For a **form** written in place
 of a moment that hurt, say which moment went and which came, what the new form gives up, and how they will see it
-worked: the next such call runs without the stop, or the memory arrives at fewer prompts, calls or replies — and that
-the new mark first fires after the next session start, `/clear` or compaction, in a new subagent, or after a day
-without use in this conversation, or, for a rule, from its next such moment. In the sitting over the store, add
+worked: the next such call runs without the stop, or the memory arrives at fewer prompts, calls or replies — and when
+the new mark first brings it, in both cases: for a memory that has not arrived at a call, failure, read or reply in
+this conversation yet — one that reached you only as its title or by a lookup, or whose moment hurt in an earlier
+session or in a subagent and that has not arrived here either — at the very next matching call, failure or reply, this
+turn included, with a reply mark waiting for their next message when this turn is already kept going once; and for a
+memory that has already arrived here, only after the next session start, `/clear` or compaction, in a subagent that has
+not had it, or after a day in which NeoCortex brought nothing new here, a resume being no such start. A new call mark on
+a memory set to be read first that has not stopped a call here yet stops the next matching call that can change
+something; for a rule, from its next such moment. In the sitting over the store, add
 which listed memories were not looked at or not answered, and that the next `/neocortex:therapy` reaches them (S87).
 
 Do not check later in this conversation whether it worked; that is not part of this sitting.
@@ -447,9 +467,12 @@ title" named on its line, and each treatment is offered on its own.
   count 7.5 asks for still holds every such line, since "so far reached you only as their title" is true of it; what
   the sitting cannot say is which of them arrive nowhere else.
 - **On the pick.** When the user picks one, diagnose it as sections 1 and 2 say, then offer it a moment as section 3
-  offers one: the cue in plain words, where it then arrives, the count of what the cue met, and that the cue first fires
-  after the next session start, `/clear` or compaction. When the moment is written, say that its title line still shows
-  at every start until `/neocortex:dreamer` moves it off.
+  offers one: the cue in plain words, where it then arrives, the count of what the cue met, and that the cue can bring
+  the memory at the very next matching call, failure or reply in this conversation, this turn included (a reply mark
+  waits for their next message when this turn is already kept going once), since it has never arrived at a moment here —
+  and, for a call cue on a memory set to be read first, that it stops the next matching call that can change something,
+  once. When the moment is written, say that its title line still shows at every start until `/neocortex:dreamer` moves
+  it off.
 - **The others with no moment of their own arrive at every start.** Say that a memory with no moment of its own whose
   line the start did not cut arrives at every start with its summary, so this list's number can be lower than the
   Dreamer's, which counts every memory with no moment of its own whether its line was cut or not.
