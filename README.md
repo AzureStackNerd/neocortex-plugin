@@ -178,8 +178,10 @@ compaction or `/clear`. The pattern judges what the call is about to do: a shell
 NeoCortex knows only reads — a command that only lists, shows, searches or echoes, an MCP tool whose name reads, a web
 search — gets the memory **beside its result**, so the call runs at once, and so do a write, an edit, a read, a search
 and a skill, so Claude can correct the file or follow the memory while doing what the skill says. Every other call — one
-that cannot be taken back, and one NeoCortex cannot tell only reads — is **refused once** with the memory as the reason,
-before it runs, and the same call then runs; a refusal's reason is not held to the 10,000 characters a hook's context
+that cannot be taken back, and one NeoCortex cannot tell only reads — gets the memory **beside its result** too, after
+the call ran; it is **refused once** with the memory as the reason, before it runs, and the same call then runs, only
+when the memory is set to be **read first** (`readFirst: true`), your choice per memory, and beside is the default for
+every memory saved before that choice existed. A refusal's reason is not held to the 10,000 characters a hook's context
 gets, so every memory about that call is in it. Its `tool` may name several tools separated by `|`, such as
 `Write|Edit|MultiEdit|NotebookEdit`, so one memory about written words arrives at every kind of write. A memory that
 merely mentions a command is not marked about it, a call the mark is not about brings nothing, and a rule cannot carry

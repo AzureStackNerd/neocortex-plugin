@@ -151,8 +151,9 @@ One offer per treatment, each answered on its own. Show before and after, so the
 - **A moment** (1): a moment of its own that comes before such a mistake as this one, said as the cue it fires on —
   the tool and pattern of a call or failure mark, the file of a file rule, or the phrase of a reply mark — and what
   that moment does: at a shell command or another tool call that changes something, it stops that call once and the
-  call made again runs; at a write, an edit, a read or a skill, and at a reply, it arrives beside the result, after
-  the call or the reply has run. Show it before and after, and say where the memory then arrives besides the moment it
+  call made again runs when the memory is set to be **read first**, and arrives beside the result when it is not; at a
+  write, an edit, a read or a skill, and at a reply, it arrives beside the result, after the call or the reply has run.
+  Show it before and after, and say where the memory then arrives besides the moment it
   keeps: a call, failure or reply mark and a wider condition are added beside the one it has, never in place of it.
   - **Every cue comes with how often it met one.** Call `count_cues` once per offer, with the memory's id, the
     conversation from the "Track record: conversation" line of your index, and every cue of that offer in the one call, so
@@ -180,7 +181,8 @@ One offer per treatment, each answered on its own. Show before and after, so the
   each answerable on its own. The offer says which moment goes and which stay, and where the memory then arrives:
   - **A narrower cue**: the mark's tool and pattern, or the replies' phrases, as they are and as proposed, with which
     calls or replies it still meets and which it no longer does. At a call that changes something that it still meets,
-    it still stops that call once; at a call that only reads, it arrives beside the result. A cue that cannot be made
+    it still stops that call once when the memory is set to be read first, and arrives beside the result when it is
+    not; at a call that only reads, it arrives beside the result. A cue that cannot be made
     narrower without missing the call it is about is "none that fits", said as such.
   - **A failure mark**, in place of a call mark: the memory then arrives only when such a call fails, beside its error,
     after the call has run, and never at a call that succeeds. A failure mark names one tool, so a call mark on more

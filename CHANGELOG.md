@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.15.0 - 2026-11-26
+
+- Changed: a memory about a tool call now arrives beside the call's result, and the call runs, so your screen no longer
+  shows a red hook error each time one of your memories is about a command, an Agent call or an MCP tool. A call that
+  can change something is stopped once, so Claude reads the memory before it runs, only for a memory you set to be read
+  first: tell Claude "this memory must be read before that call" and it sets `readFirst`; `readFirst: false` (or null on
+  an update) takes the choice back. Memories saved before this release arrive beside until you set them. A call NeoCortex knows
+  only reads is never stopped. The stored format rises to 2.6; an older NeoCortex keeps the new setting but still stops
+  such calls as before (#528).
+
 ## 0.14.4 - 2026-11-25
 
 - Fixed: moving a project memory to every project with `update_memory` or `update_rule` (scope user) carried a name of

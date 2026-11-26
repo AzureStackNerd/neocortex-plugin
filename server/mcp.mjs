@@ -35927,6 +35927,7 @@ var FIELDS_2_2 = [...FIELDS_2_1, "callInput"];
 var FIELDS_2_3 = [...FIELDS_2_2, "userWords"];
 var FIELDS_2_4 = [...FIELDS_2_3, "reply"];
 var FIELDS_2_5 = [...FIELDS_2_4, "trail"];
+var FIELDS_2_6 = [...FIELDS_2_5, "readFirst"];
 var REGISTRY = {
   formats: [
     { version: "1.0", fields: FIELDS_1_0 },
@@ -35935,15 +35936,17 @@ var REGISTRY = {
     { version: "2.2", fields: FIELDS_2_2 },
     { version: "2.3", fields: FIELDS_2_3 },
     { version: "2.4", fields: FIELDS_2_4 },
-    { version: "2.5", fields: FIELDS_2_5 }
+    { version: "2.5", fields: FIELDS_2_5 },
+    { version: "2.6", fields: FIELDS_2_6 }
   ],
   // A 1.0 record gains no key: an absent condition is every condition, which is exactly what a 1.0 record means. A 2.0
   // record gains no key either: an absent mark is no failure memory, which is what every record before #459 means. Nor
   // does a 2.1 record: an absent call mark is no call memory, which is what every record before #466 means. Nor a 2.2
   // record: no kept words is what every record before #467 means, and its why may hold words nobody marked (S18). Nor a
   // 2.3 record: no reply mark is what every record before #485 means (S55). Nor a 2.4 record: no trail is what every
-  // record before #474 means, and its summary is not an earlier wording of anything.
-  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields, "2.3": (fields) => fields, "2.4": (fields) => fields }
+  // record before #474 means, and its summary is not an earlier wording of anything. Nor a 2.5 record: no read-first
+  // choice is what every record before #528 means, and every memory saved before it arrives beside its call (S32).
+  steps: { "1.0": (fields) => fields, "2.0": (fields) => fields, "2.1": (fields) => fields, "2.2": (fields) => fields, "2.3": (fields) => fields, "2.4": (fields) => fields, "2.5": (fields) => fields }
 };
 function currentOf(registry2) {
   return registry2.formats[registry2.formats.length - 1].version;
@@ -36766,7 +36769,11 @@ var frontmatterSchema = external_exports.strictObject({
   reply: replyMarkSchema.optional(),
   // #474, format 2.5: the trail of earlier wordings, oldest first. Not judged the way a save's own text is (#322,
   // #345): a stored one loads and shows through shownText, as every other stored text does.
-  trail: external_exports.array(trailEntrySchema).optional()
+  trail: external_exports.array(trailEntrySchema).optional(),
+  // #528, format 2.6: the user's choice that a call mark's rule is read before the call runs, a top-level field of its
+  // own. Read as a plain boolean, not as `true` alone, so a hand-edited `false` still loads (#322, #345); only `true`
+  // means anything, and the encoder writes the key only when it is true, so an unset memory keeps the 2.5 keys.
+  readFirst: external_exports.boolean().optional()
 }).refine((f) => f.overrides.length === 0 || (f.overrideReason ?? "").trim() !== "", {
   message: "overrideReason is required when overrides is not empty"
 });
@@ -36968,7 +36975,9 @@ function toFrontmatter(memory) {
     // #485: absent when the memory is about no reply, so a record without one keeps exactly the 2.3 keys.
     ...replyMark === void 0 ? {} : { reply: replyMark },
     // #474: absent when it was never rewritten, so a record without a trail keeps exactly the 2.4 keys.
-    ...trail === void 0 ? {} : { trail }
+    ...trail === void 0 ? {} : { trail },
+    // #528: absent unless the user set it, so a record never set keeps exactly the 2.5 keys and answers as before (S28).
+    ...memory.readFirst === true ? { readFirst: true } : {}
   };
 }
 function issueMessages(issues) {
@@ -38004,18 +38013,23 @@ var FileOnce = class {
         const seenBefore = idsOf(row?.seen);
         const namedBefore = idsOf(row?.named);
         const owed = ask.seen.filter((id) => !seenBefore.has(id));
-        const answer = settle2({ seen: owed, named: ask.named.filter((id) => !namedBefore.has(id)) });
+        const stoppedBefore = idsOf(row?.stopped);
+        const stopping = (ask.stopping ?? []).filter((id) => !stoppedBefore.has(id));
+        const answer = settle2({ seen: owed, named: ask.named.filter((id) => !namedBefore.has(id)), ...stopping.length === 0 ? {} : { stopping } });
         const had = answer.had.filter((id) => owed.includes(id));
         const keys = answer.claimed ?? answer.named ?? [];
         const named = keys.filter((key2) => !namedBefore.has(key2));
-        const deliver = new Set(owed);
+        const deliver = /* @__PURE__ */ new Set([...owed, ...stopping]);
+        const stopped2 = (answer.stopped ?? []).filter((id) => stopping.includes(id));
         const holds = ask.turn !== void 0 && answer.holds === true;
-        if (had.length === 0 && named.length === 0 && !holds) return { deliver, recorded: true, answer };
+        if (had.length === 0 && named.length === 0 && stopped2.length === 0 && !holds) return { deliver, recorded: true, answer };
         const agents = rows.get(key.session) ?? /* @__PURE__ */ new Map();
         agents.set(key.agent, {
           ...row,
           seen: [...seenBefore, ...had],
           named: [...namedBefore, ...named],
+          // #528 How line 3: a stop joins `stopped`, so the call made again runs; a call that was not stopped adds nothing.
+          ...stopped2.length === 0 ? {} : { stopped: [...stoppedBefore, ...stopped2] },
           updated: new Date(this.now()).toISOString(),
           ...holds ? { held: true } : {}
         });
@@ -46275,7 +46289,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.14.4",
+  version: "0.15.0",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48263,6 +48277,7 @@ function stopWords(memory) {
   if (calls === void 0) return "";
   const tools = toolsOf(calls, "callInput");
   if (tools.length === 0) return "";
+  const first = memory.readFirst === true;
   const halves = /* @__PURE__ */ new Map();
   for (const tool of tools) {
     const kind = isShell(tool) ? "shell" : changesNothing({ tool, calls: [] }) ? "beside" : "stop";
@@ -48270,7 +48285,11 @@ function stopWords(memory) {
   }
   const said = [...halves].map(([kind, named]) => {
     const who = named.join(" or ");
-    return kind === "shell" ? `a call of ${who} that changes something is stopped once, and the call made again runs, while one that only reads arrives beside its result` : kind === "beside" ? `a call of ${who} arrives beside its result` : `a call of ${who} that changes something is stopped once, and the call made again runs`;
+    if (kind === "shell") {
+      return first ? `a call of ${who} that changes something is stopped once, and the call made again runs, while one that only reads arrives beside its result` : `a call of ${who} that changes something arrives beside its result, and so does one that only reads`;
+    }
+    if (kind === "beside") return `a call of ${who} arrives beside its result`;
+    return first ? `a call of ${who} that changes something is stopped once, and the call made again runs` : `a call of ${who} that changes something arrives beside its result, since this memory is not set to be read first`;
   });
   return ` (${said.join("; ")})`;
 }
@@ -48407,13 +48426,15 @@ function failureSettle(active, byId, problems, call) {
 function failureText(active, byId, problems, call = NO_FAILURE, claim2 = claimAll(failureAsk(active, problems, call), failureSettle(active, byId, problems, call))) {
   return claim2.answer.text;
 }
-function refuses(call) {
+function canChangeSomething(call) {
   return call === "unjudged" || !changesNothing({ tool: call.tool, calls: call.calls });
 }
 function inputAsk(active, problems, call) {
   if (call === "unjudged" || call.tool === "") return { seen: [], named: [] };
-  const marked = active.filter((memory) => aboutMark(memory.callInput, "callInput", call.tool, call.calls) && filesHoldAtInput(memory, call)).map((memory) => memory.id);
-  return { seen: marked, named: problems.filter((problem) => problem.delivery !== void 0).map(problemKey) };
+  const matched = active.filter((memory) => aboutMark(memory.callInput, "callInput", call.tool, call.calls) && filesHoldAtInput(memory, call));
+  const marked = matched.map((memory) => memory.id);
+  const stopping = canChangeSomething(call) ? matched.filter((memory) => memory.readFirst === true).map((memory) => memory.id) : [];
+  return { seen: marked, named: problems.filter((problem) => problem.delivery !== void 0).map(problemKey), ...stopping.length === 0 ? {} : { stopping } };
 }
 function filesHoldAtInput(memory, call) {
   const files = editFiles(memory);
@@ -48423,34 +48444,35 @@ function filesHoldAtInput(memory, call) {
   return path !== void 0 && files.usable.some((pattern) => patternMatches(pattern, path));
 }
 var REFUSAL_LEAD = "NeoCortex refuses this call once, on purpose: a memory you saved is about this call, and its rule is below. Read it, then make the call again, changed to follow it or as it is; it will run.";
-function inputSettle(active, byId, problems, call, stopping) {
+function inputSettle(active, byId, problems, call) {
   return (owed) => {
+    const owedStop = owed.stopping ?? [];
+    const stopping = owedStop.length > 0;
     const named = [];
     const naming = problems.filter((problem) => problem.delivery !== void 0 && owed.named.includes(problemKey(problem)));
     const warnings = [problemWarning(naming, named)].filter((warning) => warning !== "");
     const lead = warnings.join("\n\n");
     const capped = lead === "" ? HOOK_CAP : Math.max(0, HOOK_CAP - lead.length - 2 * warnings.length);
     const room = stopping ? Number.MAX_SAFE_INTEGER : capped;
-    const brought = active.filter((memory) => memory.callInput !== void 0 && owed.seen.includes(memory.id));
+    const brought = active.filter((memory) => memory.callInput !== void 0 && (owed.seen.includes(memory.id) || owedStop.includes(memory.id)));
     const { parts, kept, settled } = fillChosen(brought, byId, [room], [], null, fullBlock, !stopping);
+    const stopped2 = stopping ? kept.flat().filter((memory) => owed.stopping?.includes(memory.id) === true).map((memory) => memory.id) : [];
     return {
       text: [lead, parts[0]].filter((text) => text !== "").join("\n\n"),
       arrived: arrivalsOf(kept.flat(), "full", named),
       had: [...kept.flat(), ...settled].map((memory) => memory.id),
       named,
-      claimed: [...owed.named]
+      claimed: [...owed.named],
+      ...stopped2.length === 0 ? {} : { stopped: stopped2 }
     };
   };
 }
-function stoppingInput(active, call) {
-  return call !== "unjudged" && call.tool !== "" && refuses(call) && inputAsk(active, [], call).seen.length > 0;
-}
 function inputAnswer(active, byId, problems, call, claim2) {
   if (call === "unjudged") return { text: claim2.answer.text, deny: false, arrived: claim2.answer.arrived };
-  const stopping = stoppingInput(active, call);
-  const { text, arrived } = stopping && !claim2.recorded ? inputSettle(active, byId, problems, call, false)({ seen: [...claim2.deliver], named: claim2.answer.claimed }) : claim2.answer;
+  const stopped2 = claim2.answer.stopped ?? [];
+  const { text, arrived } = stopped2.length > 0 && !claim2.recorded ? inputSettle(active, byId, problems, call)({ seen: [...claim2.deliver], named: claim2.answer.claimed }) : claim2.answer;
   if (text === "") return { text, deny: false, arrived };
-  const stop = claim2.recorded && refuses(call) && active.some((memory) => memory.callInput !== void 0 && claim2.deliver.has(memory.id));
+  const stop = claim2.recorded && stopped2.length > 0;
   return { text: stop ? `${REFUSAL_LEAD}
 
 ${text}` : text, deny: stop, arrived };
@@ -48930,7 +48952,7 @@ function nextWords(show, nothingElse) {
     // about something else, did not point Claude anywhere, so with a hurt the sentence names only the lists Claude passed.
     (hurt ? "Show the user each memory above that you passed in suspects or about as one that may have pointed you the other way, and never a memory above that you passed in neither list, which is named for its stops or for the user's words that it disturbs and is not a cause of the mistake, with the evidence exactly as given: " : "Show the user each memory above as one that may have pointed you the other way, with the evidence exactly as given: ") + 'its rule, when, at which moment and how it arrived, and their own correcting words marked as "your words, as Claude quoted them". Where a suspect has a ruleArrived apart from its arrived, say so: the rule is the text you read when that earlier arrival came, and the later arrival named in arrived brought none. A memory above whose didNotArrive is "did-not-arrive" is named as one that did not arrive when it should: say it as what the evidence suggests, never as a verdict, from the three sides (their correcting words, what reached you before the mistake, and the mistake itself). A memory whose didNotArrive is "may-have" may have arrived in what the record could not read: say that, never flatly that it did not arrive. Before you name any of them one that did not arrive, check whether you looked that memory up yourself in this conversation before the mistake, with get_memory or search_memories: if you did, its text was in front of you, so say you read it yourself and when, and that the record covers only what NeoCortex delivered; it is not one that did not arrive, and it is offered no moment. A memory with notHere does not hold at this place: say the condition beside it as the reason, and offer to widen its condition so it takes this place in, shown before and after with every other place it then reaches. A memory with placeUnknown carries what this place could not be read for: say that sentence, and propose no condition change on that reading. ' + // #510 S8, S117, S160: a memory whose arrival hurt opens with the table's own label, verbatim and in bold, and names
     // its evidence from the three sides; the stops and the moments are the record's, and the notes say what it leaves out.
-    (hurt ? `A memory above with stops or with disturbing opens its diagnosis with **arrives in a way that hurts**, verbatim and in bold, said as what the evidence suggests and never as a verdict: the user's correcting words, the calls it stopped (each with its tool and when, as stops gives them; never the call's own text, which the record does not keep), and how often and at which moments it arrived (arrived and moments, with noiseNote and stopNote saying what the record leaves out). A memory with disturbing and no arrival is named from the user's words alone: never say it did not arrive or that it does not disturb. Furthermore, where it arrives today is arrives, word for word. Every memory above with stops is diagnosed and offered its forms at this correction, whether or not the correction is about that stop. A stop is never left out because it did not cause, lead to or explain the mistake the user corrected: the hurt is the stop itself, not that mistake. A stop that worked as set, a guard doing its job, is still diagnosed and offered its forms, since the stop is the form it was set to have and the user may want another. For a memory with stops, say that stopping such a call once is the form it was set to have, so keeping it is an answer the user gives, never one you give for them by leaving its forms unoffered. Also start the therapy skill for each memory with stops, even when the correction is not about it. Offer only the forms that exist, each with what it gives up in plain words, and say which moment goes and which stays: a narrower cue (the tool and pattern or the phrases as they are and as proposed, with the calls or replies it then still meets and those it no longer does; at a writing call it still meets it still stops that call once, and at a reading call it arrives beside the result); a failure mark (it then arrives only when such a call fails, beside its error, after the call has run; a failure mark names one tool, so a call mark on several keeps only the one named and the offer says which are dropped); a reply mark (it then arrives at the end of a reply that says its phrase, after the call, never before it; show the phrase); its index line (it then arrives only as its one line at each session start, its text only when looked up; an on-demand memory then arrives at every start). A form this memory already has is said as the moment kept, never as a second mark of that kind, and when it carries two or three marks only the one that hurt is replaced, each that stays named. A cue that cannot be made narrower without missing the call it is about is "none that fits", said as such. For a project memory, say the form changes it in this project only, and that it takes no condition. For a user memory, say before they answer that it changes in every place, not only this one, and where it then stops arriving. A memory with no mark has no cue to narrow: offer a narrower condition for a user memory, shown with the places it then no longer reaches, and for a project memory say "none that fits". For a rule, offer only another moment at which it still loads in full and arrives less often, or a narrower condition or file patterns, said as when and where it then loads; never a wording, and never a mark unless the user asks for one, in which case say beforehand that it stops being a rule and no longer loads in full. Say that Claude Code asks the user to confirm the change with what it affects, and on their decline nothing changes and you say so. On their yes, write it in one update_memory call, the mark that hurt passed null and the new form in the same call, so the moment that hurt is gone and the new one is there together; a rule goes through update_rule. Say that the new mark first fires after the next session start, /clear or compaction, or in a new subagent, or after a day without use in this conversation, and never that it arrives at once; a rule's new load moment holds from its next such moment. ` : "") + // #510 S126, S145 were answered into the skill's one line and the start's correction line (open points 3 (b), 5 (b)).
+    (hurt ? `A memory above with stops or with disturbing opens its diagnosis with **arrives in a way that hurts**, verbatim and in bold, said as what the evidence suggests and never as a verdict: the user's correcting words, the calls it stopped (each with its tool and when, as stops gives them; never the call's own text, which the record does not keep), and how often and at which moments it arrived (arrived and moments, with noiseNote and stopNote saying what the record leaves out). A memory with disturbing and no arrival is named from the user's words alone: never say it did not arrive or that it does not disturb. Furthermore, where it arrives today is arrives, word for word. Every memory above with stops is diagnosed and offered its forms at this correction, whether or not the correction is about that stop. A stop is never left out because it did not cause, lead to or explain the mistake the user corrected: the hurt is the stop itself, not that mistake. A stop that worked as set, a guard doing its job, is still diagnosed and offered its forms, since the stop is the form it was set to have and the user may want another. For a memory with stops, say that stopping such a call once is the form it was set to have, so keeping it is an answer the user gives, never one you give for them by leaving its forms unoffered. Also start the therapy skill for each memory with stops, even when the correction is not about it. Offer only the forms that exist, each with what it gives up in plain words, and say which moment goes and which stays: a narrower cue (the tool and pattern or the phrases as they are and as proposed, with the calls or replies it then still meets and those it no longer does; at a writing call it still meets, it still stops that call once when the memory is set to be read first, and arrives beside the result when it is not, and at a reading call it arrives beside the result); a failure mark (it then arrives only when such a call fails, beside its error, after the call has run; a failure mark names one tool, so a call mark on several keeps only the one named and the offer says which are dropped); a reply mark (it then arrives at the end of a reply that says its phrase, after the call, never before it; show the phrase); its index line (it then arrives only as its one line at each session start, its text only when looked up; an on-demand memory then arrives at every start). A form this memory already has is said as the moment kept, never as a second mark of that kind, and when it carries two or three marks only the one that hurt is replaced, each that stays named. A cue that cannot be made narrower without missing the call it is about is "none that fits", said as such. For a project memory, say the form changes it in this project only, and that it takes no condition. For a user memory, say before they answer that it changes in every place, not only this one, and where it then stops arriving. A memory with no mark has no cue to narrow: offer a narrower condition for a user memory, shown with the places it then no longer reaches, and for a project memory say "none that fits". For a rule, offer only another moment at which it still loads in full and arrives less often, or a narrower condition or file patterns, said as when and where it then loads; never a wording, and never a mark unless the user asks for one, in which case say beforehand that it stops being a rule and no longer loads in full. Say that Claude Code asks the user to confirm the change with what it affects, and on their decline nothing changes and you say so. On their yes, write it in one update_memory call, the mark that hurt passed null and the new form in the same call, so the moment that hurt is gone and the new one is there together; a rule goes through update_rule. Say that the new mark first fires after the next session start, /clear or compaction, or in a new subagent, or after a day without use in this conversation, and never that it arrives at once; a rule's new load moment holds from its next such moment. ` : "") + // #510 S126, S145 were answered into the skill's one line and the start's correction line (open points 3 (b), 5 (b)).
     // #474 S5, How line 4: the diagnosis comes before any treatment, so the skill starts at the check's own answer and not
     // after the user picks one. Its allowed-tools are the reads, so starting it writes nothing (AC2).
     "Start the therapy skill for these memories now, before asking for a choice: it names the dysfunction each one shows, with the evidence for it, and only then the treatment it proposes. Then offer, in one line, to treat any of these memories now: the therapy skill makes the change it diagnosed there (words that say other than its why, an intent that no longer holds, or words that do not land) and rewords or reframes it with the user on their answer. Ask whether they want to treat it, sharpen it, delete it or dismiss the flag. Treat: write on their yes the wording you proposed in the skill, with the correcting words above added to its userWords, so the trail of what was said and what changed stays. For a rule, offer no treatment: the skill proposes no wording for a rule, so give the diagnosis and its evidence and say the user can change the rule itself on their own ask, which Claude Code asks them to confirm. Never write a rule wording for them. Sharpen: update_memory or update_rule with the words they give now, and show them the new rule beside those words. Delete: delete_memory or delete_rule as any delete is. Dismiss: one word, and say nothing more about that memory. A flag itself changes nothing, so settle nothing until they answer. If the work you corrected was a subagent's, say its own memories were not checked, and that whether a memory did not arrive cannot be told for its work."
@@ -51383,8 +51405,10 @@ var markSchema2 = (patternWords) => external_exports.strictObject({
 var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
-var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call is stopped once with this memory as the reason; made again, it runs. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
+var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call it is about is stopped once with this memory as the reason, and the call made again runs, only when the memory is set to be read first; otherwise it arrives beside that call's result too, after the call ran. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
 var REPLY_WORDS = `The situation in Claude's own reply this memory is about, as phrasings Claude would write ("tests pass", "all green", "ready to release"): at the end of a turn whose final reply says any one of them, the memory arrives in full and Claude checks that reply against it before the user acts; once per agent's context, and each time it fires costs one extra reply. Matched within one line of the reply, capitals ignored, * as any run of words; each phrase needs a letter or digit. Set it unasked when a memory you save is about something Claude says (a claim, a report, a conclusion). A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).`;
+var READ_FIRST_WORDS = `Whether this memory's rule must be read before a call it is about runs. True stops the first such call that can change something, once in each agent, so Claude reads the memory first, and the call made again runs; a call NeoCortex knows only reads is never stopped and gets the memory beside its result. Left out or false, the memory arrives beside the call's result, after it ran. On an update, null takes it back exactly as false does; a save takes true or false. Set it only when the user says the rule must be read before the call, such as "read this before you run that"; never set it on your own judgement. It applies only to a memory with a callInput mark. Set true, it takes effect at the next matching call in each agent, also one that already had the memory beside it: it stops that call, and an agent where it already stopped a call is not stopped again until that agent's context is compacted or cleared. Set back to false, it stops no call from then on.`;
+var READ_FIRST_ONLY_CALL = "This memory is not set to be read first in any way that changes anything: the choice applies only to a memory about a call (one with a callInput mark), and this memory has none, so it arrives exactly as it did before.";
 var REPLY_MARK = external_exports.strictObject({
   phrases: external_exports.array(external_exports.string()).describe('The phrasings of the situation, any one of which brings the memory, such as ["tests pass", "all green"]')
 });
@@ -51426,6 +51450,8 @@ var SAVE_INPUT = {
   appliesWhen: CONDITION.optional().describe(CONDITION_WORDS),
   failure: FAILURE_MARK.optional().describe(FAILURE_WORDS),
   callInput: CALL_MARK.optional().describe(CALL_INPUT_WORDS),
+  // #528 How line 7: a save states the choice, so it takes true or false and refuses null, as `enforced` does.
+  readFirst: external_exports.boolean().optional().describe(READ_FIRST_WORDS),
   reply: REPLY_MARK.optional().describe(REPLY_WORDS),
   userWords: userWordsInput.optional().describe(USER_WORDS_WORDS),
   reading: external_exports.string().trim().min(1).optional().describe(READING_WORDS)
@@ -51451,6 +51477,9 @@ var UPDATE_INPUT = {
   appliesWhen: CONDITION.nullable().optional().describe(`${CONDITION_WORDS} Left out, the stored condition stays; null or {} removes it; a value replaces the whole condition.`),
   failure: FAILURE_MARK.nullable().optional().describe(`${FAILURE_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
   callInput: CALL_MARK.nullable().optional().describe(`${CALL_INPUT_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
+  // #528 How line 7: an update takes null, which reads as false — the probe of zod 4.6.7 is what decided it, since
+  // `.optional()` alone refuses null and an update answering null would otherwise get a schema error naming no way out.
+  readFirst: external_exports.boolean().nullable().optional().describe(READ_FIRST_WORDS),
   reply: REPLY_MARK.nullable().optional().describe(`${REPLY_WORDS} Left out, the stored mark stays; null removes it; a value replaces it whole.`),
   // #467: the new words join the stored ones, so the stored trail survives a correction (point 4 (a)); left out, the
   // stored words stay, as a mark does.
@@ -51994,6 +52023,9 @@ ${TRACK_LOST_LINE}`;
       ...condition === void 0 ? {} : { appliesWhen: condition },
       ...mark === void 0 ? {} : { failure: mark },
       ...callMark === void 0 ? {} : { callInput: callMark },
+      // #528 How line 9: the choice is stored whatever the memory is, so a memory with no call mark keeps it for the day
+      // it gets one; the answer says it changes nothing here (S38, S39), and no refusal is added.
+      ...args2.readFirst === true ? { readFirst: true } : {},
       // #485: the reply mark in its one form; an unusable one never gets here (unusableMarkProblems refuses it, S42).
       ...replyMark === void 0 ? {} : { reply: replyMark },
       // #467: a save takes the words as its call gives them, trimmed, with no empty entry. The reading is never stored:
@@ -52014,6 +52046,11 @@ ${TRACK_LOST_LINE}`;
     const near = nearDuplicatesOf(memory, resolution);
     const id = shortId(memory.id);
     const next = [
+      // #528 S38, S39: the field is stored, and the answer says it changes nothing on a memory with no call mark.
+      ...memory.readFirst === true && memory.callInput === void 0 ? [READ_FIRST_ONLY_CALL] : [],
+      // #528 S28: a saved memory with a call mark says how it arrives, in the one composer the update, the look-up and
+      // the correction check use (arrivesWords), so the answer and what the call then does cannot drift apart.
+      ...memory.callInput === void 0 ? [] : [`It arrives ${arrivesWords(memory)}.`],
       // #467 AC2, S38: what Claude shows the user in its own reply, so a misreading is caught at the save itself.
       ...keptWords(memory.userWords) === void 0 ? [] : [USER_WORDS_SHOW_NEXT],
       ...related.length > 0 ? [
@@ -52106,6 +52143,10 @@ ${TRACK_LOST_LINE}`;
       ...mark === void 0 ? {} : { failure: mark },
       ...callMark === void 0 ? {} : { callInput: callMark },
       ...replyMark === void 0 ? {} : { reply: replyMark },
+      // #528 How line 7: left out, the stored choice stays, so any other change keeps it; `null` reads as `false`, which
+      // is why the answer for a memory thus taken back is byte-identical to one that never had it (AC5, S34). NOT `??`:
+      // it treats `null` as absent and would keep the stored `true`, which is the defect the TestWriter's S34 row found.
+      ...(args2.readFirst === void 0 ? previous.readFirst : args2.readFirst) === true ? { readFirst: true } : {},
       // #467: left out, the stored words stay; new ones join them (How line 3), so a correction keeps the trail (S15).
       ...joinedWords(previous.userWords, args2.userWords) === void 0 ? {} : { userWords: joinedWords(previous.userWords, args2.userWords) }
     };
@@ -52139,7 +52180,10 @@ ${TRACK_LOST_LINE}`;
       return fail(refused);
     }
     const bodyOnly = args2.body !== void 0 && args2.body !== previous.body && args2.summary === void 0;
-    const momentChanged = memory.delivery !== previous.delivery || memory.enforced !== previous.enforced || !sameCondition(memory.appliesWhen, previous.appliesWhen) || !sameMark(memory.failure, previous.failure, "failure") || !sameMark(memory.callInput, previous.callInput, "callInput") || !sameReply(memory.reply, previous.reply);
+    const momentChanged = memory.delivery !== previous.delivery || memory.enforced !== previous.enforced || // #528 How line 8: a call that only changes the choice is not read as a no-op, so it gets the moment sentence; a
+    // call that repeats the stored value changes nothing and gets none. Compared as a plain boolean, since an unset
+    // memory is the same as one set to false.
+    memory.readFirst === true !== (previous.readFirst === true) || !sameCondition(memory.appliesWhen, previous.appliesWhen) || !sameMark(memory.failure, previous.failure, "failure") || !sameMark(memory.callInput, previous.callInput, "callInput") || !sameReply(memory.reply, previous.reply);
     const wordsOnly = keptWords(args2.userWords) !== void 0 && args2.summary === void 0 && !momentChanged;
     const hidden = ["title", "summary"].filter(
       (field) => args2[field] === void 0 && (unshownCharOf(previous[field]) !== null || loneSurrogateOf(previous[field]) !== null)
@@ -52153,6 +52197,8 @@ ${TRACK_LOST_LINE}`;
     ];
     const changedWording = TRAIL_FIELDS.filter((field) => memory[field] !== previous[field]);
     const showNext = [
+      // #528 S38, S39: a memory with no call mark is told the choice changes nothing, whichever way it was passed.
+      memory.readFirst === true && memory.callInput === void 0 && args2.readFirst !== void 0 ? READ_FIRST_ONLY_CALL : void 0,
       keptWords(memory.userWords) === void 0 ? void 0 : USER_WORDS_SHOW_NEXT,
       trail !== void 0 && trail !== previous.trail ? TRAIL_READABLE : void 0,
       momentChanged ? MOMENT_CHANGED(arrivesWords(previous), arrivesWords(memory), changedWording) : void 0
@@ -52628,8 +52674,7 @@ ${TRACK_LOST_LINE}`;
           return { content: [{ type: "text", text: hookOutput(event, unjudgedInputWarning(missing)) }] };
         }
         const inputCase = callInput === void 0 ? void 0 : callInput;
-        const stopping = inputCase === void 0 ? false : stoppingInput(delivery.resolution.active, inputCase);
-        const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase), inputSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, stopping));
+        const inputClaim = inputCase === void 0 ? void 0 : await claimed(key, inputAsk(delivery.resolution.active, delivery.problems, inputCase), inputSettle(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase));
         const inputAnswerHere = inputCase === void 0 || inputClaim === void 0 ? void 0 : inputAnswer(delivery.resolution.active, delivery.resolution.byId, delivery.problems, inputCase, inputClaim);
         const replyMarked = delivery.resolution.active.some(hasReplyMark);
         if (replyMarked && event === "UserPromptSubmit" && deps.once !== void 0 && key.session !== "") {
@@ -53503,7 +53548,10 @@ function entryOf(memory) {
     delivery: memory.delivery,
     labels: memory.labels,
     why: memory.why,
-    ...shownCondition(memory)
+    ...shownCondition(memory),
+    // #528 How line 8: only `true` is shown, so an answer about a memory never set is byte-identical to today's and a
+    // call that only sets the field is not read as a no-op (AC5, S28).
+    ...memory.readFirst === true ? { readFirst: true } : {}
   };
 }
 function inPlayAnswer(input2) {
