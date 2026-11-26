@@ -2,6 +2,13 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.1 - 2026-11-26
+
+- Fixed (live check only, no change to the plugin's behaviour): the therapy live check's stop path no longer fails a
+  right answer as "denies that a call was stopped". It used to fail answers that say the record keeps no copy of the
+  stopped call, or that carry a hedge on a line above the stop. A negation now counts as a denial only within one
+  sentence on one line, and a missing copy of the stopped call counts only when that negation governs the copy itself.
+
 ## 0.16.0 - 2026-11-26
 
 - Added: a memory whose stop bothers you can have "read first" taken back. The correction check and the therapy skill
