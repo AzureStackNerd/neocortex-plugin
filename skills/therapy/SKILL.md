@@ -1,6 +1,6 @@
 ---
 name: therapy
-description: "At a correction, when the correction check's answer names a suspect or a memory that never arrived, or a memory whose arrival hurt (one that stopped a call in this conversation, also when the correction is about something else), or the user says a memory misled Claude, diagnose that memory beside the correction, with the evidence for it: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) and reword or reframe it on the user's answer; for a memory that did not arrive when it should, propose the moment of its arrival and write it; for one whose arrival hurts, offer a form that hurts less in place of the moment that hurt (a narrower cue, a failure mark, a reply mark, its index line) with what it gives up, and write it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
+description: "At a correction, when the correction check's answer names a suspect or a memory that never arrived, or a memory whose arrival hurt (one that stopped a call in this conversation, also when the correction is about something else), or the user says a memory misled Claude, diagnose that memory beside the correction, with the evidence for it: say whether its wording misled it (words that say other than its why, an intent that no longer holds, or words that do not land) and reword or reframe it on the user's answer; for a memory that did not arrive when it should, propose the moment of its arrival and write it; for one whose arrival hurts, offer a form that hurts less in place of the moment that hurt (a narrower cue, taking back read first, a failure mark, a reply mark, its index line) with what it gives up, and write it. When the user types /neocortex:therapy, or asks to go through their memories, sit down over every memory this place sees: one list of the memories that misfire, grouped when long, then one treatment at a time. It changes nothing without the user's answer for that memory."
 allowed-tools: mcp__plugin_neocortex_neocortex__get_memory, mcp__plugin_neocortex_neocortex__search_memories, mcp__plugin_neocortex_neocortex__memories_in_play, mcp__plugin_neocortex_neocortex__count_cues
 ---
 
@@ -11,7 +11,7 @@ You treat memories that made Claude act wrongly, with the user. Five dysfunction
 | Dysfunction | What shows it | Treatment |
 | --- | --- | --- |
 | 1. does not arrive when it should | a memory of this place whose subject is what the user corrected did not reach you before the mistake: it did not arrive, reached you only as its name in a warning, or its moment did not come | give it a moment of its own: a call, failure or reply mark, or a condition that takes this place in |
-| 2. arrives in a way that hurts | it stopped a call in this conversation, or the user says it arrives so often it disturbs their work | give it a form that hurts less, in place of the moment that hurt: a narrower cue, a failure mark, a reply mark, its index line |
+| 2. arrives in a way that hurts | it stopped a call in this conversation, or the user says it arrives so often it disturbs their work | give it a form that hurts less, in place of the moment that hurt: a narrower cue, taking back read first, a failure mark, a reply mark, its index line |
 | 5. misleads: worded wrongly | its summary or body says other than its why and the user's own words | reword it back to the intent |
 | 6. wrong at heart | the intent no longer holds: the code, doc or skill it names says otherwise, what it names is gone, or the user's later words contradict it | reframe it: keep the why, change the conclusion or narrow where it applies |
 | 7. right but does not land | it is vague, a list of keywords, or too long to show | reword it for clarity, same meaning |
@@ -191,6 +191,15 @@ One offer per treatment, each answered on its own. Show before and after, so the
     it still stops that call once when the memory is set to be read first, and arrives beside the result when it is
     not; at a call that only reads, it arrives beside the result. A cue that cannot be made
     narrower without missing the call it is about is "none that fits", said as such.
+  - **Take back read first**: the memory then stops no call: its cue stays, and at a call that changes something it
+    then arrives beside the result, after the call ran, as it already does at a call that only reads; it gives up
+    being read before the call, and it arrives as often as before, so say that it ends the stop and not the arrivals.
+    Offer it only where a stop exists, read from the one field that says so in both starts. At a correction: when the
+    check's `arrives` for that memory says such a call "is stopped once", which it says only for a memory set to be
+    read first; when the memory has stops and `arrives` does not say that, say it stops no call any more. In the sitting
+    the user started: when `get_memory`'s `arrives` says the same words. Never judge it from the tool's name: `arrives`
+    is where NeoCortex has already decided, and it alone knows which calls stop. When the user asks for it on any other
+    memory, or on a rule, say before any write that it ends no stop and changes nothing in when the memory arrives.
   - **A failure mark**, in place of a call mark: the memory then arrives only when such a call fails, beside its error,
     after the call has run, and never at a call that succeeds. A failure mark names one tool, so a call mark on more
     than one (`Write|Edit`) keeps only the one named, and the offer says which are dropped.
@@ -206,8 +215,8 @@ One offer per treatment, each answered on its own. Show before and after, so the
     reaches, and that its index line follows the new condition from the next session start, `/clear` or compaction; for
     a project memory, "none that fits", said as such. Never offer on demand or a delete unasked (a fix for
     a noisy delivery changes how a memory arrives, never whether): if they ask for one, say what it gives up, and that
-    a delete is their own ask outside therapy. For a memory that stopped a call, say the user may keep it, and that
-    NeoCortex has no form that arrives at such a call without stopping it once.
+    a delete is their own ask outside therapy. For a memory that stopped a call, say the user may keep it, or, where a
+    stop exists as above, take back read first, which stops no call from then on.
   - A **project memory** changes in this project only, and takes no condition. A **user memory** changes in every
     place, not only this one; say so before they answer, and where it then stops arriving.
   - **A rule** is offered only another moment at which it still loads in full and arrives less often, or a narrower
@@ -215,7 +224,11 @@ One offer per treatment, each answered on its own. Show before and after, so the
     when the user asks for one, and the offer then says beforehand that it stops being a rule and no longer loads in
     full. Say that Claude Code asks the user to confirm the change with what it affects; on their decline nothing
     changes and you say so.
-  - The new form fires at its next moment, not at once, so name both cases. A memory that has not arrived at a call,
+  - The new form fires at its next moment, not at once, so name both cases. **A stop ends sooner than a new mark
+    fires**: taking back read first ends it at the very next matching call that changes something, this turn included,
+    in every agent. In an agent where the memory already stopped a call it has arrived there, so it arrives there
+    again only as a memory that has already arrived here does, below; in one that has not had it, such as a subagent,
+    the call runs without a stop and the memory arrives beside its result. A memory that has not arrived at a call,
     failure, read or reply in this conversation yet — one that reached you only as its title or by a lookup, or whose
     moment hurt in an earlier session or in a subagent and that has not arrived here either — can arrive at the very
     next matching call, failure or reply, this turn included; a reply mark waits for their next message when NeoCortex
@@ -283,9 +296,10 @@ rule you write only the user's own words, never one you proposed, since you prop
   this sitting has a correction behind it (as the correction check gave them).
 - **A form that replaces a moment that hurt is one write** (2): the mark that hurt passed as `null` and the new form
   in the same `update_memory` call — a narrower cue in `callInput` or `failure`, a reply mark in `reply`, its index
-  line as `delivery: index` — so the moment that hurt is gone and the new one is there together. A rule's change goes
-  through `update_rule` and Claude Code's confirmation. A refused write leaves the memory as it was, the moment that
-  hurt still in place: never leave it with that moment removed and the new form not written.
+  line as `delivery: index` — so the moment that hurt is gone and the new one is there together. **Taking back read
+  first is no mark**: pass `readFirst: false` and no mark at all, and every mark it has stays as it is. A rule's change
+  goes through `update_rule` and Claude Code's confirmation. A refused write leaves the memory as it was, the moment
+  that hurt still in place: never leave it with that moment removed and the new form not written.
 - **A moment** is written on the memory itself, never as a second memory saved beside it unless the user asks for
   one: `callInput` or `failure` for a mark, `reply` for a reply mark, `appliesWhen` for a condition. Pass only what
   changes: a field the call leaves out stays as it is, and a mark or condition the memory already has stays beside

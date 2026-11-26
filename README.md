@@ -325,7 +325,10 @@ returns each match's scope, title, summary and id, not its body: `get_memory` wi
 own words included, plus its `ownMoment`: whether it has a moment of its own, meaning a call, failure or reply mark
 that can fire, so `/neocortex:therapy` can tell a memory that reaches Claude only as its title from one that arrives
 at its own cue. `ownMoment` false beside a mark the record shows means that mark can never fire, and the sitting names
-it as such. A
+it as such. A memory with a call mark also answers with `arrives`, how that call arrives in words: "is stopped once"
+only when the memory is set to be read first and its tool is one whose call can change something, and beside the result
+otherwise. The sitting reads `arrives` rather than judging from the tool's name, since NeoCortex alone knows which
+calls stop. A
 memory delivered `on-demand` is reachable this way, so choosing that delivery hides it from a start without losing it.
 It also reports the memories that exist but could not be read, with how many and which of their stored text matches, so
 a memory that did not load never looks like no match. Its `includeInactive` returns the expired, replaced and
@@ -420,16 +423,24 @@ is yours: your own words, the refused call as Claude saw it (or, once it has lef
 time the record kept), and how often and at which moments the memory arrived, with what the record could not read said
 as such. The form offered takes the place of the moment that hurt, and each form says what it gives up before you
 answer: a narrower cue (the tool and pattern or the phrases, as they are and as proposed, with which calls it still
-meets and which it no longer does), a failure mark (it then arrives only when such a call fails, beside its error,
+meets and which it no longer does), taking back read first (the call stops no more and the cue stays, so it arrives
+beside the result after the call ran; it gives up being read before the call, and it arrives as often as before),
+a failure mark (it then arrives only when such a call fails, beside its error,
 after the call has run), a reply mark (at the end of a reply that says its phrase, after the call), or its index line
-(it then arrives only as its one line at each session start, its text only when looked up). A form the memory already
-has is said as the moment kept, never as a second mark of that kind, and a memory with two or three marks keeps the
-ones that did not hurt. A **rule** is offered another moment at which it still loads in full, or a narrower condition,
-and never a wording; Claude Code asks you to confirm it with what it affects, and a mark or its index line only when
-you ask for one, since the rule then stops being a rule.
+(it then arrives only as its one line at each session start, its text only when looked up). Taking back read first is
+offered only where there is a stop to end: a memory set to be read first whose cue is a call on a shell or on a tool
+that can change something, which the correction check's words for that memory say as "is stopped once". A form the
+memory already has is said as the moment kept, never as a second mark of that kind, and a memory with two or three marks
+keeps the ones that did not hurt. A **rule** is offered another moment at which it still loads in full, or a narrower
+condition, and never a wording; Claude Code asks you to confirm it with what it affects, and a mark or its index line
+only when you ask for one, since the rule then stops being a rule.
 
 **The new form fires at its next moment, not at once.** When the offer is written, the moment that hurt is gone in the
-same write. A memory that has not arrived at a call, failure, read or reply in this conversation yet — including one
+same write. **A stop ends sooner than a new mark fires:** taking back read first ends it at the very next matching call
+that changes something, this turn included, in every agent. In the agent where it already stopped a call the memory has
+arrived, so it arrives there again only as a memory that has already arrived has, below; in one that has not had it,
+such as a subagent, the call runs without a stop and the memory arrives beside its result. A memory that has not
+arrived at a call, failure, read or reply in this conversation yet — including one
 whose moment hurt in an earlier session or in a subagent and that has not arrived here either — can arrive at the very
 next matching call, failure or reply, this turn included, though a reply mark waits for your next message when NeoCortex
 has already kept this turn going once. One that has already arrived here arrives again only after the next session

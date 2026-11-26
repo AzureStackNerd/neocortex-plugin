@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.0 - 2026-11-26
+
+- Added: a memory whose stop bothers you can have "read first" taken back. The correction check and the therapy skill
+  (at a correction and in the sitting) offer it beside the other forms, but only for a memory that is set to be read
+  first and has a cue that can stop a call. Its cue stays, and at a call that changes something it then arrives beside
+  the result instead of stopping the call. It arrives as often as before, and the offer says so. The stop ends at the
+  very next matching call, this turn included. Asked for on a memory that stops no call, Claude says it ends no stop.
+- Added: `get_memory` answers a memory that has a call mark with `arrives`, the same arrival words the correction check
+  gives, so the therapy sitting reads the one rule on whether a memory stops a call.
+
 ## 0.15.2 - 2026-11-26
 
 - Fixed: the therapy sitting, the correction check and the plugin README said a memory's new mark first fires only
