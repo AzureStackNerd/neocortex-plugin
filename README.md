@@ -553,10 +553,10 @@ What it proposes, without a model, from what it finds:
 
 | Kind | What it found | What accepting it does |
 | --- | --- | --- |
-| `duplicate` | Two memories that load in the same place whose text is nearly identical | Keeps the newer text and makes it `supersedes` the older one; a project copy of a user memory is retired instead |
+| `duplicate` | Two memories that load in the same place whose text is nearly identical | Keeps the newer text and makes it `supersedes` the older one, when the newer one loads everywhere and at every moment the older one did; a project copy of a user memory is retired instead, on that same condition. Two near-identical memories with different conditions or deliveries are listed but offered no clean-up |
 | `expired` | A memory whose `expires` date has passed | Deletes the memory (it can be put back from the `deleted` folder) |
 | `dead-link` | A `supersedes` or `overrides` id that no live memory has | Removes every such link from that memory |
-| `repeat` | A project memory with nearly the same text in at least three places of yours (the other places counted, never named) | Makes it a `user` memory, which loads in every place unless it carries a condition; when a `user` memory already covers it, deletes this copy instead |
+| `repeat` | A project memory with nearly the same text in at least three places of yours (the other places counted, never named) | Makes it a `user` memory, which loads in every place unless it carries a condition; when a `user` memory already covers it, deletes this copy instead, and when one repeats it but does not cover it, neither is offered |
 | `old-handoff` | A `handoff`-labelled memory that a later `Handoff: <name>` in the same scope replaced | Deletes the older handoff |
 
 **Answering one.** `dream_proposals` lists the proposals that wait in this session, each showing the memories it is
@@ -655,8 +655,14 @@ These are open and will be fixed in a later version:
   project memories for it.
 - Versions up to 0.4.0 left an empty folder in `.neocortex/locks` in your home folder for every memory folder they
   wrote to. They hold no memories; you can delete the empty ones.
-- While a memory moves between scopes, a session that loads at that moment can report "same id as a memory in another
-  folder" for it, although nothing is wrong.
+- A memory moved three times within one load (a few milliseconds) can be missing from that one load's answer; the next
+  load finds it.
+- While a memory moves between scopes, a load can rarely report it as a second copy ("same id as a memory in another
+  folder"). It is the same memory, and deleting either one deletes it; a delete keeps it in the deleted area, where you
+  can restore it by hand.
+- While another session moves a memory between scopes, moving that same memory can rarely be refused: "cannot move
+  memory `<id>` to `<scope>`: it has another record in `<place>`; nothing was changed", and then it asks which record to
+  keep. In this race both records are the same memory, so do not delete either; try the move again.
 - When two machines change the same memory before your sync tool has carried the first change across, one change can
   be lost; see step 1 under [Install](#install).
 

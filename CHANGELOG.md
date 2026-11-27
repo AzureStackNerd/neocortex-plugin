@@ -2,6 +2,20 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.5 - 2026-11-27
+
+- Fixed: a memory that is moving between project and user scope on this machine no longer goes missing from a session
+  that loads at that moment, in either direction (#538). A memory moved three times within one load can still be
+  missing from that one load; the next load finds it.
+- Fixed, in part: a load during such a move reports the moving memory as a second copy ("same id as a memory in another
+  folder") less often; it can still happen rarely, and the README's known issues say what to do (#353).
+- Fixed: the Dreamer no longer offers to retire one of two near-identical memories where the one that stays does not
+  arrive, for example a general memory beside a copy that holds only for one label; an offer made before this fix that
+  would do so is not carried out (#488).
+- Fixed: a repository's or folder's context labels no longer go missing at a session start, or show a false first-visit
+  notice, while another session rewrites them; and setting labels no longer answers that another session changed them
+  when that session only filled in the organisation and repository (#393).
+
 ## 0.16.4 - 2026-11-27
 
 - Fixed: when `/neocortex:therapy` gives a memory a new moment, it no longer tells you the memory will now arrive

@@ -46305,7 +46305,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.16.4",
+  version: "0.16.5",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -46550,6 +46550,18 @@ function narrower(a, b) {
   if (fromFiles.length > 0 && toFiles.length === 0) narrowerSomewhere = true;
   else if (fromFiles.length !== toFiles.length || fromFiles.some((file2, index) => file2 !== toFiles[index])) return false;
   return narrowerSomewhere;
+}
+function covers(outer, inner) {
+  if (!sameScope(outer.scope, inner.scope) && outer.scope.kind !== "user") return false;
+  const innerParts = canonicalCondition(inner.appliesWhen) ?? {};
+  const outerParts = canonicalCondition(outer.appliesWhen) ?? {};
+  if (outerParts.inRepo === true && innerParts.inRepo !== true) return false;
+  const innerLabels = innerParts.labels ?? [];
+  if (!(outerParts.labels ?? []).every((label) => innerLabels.includes(label))) return false;
+  const innerFiles = innerParts.files ?? [];
+  const outerFiles = outerParts.files ?? [];
+  if (outerFiles.length > 0 && (outerFiles.length !== innerFiles.length || outerFiles.some((file2, index) => file2 !== innerFiles[index]))) return false;
+  return outer.delivery === inner.delivery || inner.delivery === "on-demand";
 }
 function validateLinks(memory, existing) {
   const byId = new Map(existing.map((m) => [m.id, m]));
@@ -49877,6 +49889,16 @@ function twinIn(text, candidates) {
 function roundedSimilarity(a, b) {
   return Math.round(similarity(a, b) * 100) / 100;
 }
+function coveringTwin(memory, candidates) {
+  let best = null;
+  for (const candidate of candidates) {
+    if (candidate.id === memory.id || !covers(candidate, memory)) continue;
+    const score = roundedSimilarity(memory, candidate);
+    if (score < NEAR_IDENTICAL_MIN) continue;
+    if (best === null || score > best.score || score === best.score && candidate.id < best.id) best = { id: candidate.id, score };
+  }
+  return best === null ? null : best.id;
+}
 function activeUserMemories(memories, session, today) {
   return resolve4(
     memories.filter((memory) => memory.scope.kind === "user"),
@@ -50356,7 +50378,7 @@ function planApply(proposal, records, context) {
   const survivor = intent.act === "supersede" ? recordOf3(intent.survivor) : void 0;
   const landed = intent.act === "supersede" && survivor !== void 0 && "stored" in survivor && survivor.stored.memory.supersedes.includes(intent.retired) ? intent.survivor : void 0;
   const refuse = (refusal2) => landed === void 0 ? { refusal: refusal2 } : { refusal: refusal2, landed };
-  const planned = planOfIntent(intent, recordOf3, restOf, context);
+  const planned = planOfIntent(proposal, recordOf3, restOf, context);
   if (planned.refusal === void 0 && planned.steps.length === 0) return planned;
   const written = new Set(writtenIds(proposal));
   for (const rest of proposal.rests) {
@@ -50369,8 +50391,9 @@ function planApply(proposal, records, context) {
   }
   return planned.refusal === void 0 ? planned : refuse(planned.refusal);
 }
-function planOfIntent(intent, recordOf3, restOf, context) {
-  const { visible, stamp, userScope } = context;
+function planOfIntent(proposal, recordOf3, restOf, context) {
+  const intent = proposal.intent;
+  const { visible, stamp, userScope, userUnread } = context;
   const stepOf = (id, done, write, retire = false) => {
     const record2 = recordOf3(id);
     if (record2 === void 0) return retire ? null : { reason: "moved", id, how: "deleted" };
@@ -50396,21 +50419,32 @@ function planOfIntent(intent, recordOf3, restOf, context) {
     if (survivor !== null && recordOf3(intent.retired) === void 0) return { refusal: { reason: "moved", id: intent.retired, how: "deleted" } };
     const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
     if (retired !== null && "reason" in retired) return { refusal: retired };
+    const carries = recordOf3(intent.survivor);
+    if (carries !== void 0 && "stored" in carries && retiredMemory !== void 0 && sameScope(carries.scope, gone?.scope ?? carries.scope) && !covers(carries.stored.memory, retiredMemory)) {
+      return { refusal: { reason: "narrower", id: intent.retired, held: intent.survivor } };
+    }
     return { steps: [survivor, retired].flatMap((one) => one === null ? [] : [one]) };
   }
   if (intent.act === "retire") {
     const retired = stepOf(intent.retired, stillHere, (base) => ({ kind: "remove", base }), true);
     if (retired !== null && "reason" in retired) return { refusal: retired };
+    const retiring = recordOf3(intent.retired);
+    if (retired !== null && (proposal.kind === "duplicate" || proposal.kind === "repeat") && retiring !== void 0 && "stored" in retiring && coveringTwin(retiring.stored.memory, userScope) === null) {
+      const unknown2 = userUnread[0];
+      if (unknown2 !== void 0) return { refusal: { reason: "unreadable", id: unknown2 } };
+      return { refusal: { reason: "narrower", id: intent.retired } };
+    }
     return { steps: retired === null ? [] : [retired] };
   }
   if (intent.act === "promote") {
     const record2 = recordOf3(intent.record);
     if (record2 !== void 0 && "stored" in record2) {
-      const twin = twinIn(
-        record2.stored.memory,
-        userScope.filter((one) => one.id !== intent.record)
-      );
-      if (twin !== null) return { refusal: { reason: "twin", id: intent.record, held: twin } };
+      const candidates = userScope.filter((one) => one.id !== intent.record);
+      const twin = twinIn(record2.stored.memory, candidates);
+      if (twin !== null) {
+        const covering = coveringTwin(record2.stored.memory, candidates);
+        return { refusal: { reason: "twin", id: intent.record, held: covering ?? twin, ...covering === null ? {} : { covered: true } } };
+      }
     }
     const moved = stepOf(
       intent.record,
@@ -50470,11 +50504,15 @@ function closureOf(proposal, plan) {
   const refusal2 = plan.refusal;
   if (refusal2 === void 0) return void 0;
   const { reason } = refusal2;
+  const intent = proposal.intent;
+  const landed = plan.landed !== void 0 && intent?.act === "supersede" ? { survivor: plan.landed, retired: intent.retired } : void 0;
+  if (reason === "narrower") {
+    const cannot = refusal2.held === void 0 ? `no user memory that covers memory ${shortId(refusal2.id)} arrives everywhere and at every moment it does` : `the memory that would stay, ${shortId(refusal2.held)}, does not arrive everywhere and at every moment memory ${shortId(refusal2.id)} does`;
+    return { how: "cannot", cannot, ...landed === void 0 ? {} : { landed } };
+  }
   if (reason !== "moved" && reason !== "elsewhere" || !("id" in refusal2)) return void 0;
   const how = "how" in refusal2 ? refusal2.how : "scope";
   const rest = proposal.rests.find((one) => one.id === refusal2.id && one.shown);
-  const intent = proposal.intent;
-  const landed = plan.landed !== void 0 && intent?.act === "supersede" ? { survivor: plan.landed, retired: intent.retired } : void 0;
   return { how, ...rest === void 0 ? {} : { shown: { id: rest.id, scope: rest.scope } }, ...landed === void 0 ? {} : { landed } };
 }
 function writtenIds(proposal) {
@@ -50528,10 +50566,11 @@ function propose(input2) {
     if (claimed.has(pair.a.id) || claimed.has(pair.b.id)) continue;
     const [survivor, retired] = newerOf(pair.a, pair.b);
     if (survivor.scope.kind === retired.scope.kind) {
-      claim2("duplicate", { act: "supersede", survivor: survivor.id, retired: retired.id }, [restOf(survivor), restOf(retired)], [survivor.id, retired.id]);
+      if (covers(survivor, retired)) claim2("duplicate", { act: "supersede", survivor: survivor.id, retired: retired.id }, [restOf(survivor), restOf(retired)], [survivor.id, retired.id]);
     } else {
       const copy = survivor.scope.kind === "project" ? survivor : retired;
-      claim2("duplicate", { act: "retire", retired: copy.id }, [restOf(copy)], [copy.id]);
+      const stays = copy.id === survivor.id ? retired : survivor;
+      if (covers(stays, copy)) claim2("duplicate", { act: "retire", retired: copy.id }, [restOf(copy)], [copy.id]);
     }
   }
   for (const { memory, targets } of input2.dead.dangling) {
@@ -50563,7 +50602,9 @@ function propose(input2) {
       const twin = twinIn(member, activeUser);
       if (twin !== null) {
         blocked.twin += 1;
-        const covered = activeUser.find((one) => one.id === twin);
+        const covering = coveringTwin(member, activeUser);
+        if (covering === null) continue;
+        const covered = activeUser.find((one) => one.id === covering);
         const twinRest = covered === void 0 ? [] : [restOf(covered)];
         claim2("repeat", { act: "retire", retired: member.id }, [restOf(member), ...twinRest, ...restsOfOthers(cluster, member, restOf)], [member.id]);
         continue;
@@ -51039,9 +51080,11 @@ var RuleGuard = class {
       if (problems.length > 0) throw new StoreError(problems.join("; "));
     }
     if (write.kind === "update" && !sameScope(write.memory.scope, write.base.memory.scope)) {
-      const from = write.base.memory.scope;
-      const others2 = (await this.store.recordsOf(write.memory.id)).filter((record2) => !sameScope(record2.scope, from));
-      if (others2.length > 0) throw new AlreadyExistsError(write.memory.id, void 0, others2[0].scope, others2);
+      if (await this.store.moveInProgress?.(write.memory.id) !== "yes") {
+        const from = write.base.memory.scope;
+        const others2 = (await this.store.recordsOf(write.memory.id)).filter((record2) => !sameScope(record2.scope, from));
+        if (others2.length > 0) throw new AlreadyExistsError(write.memory.id, void 0, others2[0].scope, others2);
+      }
     }
     let others = [];
     let takeover = null;
@@ -51603,7 +51646,11 @@ var PROPOSAL_TEXT = {
     elsewhere: (id) => `memory ${shortId(id)} is not in this session's scopes, so nothing was written; a proposal is applied where its memories show`,
     "two-records": (id) => `memory ${shortId(id)} has more than one record, so this change was refused; ask the user which record to keep, then accept the proposal again`,
     unchecked: (id) => `memory ${shortId(id)} is not a memory this proposal rests on, so nothing was written; tell the user`,
-    twin: (id, held) => `user scope already holds a memory this one repeats (${shortId(held ?? "")}), so promoting memory ${shortId(id)} was refused and nothing was written; offer to retire this copy instead: it is already covered there. No retire proposal for it exists yet, so the next dream run proposes one; or delete the copy with delete_memory if the user prefers to do it now`
+    twin: (id, held, covered) => `user scope already holds a memory this one repeats (${shortId(held ?? "")}), so promoting memory ${shortId(id)} was refused and nothing was written; ` + (covered === true ? "offer to retire this copy instead: it is already covered there. No retire proposal for it exists yet, so the next dream run proposes one; or delete the copy with delete_memory if the user prefers to do it now" : "that memory does not arrive everywhere and at every moment this copy does, so retiring the copy would lose its text there; it keeps arriving in this project, and no retire is offered"),
+    // #488 How line 10: a reject or keep-both is the way out, and it CLEARS the offer without changing a memory, since
+    // this version can never carry the accept out on these records (src/server.ts, decideCall: any decision but accept
+    // writes nothing). The memories' own conditions say it, never a place.
+    narrower: (id, held) => held === void 0 ? `no memory that arrives everywhere and at every moment memory ${shortId(id)} does covers it, so removing memory ${shortId(id)} was refused and nothing was written; the copy keeps arriving in its project. This proposal cannot be carried out on these memories: record a reject or keep-both for it with dream_decide to stop it waiting; either keeps the copy as it is` : `memory ${shortId(held)} does not arrive everywhere and at every moment memory ${shortId(id)} does, so removing memory ${shortId(id)} was refused and nothing was written; tell the user which of the two arrives in fewer places or at another moment. This proposal cannot be carried out on these memories: record a reject or keep-both for it with dream_decide to stop it waiting; either keeps both memories as they are`
   },
   /** What dream_proposals adds to its next step while a proposal is accepted and its writes have not all run (#397). */
   unfinished: (count2) => `${count2} ${count2 === 1 ? "proposal is" : "proposals are"} accepted and not applied: its writes were refused or did not all run. Call dream_decide again with accept and the id, for each id under unfinished: it finishes what is left and changes nothing already done. Tell the user which one is unfinished and why, when the refusal said so.`,
@@ -51618,10 +51665,14 @@ var PROPOSAL_TEXT = {
     const what = shown2 === void 0 ? "a memory it counts in another place" : landed?.retired === shown2.id ? "it" : `memory ${shortId(shown2.id)}`;
     const cause = how === "deleted" ? `${what} was deleted after the accept` : how === "changed" ? `${what} changed after the accept` : shown2 === void 0 ? `${what} moved after the accept` : `${what} is no longer in ${shown2.scope.kind === "user" ? "user scope" : "this project"}`;
     const end = "it is closed and nothing more is written for it; a later Dreamer run may propose it again on the memories as they are now";
-    if (how === "cannot") return `your accept of this proposal is not applied: ${closure.cannot ?? ""}; it is closed and nothing more is written for it`;
+    const [survivor, retired] = landed === void 0 ? ["", ""] : [shortId(landed.survivor), shortId(landed.retired)];
+    const linked = landed === void 0 ? "" : link2 === "hidden" ? `memory ${survivor} carries the link that replaces memory ${retired}, which no longer loads, but` : link2 === "loads" ? `memory ${survivor} carries a supersedes link to memory ${retired}, which does not hide it, and` : `memory ${survivor} carries a supersedes link to memory ${retired}, but`;
+    if (how === "cannot") {
+      const why = closure.cannot ?? "";
+      if (landed === void 0) return `your accept of this proposal is not applied: ${why}; it is closed and nothing more is written for it`;
+      return `your accept of this proposal is applied only in part: ${linked} memory ${retired} is not deleted, because this version cannot apply that write (${why}); it is closed and nothing more is written for it`;
+    }
     if (landed === void 0) return `your accept of this proposal is not applied: ${cause}; ${end}`;
-    const [survivor, retired] = [shortId(landed.survivor), shortId(landed.retired)];
-    const linked = link2 === "hidden" ? `memory ${survivor} carries the link that replaces memory ${retired}, which no longer loads, but` : link2 === "loads" ? `memory ${survivor} carries a supersedes link to memory ${retired}, which does not hide it, and` : `memory ${survivor} carries a supersedes link to memory ${retired}, but`;
     return `your accept of this proposal is applied only in part: ${linked} memory ${retired} is not deleted, because ${cause}; ${end}`;
   },
   /**
@@ -51650,6 +51701,7 @@ var LABEL_TEXT = {
   removed: "the record of this place was removed while this change was being written; nothing was written. Call set_context_labels again",
   busy: "the context labels of this place are being written by another session; try again"
 };
+var WRITE_TRIES = 3;
 var IMPORT_TEXT = {
   title: "Import Claude Code auto memory",
   description: `Import the memories that Claude Code's auto memory kept into NeoCortex, one to one: those of this project into this project's scope, and those of the shared folders into user scope, the folder autoMemoryDirectory names and the one CLAUDE_CODE_PROJECT_DIR_NAME pins under the projects folder: their user and feedback memories as they are, and the others unsorted, loaded only on request until they are sorted into their project. A preview covers one scope: folder "shared" picks the shared folders, "place" the auto memory folder of this place, and without folder the shared folders come first while they have memories on offer. mode "preview" lists what would come in and writes nothing; mode "apply" writes exactly the plan of a preview and needs its plan id. Call apply only after the user agreed to that preview in this conversation. The original files are never changed.`,
@@ -52003,7 +52055,7 @@ ${TRACK_LOST_LINE}`;
   };
   const refusalText = (stop) => {
     const { reason } = stop;
-    return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "", reason === "twin" ? stop.held : void 0);
+    return PROPOSAL_TEXT.refused[reason]("id" in stop ? stop.id : "", "held" in stop ? stop.held : void 0, reason === "twin" ? stop.covered : void 0);
   };
   const planOfAccept = async (proposal, given2) => {
     const ids = idsOf3(proposal);
@@ -52015,7 +52067,13 @@ ${TRACK_LOST_LINE}`;
       deps.session,
       toLocalDate(now())
     ).active;
-    const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString(), userScope });
+    const userUnread = [];
+    for (const problem of loaded.problems) {
+      if (problem.id === void 0 || problem.copy === true) continue;
+      const records2 = await reader.recordsOf(problem.id);
+      if (records2.some((one) => sameScope(one.scope, USER))) userUnread.push(problem.id);
+    }
+    const plan = planApply(proposal, records, { visible: visibleScopes(deps.session), stamp: now().toISOString(), userScope, userUnread });
     if (plan.refusal !== void 0) return plan;
     const steps = plan.steps ?? [];
     const current = resolve4(existing, deps.session, toLocalDate(now())).current;
@@ -52630,15 +52688,31 @@ ${TRACK_LOST_LINE}`;
           const lines = await check2(from, { inRepo: from.inRepo, labels: normalized.labels.map((label) => label.name) }, confirmation);
           if (confirmation !== null) affects = lines;
         }
-        try {
-          if (read2.state === "none") await deps.places.createPlace(next(null));
-          else if (!sameLabels(read2.stored.record.labels, normalized.labels) || filledFromVisit(read2.stored.record, identity, updated) !== null) {
-            await deps.places.updatePlace(next(read2.stored.record), read2.stored);
+        let base = read2.state === "stored" ? read2.stored : null;
+        const judged = read2.state === "stored" ? read2.stored.record.labels : [];
+        const writeOn = async () => {
+          if (base === null) await deps.places.createPlace(next(null));
+          else if (!sameLabels(base.record.labels, normalized.labels) || filledFromVisit(base.record, identity, updated) !== null) {
+            await deps.places.updatePlace(next(base.record), base);
           }
-        } catch (error62) {
+        };
+        const refusedBy = async (error62) => {
           const refused = await labelRefusal(error62, deps.places, place);
-          if (refused === void 0) throw error62;
-          return fail(refused);
+          return refused === void 0 ? void 0 : fail(refused);
+        };
+        for (let tries = 1; ; tries += 1) {
+          try {
+            await writeOn();
+            break;
+          } catch (error62) {
+            const again = error62 instanceof ConflictError && !error62.gone && base !== null && tries < WRITE_TRIES ? await deps.places.readPlace(place).catch(() => void 0) : void 0;
+            if (again === void 0 || again.read.state !== "stored" || !sameLabels(again.read.stored.record.labels, judged)) {
+              const refusal2 = await refusedBy(error62);
+              if (refusal2 === void 0) throw error62;
+              return refusal2;
+            }
+            base = again.read.stored;
+          }
         }
         return ok({ place: placeName(place), labels: normalized.labels, previous, ...affects === void 0 ? {} : { affects } });
       });
@@ -53575,7 +53649,7 @@ function offerOf(kind, shown2, intent, from) {
   if (intent.act === "promote") return { act: intent.act };
   const retired = shown2.find((one) => one.memory.id === intent.retired)?.memory;
   const newer = kind === "old-handoff" && retired !== void 0 ? newerHandoff(retired, from.active) : void 0;
-  const stays = (kind === "duplicate" || kind === "repeat") && retired !== void 0 ? twinIn(retired, from.activeUser) : null;
+  const stays = (kind === "duplicate" || kind === "repeat") && retired !== void 0 ? coveringTwin(retired, from.activeUser) : null;
   const staying = stays === null ? void 0 : from.activeUser.find((memory) => memory.id === stays);
   return {
     act: intent.act,
@@ -54028,6 +54102,7 @@ var PLACES = PLACE_AREA;
 var BUSY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
 var SETTLE_MS = 250;
 var TEMP_RE = /^(.+)\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
+var PLACE_TEMP_RE = /^([0-9a-f]{16})\.yaml\.\d+\.[0-9a-f]{8}\.tmp$/;
 var BYTE_ORDER_MARK3 = String.fromCharCode(65279);
 var SETTLED_MS = 2e3;
 var MARKER_FILE = "format.json";
@@ -54087,11 +54162,13 @@ var FileStore = class {
   maxLockMs;
   lockBase;
   readListed;
+  listFolder;
   lookUp;
   readStored;
   copySeams;
   clock;
   statListed;
+  readPlaceListed;
   /**
    * Per folder, what loads with reuse kept of each record by its listed name (#456). A load without reuse neither
    * consults nor fills it.
@@ -54111,11 +54188,13 @@ var FileStore = class {
     this.staleLockMs = options.staleLockMs ?? 1e4;
     this.maxLockMs = options.maxLockMs ?? 6e4;
     this.readListed = options.readListed ?? ((path) => readFile4(path, "utf8"));
+    this.listFolder = options.listFolder ?? ((path) => readdir3(path));
     this.lookUp = options.lookUp ?? ((path) => stat4(path));
     this.readStored = options.readStored ?? ((path) => readFile4(path));
     this.copySeams = { linkFile: options.linkFile, renameFile: options.renameFile };
     this.clock = options.clock ?? Date.now;
     this.statListed = options.statListed ?? ((path) => stat4(path, { bigint: true }));
+    this.readPlaceListed = options.readPlaceListed ?? ((path) => readFile4(path, "utf8"));
   }
   get location() {
     return this.root;
@@ -54125,9 +54204,26 @@ var FileStore = class {
     const unique2 = [...new Map(scopes.map((scope) => [scopeId(scope), scope])).values()].sort(canonicalOrder);
     const folders = unique2.map((scope) => ({ scope, parts: foldersOf(scope) }));
     await this.assertRoot();
+    const walks = [];
+    const found = /* @__PURE__ */ new Set();
+    for (const { scope, parts } of folders) {
+      const listed3 = await this.walkFolder(parts, scope, called);
+      walks.push(listed3);
+      for (const one of listed3) if (one.read !== void 0) found.add(one.id);
+    }
+    const again = folders.length === 0 ? [] : [...folders.keys(), 0];
+    const late2 = folders.map(() => []);
+    for (const i of again) {
+      const { scope, parts } = folders[i];
+      const taken = new Set(found);
+      for (const one of late2[i] ?? []) taken.add(one.id);
+      for (const one of await this.lateFound(parts, scope, taken)) late2[i]?.push(one);
+    }
     const result = { memories: [], problems: [] };
-    const loaded = /* @__PURE__ */ new Set();
-    for (const { scope, parts } of folders) await this.loadFolder(parts, { scope }, result, loaded, called);
+    const held = /* @__PURE__ */ new Map();
+    for (const [i, { parts }] of folders.entries()) {
+      await this.assemble(join5(this.root, ...parts), [...walks[i] ?? [], ...late2[i] ?? []], result, held);
+    }
     return result;
   }
   /** Runs a proposal step under the machine-local lock of that id, so a record write shares this root's locks (D8). */
@@ -54314,7 +54410,13 @@ var FileStore = class {
       }
       if (older !== void 0) await this.keepCopy(older.format, base.memory.scope, next.id, older.bytes);
       const text = serializeMemoryFile(next, carry);
-      await this.writeAtomically(target, text, next.id);
+      if (target !== source) await this.markMove(next.id);
+      try {
+        await this.writeAtomically(target, text, next.id);
+      } catch (error62) {
+        if (target !== source) await this.unmarkMove(next.id);
+        throw error62;
+      }
       if (target !== source) await this.finishMove(source, target, next.id);
       return revisionOf(text);
     });
@@ -54372,22 +54474,26 @@ var FileStore = class {
   async recordsAt(requests) {
     for (const { id } of requests) if (!UUID_RE.test(id)) throw new StoreError(`invalid memory id ${id}`);
     await this.assertRoot();
-    const listings = /* @__PURE__ */ new Map();
-    return Promise.all(
-      requests.map(async ({ scope, id }) => {
-        const parts = foldersOf(scope);
-        const key = parts.join("/");
-        if (!listings.has(key)) listings.set(key, this.idsListed(join5(this.root, ...parts)));
-        if (!(await listings.get(key))?.has(id)) return void 0;
-        return this.readRecord(join5(this.root, ...parts, `${id}.md`), `${key}/${id}.md`, scope, id);
-      })
-    );
+    const out = requests.map(() => void 0);
+    const asked = requests.map(({ scope, id }, n) => ({ n, scope, id, parts: foldersOf(scope), key: scopeId(scope) }));
+    const folders = [...new Map(asked.map((one) => [one.parts.join("/"), one.parts])).values()];
+    const reading = async (parts) => {
+      const key = parts.join("/");
+      const listed3 = await this.idsListed(join5(this.root, ...parts));
+      for (const one of asked) {
+        if (out[one.n] !== void 0 || one.parts.join("/") !== key || !listed3.has(one.id)) continue;
+        out[one.n] = await this.readRecord(join5(this.root, ...parts, `${one.id}.md`), `${key}/${one.id}.md`, one.scope, one.id);
+      }
+    };
+    for (const parts of folders) await reading(parts);
+    for (const parts of folders) await reading(parts);
+    return out;
   }
   /** The ids a folder lists, by `<id>.md` or by the temp file of a write in progress (#387); a missing folder lists none. */
   async idsListed(folder) {
     let names;
     try {
-      names = await readdir3(folder);
+      names = await this.listFolder(folder);
     } catch (error62) {
       if (isNotFound(error62)) return /* @__PURE__ */ new Set();
       throw error62;
@@ -54455,9 +54561,11 @@ var FileStore = class {
     });
   }
   /**
-   * The stems of the place records in places/, sorted, and every other .yaml file there as a problem (a conflict copy);
-   * other files, such as temp files, are ignored. A missing folder is an empty area; any other error reading it is the
-   * area's problem, never a throw (finding 9).
+   * The stems of the place records in places/, sorted, and every other .yaml file there as a problem (a conflict copy).
+   * A record mid-rename is listed by its fresh temp file (`<stem>.yaml.<pid>.<8 hex>.tmp`, #393), which counts as that
+   * stem's pending name only while the record itself is not listed and it is not older than any write in progress (see
+   * `pass` for memories); other files, such as an older temp file a stopped writer left, are ignored. A missing folder
+   * is an empty area; any other error reading it is the area's problem, never a throw (finding 9).
    */
   async placeFiles() {
     let names;
@@ -54467,23 +54575,47 @@ var FileStore = class {
       if (isNotFound(error62)) return { stems: [], strays: [] };
       return { problem: { file: PLACES, reason: `the place area could not be read (${codeOf3(error62) ?? messageOf2(error62)})` } };
     }
-    const stems = [];
+    const stems = /* @__PURE__ */ new Set();
     const strays = [];
-    for (const name of names.sort()) {
+    const pending = /* @__PURE__ */ new Map();
+    for (const name of names) {
+      const temp = PLACE_TEMP_RE.exec(name)?.[1];
+      if (temp !== void 0) {
+        pending.set(temp, [...pending.get(temp) ?? [], name]);
+        continue;
+      }
       if (!name.toLowerCase().endsWith(".yaml")) continue;
       const stem = PLACE_FILE_RE.exec(name)?.[1];
       if (stem === void 0) strays.push({ file: `${PLACES}/${name}`, reason: "file name is not a place record (a sync tool's conflict copy?)" });
-      else stems.push(stem);
+      else stems.add(stem);
     }
-    return { stems, strays };
+    for (const [stem, temps] of pending) {
+      if (stems.has(stem)) continue;
+      for (const name of temps) {
+        if (await this.isStaleTemp(join5(this.root, PLACES, name))) continue;
+        stems.add(stem);
+        break;
+      }
+    }
+    return { stems: [...stems].sort(), strays };
   }
-  /** One place record by its stem; a file that went missing since it was listed is none, any other failure a problem. */
+  /**
+   * One place record by its stem, read through the settle: a listed stem's record that is not found or busy is read
+   * again until `SETTLE_MS` has passed, since a rename over it leaves its name absent or busy for a moment (#393, as
+   * `readRecord` does for memories, #387). A not-found still standing whose record name is gone by then is none (the
+   * place has no record); any other failure, and a format error, is the record's problem at once.
+   */
   async readPlaceRecord(stem) {
     const file2 = placeFile(stem);
+    const path = this.placePath(stem);
     let text;
     try {
-      text = await this.readIfPresent(this.placePath(stem));
-      if (text === void 0) return { state: "none" };
+      text = await this.readSettled(path, this.readPlaceListed);
+    } catch (error62) {
+      if (isNotFound(error62) && await isGone(path)) return { state: "none" };
+      return { state: "unreadable", problem: { file: file2, reason: systemErrorCode(error62) ?? messageOf2(error62) } };
+    }
+    try {
       const read2 = readPlaceFile(text, stem, this.placeRegistry);
       const stored = { record: read2.record, revision: revisionOf(text), format: read2.format };
       return { state: "stored", stored: Object.keys(read2.unknown).length > 0 ? { ...stored, unknown: read2.unknown } : stored };
@@ -54530,29 +54662,98 @@ var FileStore = class {
     return this.locks;
   }
   /**
-   * The memories of one folder into result. A file that went missing since it was listed, and has no name there on a
-   * second look, was deleted or moved meanwhile and is none (#352); any other failure to read or parse it is a problem.
-   * loaded holds the ids result already holds a memory of. With reuse (#456), called is when the load was called: the
-   * folder's pass may answer from what earlier loads with reuse kept, and loads at once share it.
+   * The first walk of one folder: what its listing gives, in the order the answer reports it. A file that went missing
+   * since it was listed, and has no name there on a second look, was deleted or moved meanwhile and is none (#352); any
+   * other failure to read or parse it is a problem. With reuse (#456), called is when the load was called: the folder's
+   * pass may answer from what earlier loads with reuse kept, and loads at once share it.
    */
-  async loadFolder(parts, location, result, loaded, called) {
+  async walkFolder(parts, scope, called) {
     const folder = join5(this.root, ...parts);
-    const listed3 = called === void 0 ? await this.pass(folder, parts, location.scope, false) : await this.shared(folder, called, () => this.pass(folder, parts, location.scope, true));
+    return called === void 0 ? await this.pass(folder, parts, scope, false) : await this.shared(folder, called, () => this.pass(folder, parts, scope, true));
+  }
+  /**
+   * What one more fresh listing of this folder shows of the ids that listing's walk gave no outcome for (#538, #353):
+   * a record that a scope move wrote after the walk listed the folder it left, or the one it came to. Always a fresh
+   * listing of its own, never one shared with another load's pass: a pass that began before this load's first listing
+   * can answer with a moment before it, and the argument for looking again would collapse. What it reads is not kept:
+   * it answers this load only.
+   */
+  async lateFound(parts, scope, skip) {
+    return this.pass(join5(this.root, ...parts), parts, scope, false, skip);
+  }
+  /**
+   * One folder's listed records into result (rules C6, C7). held is the record the answer already holds of each id, with
+   * where that record lives. A second record of an id is one of three things (#538, #353): the same memory, moved or
+   * deleted while this load ran -- the record the answer holds is gone, so this newer one replaces it and nothing is
+   * reported; a scope move in flight, which leaves the same two records and is not a copy to report (S2, S3); or a real
+   * second copy, reported as before (S7, S8). Pushed whole, never field by field: a load problem's fields are read to
+   * print in src/memory.ts alone (#319).
+   */
+  async assemble(folder, listed3, result, held) {
     for (const one of listed3) {
       if (one.notAnId !== void 0) {
         result.problems.push(one.notAnId);
         continue;
       }
-      const { file: file2, id, read: read2 } = one;
+      const { file: file2, id, name, read: read2 } = one;
       if (read2 === void 0) continue;
-      if ("problem" in read2) result.problems.push(read2.problem);
-      else if (loaded.has(id)) {
-        result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
-      } else {
-        result.memories.push(read2.stored);
-        loaded.add(id);
+      if ("problem" in read2) {
+        result.problems.push(read2.problem);
+        continue;
       }
+      const earlier = held.get(id);
+      if (earlier === void 0) {
+        held.set(id, { at: result.memories.length, path: join5(folder, name) });
+        result.memories.push(read2.stored);
+        continue;
+      }
+      let stillThere = true;
+      try {
+        await lstat(earlier.path);
+      } catch (error62) {
+        if (isNotFound(error62)) stillThere = false;
+      }
+      if (!stillThere) {
+        held.set(id, { at: earlier.at, path: join5(folder, name) });
+        result.memories[earlier.at] = read2.stored;
+        continue;
+      }
+      if (await this.moveInProgress(id) === "yes") continue;
+      result.problems.push({ file: file2, id, copy: true, reason: "same id as a memory in another folder (an unfinished scope move?); keep one" });
     }
+  }
+  /**
+   * Whether a scope move of this id is in flight on this machine (`MemoryStore.moveInProgress`): yes only while the move
+   * marker `<id>.move` stands beside a live `<id>.lock`. The lock is live by the rule removeIfStale reaps it by: its pid
+   * is alive, or it names no pid yet and is younger than staleLockMs; past maxLockMs it is no lock at all. Nothing is
+   * opened, waited on or removed -- a stat and the small file -- so a load that overlaps no move pays nothing here.
+   */
+  async moveInProgress(id) {
+    const folder = this.lockFolderPath();
+    try {
+      await stat4(this.markerPath(folder, id));
+    } catch (error62) {
+      return isNotFound(error62) ? "no" : "unknown";
+    }
+    return this.lockLive(join5(folder, `${id}.lock`));
+  }
+  /** Whether a lock file names a writer still at work, as moveInProgress reads it: a lock that cannot be read is unknown. */
+  async lockLive(path) {
+    let age;
+    let text;
+    try {
+      age = Date.now() - (await stat4(path)).mtimeMs;
+      text = await readFile4(path, "utf8");
+    } catch (error62) {
+      return isNotFound(error62) ? "no" : "unknown";
+    }
+    if (age > this.maxLockMs) return "no";
+    const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : void 0;
+    if (pid === void 0) return age > this.staleLockMs ? "no" : "yes";
+    return isAlive(pid) ? "yes" : "no";
+  }
+  markerPath(folder, id) {
+    return join5(folder, `${id}.move`);
   }
   /**
    * One pass over a folder for loads with reuse (#456). A load joins a pass only if the pass began after the load was
@@ -54590,11 +54791,12 @@ var FileStore = class {
    * Every listed name of a folder in the order the answer reports them, each with what its read gave, or as no memory
    * id. Decided at every pass, never kept (#456): the listing, the pending names and a temp file's age (S20), and a
    * folder that is not there, which is empty (S26, S33); a listing that fails throws, so nothing kept answers (S27).
+   * skip names the ids a load already has an outcome for: a listing it looks at again reads none of those (#538).
    */
-  async pass(folder, parts, scope, reuse) {
+  async pass(folder, parts, scope, reuse, skip) {
     let names;
     try {
-      names = await readdir3(folder);
+      names = await this.listFolder(folder);
     } catch (error62) {
       if (isNotFound(error62)) return [];
       throw error62;
@@ -54610,6 +54812,7 @@ var FileStore = class {
       if (!name.toLowerCase().endsWith(".md")) continue;
       const file2 = [...parts, name].join("/");
       const id = name.slice(0, -".md".length);
+      if (skip !== void 0 && (skip.has(id) || !UUID_RE.test(id))) continue;
       if (!UUID_RE.test(id)) {
         const notAnId = { file: file2, ...ownerOf(name), reason: "file name is not a memory id (a sync tool's conflict copy?)" };
         listed3.push({ name, file: file2, id, notAnId: reuse ? frozen(notAnId) : notAnId });
@@ -54886,6 +55089,8 @@ var FileStore = class {
     const pid = /^\d+$/.test(text.trim()) ? Number(text.trim()) : void 0;
     if (age > this.maxLockMs || age > this.staleLockMs && (pid === void 0 || !isAlive(pid))) {
       await rm2(path, { force: true });
+      await rm2(path.replace(/\.lock$/, ".move"), { force: true }).catch(() => {
+      });
       return true;
     }
     return false;
@@ -54894,14 +55099,30 @@ var FileStore = class {
   async writeAtomically(target, text, id) {
     await writeAtomically(target, text, id, (opId, op) => this.retryWhileBusy(opId, op));
   }
-  /** Removes the old file of a scope move; when that stays impossible, removes the new file again (design 5.4). */
+  /**
+   * Removes the old file of a scope move; when that stays impossible, removes the new file again (design 5.4). The move's
+   * marker goes on both paths (#538): once one record stands there is no move in flight to hide anything for, and a
+   * marker left behind would excuse a real second copy beside a later write's live lock.
+   */
   async finishMove(source, target, id) {
     try {
       await this.retryWhileBusy(id, () => rm2(source, { force: true }));
     } catch (error62) {
       await rm2(target, { force: true });
       throw error62;
+    } finally {
+      await this.unmarkMove(id);
     }
+  }
+  /** Writes the move marker of this id under the lock the move holds, so a load that reads it also reads a live lock. */
+  async markMove(id) {
+    const folder = await this.lockFolder();
+    await writeFile2(this.markerPath(folder, id), String(process.pid));
+  }
+  /** Removes the move marker of this id, if it is there; a marker that cannot be removed is left as a move that stopped. */
+  async unmarkMove(id) {
+    await rm2(this.markerPath(this.lockFolderPath(), id), { force: true }).catch(() => {
+    });
   }
   /** Runs op, again while it fails because another process has the file open, within the budget; then StoreBusyError. */
   async retryWhileBusy(id, op) {

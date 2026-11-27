@@ -78,11 +78,17 @@ Then offer each entry under `waiting`, one at a time. Each has its `id`, its `ki
   the words of `failureMarkGoes`, `callInputMarkGoes` or `replyMarkGoes`.
 - **A `retire` of a `duplicate` across scopes**: the project copy it `retires` and the user memory that `stays`.
   Accepting deletes the copy; the user memory arrives where it does today, here and in every other place; the copy can
-  be put back by hand from the deleted copies in the memory folder.
+  be put back by hand from the deleted copies in the memory folder. A `stays` that does not arrive everywhere and at
+  every moment the copy does is never offered: no `stays` at all means no user memory covers the copy, so warn that
+  deleting it would lose its text there and recommend keeping it (#488).
 - **A `retire` of a `repeat`**: this project's copy it `retires` and the user memory that `stays` and covers it, which
-  goes on arriving in every place, or where its condition holds; and how many other places hold a copy, counted.
-- **A `retire` of a copy with no `stays`**: no user memory repeats it any more. Say so, warn that deleting it could
-  lose its text, and recommend keeping it; delete it only on the user's explicit yes after that warning.
+  goes on arriving in every place, or where its condition holds; and how many other places hold a copy, counted. A
+  `repeat` whose twin repeats the text but does not cover the copy is neither retired nor promoted; the copy keeps
+  arriving in its project (#488).
+- **A `retire` of a copy with no `stays`**: no user memory that covers the copy is there any more, so this version
+  never deletes it: the accept is refused, saying the copy keeps arriving in its project. Say that, and that the
+  proposal cannot be carried out on these memories, so a reject or `keep-both` clears it from waiting; do not offer to
+  delete the copy, and do not call this accept (#488).
 - **A `retire` of an `expired` memory**: the memory and its end date (`expires`). Accepting deletes it; it already
   arrives nowhere, being past its date; it can be put back by hand from the deleted copies.
 - **A `retire` of an `old-handoff`**: the older handoff it `retires` and the `newer` one of the same name, which stays
