@@ -191,8 +191,10 @@ arrive; one naming them beside other tools is refused whole, so the mark is give
 
 A memory can carry a **reply mark** (`reply: {phrases}`) as well: the words of a situation in Claude's own reply, such as
 `["tests pass", "all green"]`. When the reply that ends a turn says any one of them, the turn does not end yet: the
-memory arrives in full and Claude checks that reply against it, and the turn then ends with that reply's own closing
-lines still the last thing you read, when it needed no correction. Only the reply that ends a turn is
+memory arrives as its title and summary, never its why or body, and Claude checks that reply against what they say; the
+turn then ends with that reply's own closing lines still the last thing you read, when it needed no correction. State a
+memory's rule in its summary if you want the check to hold Claude to it, since only the summary reaches the check. Only
+the reply that ends a turn is
 heard, never text before an earlier tool call, a tool call's input or your own message. A phrase matches within one line
 of the reply, capitals ignored, `*` for any run of words, with a word boundary at its start; a phrase with no letter or
 digit is refused. It arrives once per agent's context and again after a compaction or `/clear`, and each time it fires

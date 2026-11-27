@@ -46305,7 +46305,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.16.2",
+  version: "0.16.3",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -48509,7 +48509,7 @@ function unjudgedInputWarning(missing) {
   return `WARNING: no memory was judged at this call, because the input entry passed ${missing}; the memories about calls are NOT in context. Say so before answering.`;
 }
 function replyLead(event) {
-  return event === "SubagentStop" ? "NeoCortex: your report above says what a memory you saved is about; it is below. Check your report against it now. Unless the report needs a correction or a memory did not fit, hand the report back again, whole and unchanged, and nothing else: no word about this check or the memory, also when the memory does not apply to the report. If it needs a correction, or a memory did not fit, say that first, then hand the report back whole, corrected where needed, its own closing line last." : "NeoCortex: your reply above says what a memory you saved is about; it is below. Check your reply against it now. Its closing lines are its status line, open question and closing line, or simply its own last lines when it has none of these. Unless the reply needs a correction or a memory did not fit, reply again with those closing lines and nothing else: no word about this check or the memory, also when the memory does not apply to the reply. If it needs a correction, or a memory did not fit, say that first, then end with those closing lines as corrected, so they are the last words of the turn.";
+  return event === "SubagentStop" ? "NeoCortex: your report above says what a memory below is about. Check your report against it now. Unless the report needs a correction or a memory did not fit, hand the report back again, whole and unchanged, and nothing else: no word about this check or the memory, also when the memory does not apply to the report. If it needs a correction, or a memory did not fit, say that first, then hand the report back whole, corrected where needed, its own closing line last." : "NeoCortex: your reply above says what a memory below is about. Check your reply against it now. Its closing lines are its status line, open question and closing line, or simply its own last lines when it has none of these. Unless the reply needs a correction or a memory did not fit, reply again with those closing lines and nothing else: no word about this check or the memory, also when the memory does not apply to the reply. If it needs a correction, or a memory did not fit, say that first, then end with those closing lines as corrected, so they are the last words of the turn.";
 }
 function replyAsk(active, problems, reply, turn) {
   if (!active.some(hasReplyMark)) return { seen: [], named: [] };
@@ -48529,14 +48529,18 @@ function replySettle(active, byId, problems, event) {
     const userLine = problemLine(naming, named);
     const lead = replyLead(event);
     const brought = active.filter((memory) => owed.seen.includes(memory.id));
-    const { parts, kept, settled } = fillChosen(brought, byId, [Math.max(0, HOOK_CAP - lead.length - 2)], [], null, fullBlock, true);
+    const blockOf = (memory) => indexLine(memory);
+    const { parts, kept, settled } = fillChosen(brought, byId, [Math.max(0, HOOK_CAP - lead.length - 2)], [], null, blockOf, true);
     const body = parts[0] ?? "";
     const text = body === "" ? "" : `${lead}
 
 ${body}`;
     return {
       text,
-      arrived: arrivalsOf(kept.flat(), "full", named),
+      // #532 How line 2: the existing `index` kind, because that is what arrived. A new kind would fall through
+      // arrivalText's first three tests to FULL_BLOCK_MOMENTS' full block for a reply, telling a later correction check
+      // that Claude read a text it never received (AC7).
+      arrived: arrivalsOf(kept.flat(), "index", named),
       had: [...kept.flat(), ...settled].map((memory) => memory.id),
       named,
       claimed: [...owed.named],
@@ -51455,7 +51459,7 @@ var FAILURE_MARK = markSchema2(FAILURE_PATTERN_WORDS);
 var CALL_MARK = markSchema2(CALL_PATTERN_WORDS);
 var FAILURE_WORDS = "The failure this memory is about: it arrives when a tool call fails that way, once per agent, beside the tool's own error. The pattern is judged against the call's own input and never against the error's text. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a failed call of them, so it would never arrive. A rule cannot be marked about a failure yet: save the remedy as a memory that is no rule (index or on-demand) and mark that one.";
 var CALL_INPUT_WORDS = "The call this memory is about: it arrives in full at the first such call in each agent's context, and again after a compaction. It arrives beside the result of a write, an edit, a read or a skill, and of a call NeoCortex knows only reads (a command that only lists, shows or searches; an MCP tool whose name reads; a web search), so the call runs at once. Every other call it is about is stopped once with this memory as the reason, and the call made again runs, only when the memory is set to be read first; otherwise it arrives beside that call's result too, after the call ran. Set it unasked when a memory you save is about what Claude is about to run or write. The pattern is judged against the call's own input: a command, a write's content, an edit's new text, or a tool's whole input. A mark naming NeoCortex's own tools is refused, since no NeoCortex hook sees a call of them, so it would never arrive. A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).";
-var REPLY_WORDS = `The situation in Claude's own reply this memory is about, as phrasings Claude would write ("tests pass", "all green", "ready to release"): at the end of a turn whose final reply says any one of them, the memory arrives in full and Claude checks that reply against it before the user acts; once per agent's context, and each time it fires costs one extra reply. Matched within one line of the reply, capitals ignored, * as any run of words; each phrase needs a letter or digit. Set it unasked when a memory you save is about something Claude says (a claim, a report, a conclusion). A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).`;
+var REPLY_WORDS = `The situation in Claude's own reply this memory is about, as phrasings Claude would write ("tests pass", "all green", "ready to release"): at the end of a turn whose final reply says any one of them, the memory arrives as its title and summary and Claude checks that reply against what they say before the user acts; once per agent's context, and each time it fires costs one extra reply. Its why and body are not shown there, so state the rule in the summary: that is all the check can hold Claude to. Matched within one line of the reply, capitals ignored, * as any run of words; each phrase needs a letter or digit. Set it unasked when a memory you save is about something Claude says (a claim, a report, a conclusion). A rule cannot carry it yet: save it as a memory that is no rule (index or on-demand).`;
 var READ_FIRST_WORDS = `Whether this memory's rule must be read before a call it is about runs. True stops the first such call that can change something, once in each agent, so Claude reads the memory first, and the call made again runs; a call NeoCortex knows only reads is never stopped and gets the memory beside its result. Left out or false, the memory arrives beside the call's result, after it ran. On an update, null takes it back exactly as false does; a save takes true or false. Set it only when the user says the rule must be read before the call, such as "read this before you run that"; never set it on your own judgement. It applies only to a memory with a callInput mark. Set true, it takes effect at the next matching call in each agent, also one that already had the memory beside it: it stops that call, and an agent where it already stopped a call is not stopped again until that agent's context is compacted or cleared. Set back to false, it stops no call from then on.`;
 var READ_FIRST_ONLY_CALL = "This memory is not set to be read first in any way that changes anything: the choice applies only to a memory about a call that can bring it, and this memory has no call mark that can, so it arrives exactly as it did before.";
 var REPLY_MARK = external_exports.strictObject({

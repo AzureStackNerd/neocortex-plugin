@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.3 - 2026-11-27
+
+- Fixed: when a reply mark brings a memory at the end of a turn, Claude Code no longer prints that memory's full text
+  between the reply and its repeated closing lines, so the reply you have to answer stays in view. The check now
+  carries each memory as its index line (title, summary, scope, id), never its why or body, and the lead no longer
+  says "a memory you saved". Claude checks the reply against that summary, so a rule a memory states only in its why
+  or body is not checked at a reply: keep a memory's rule in its summary.
+- Changed: `memories_in_play` and the correction check say a memory at a reply arrived "as its index line", where they
+  said "in full".
+
 ## 0.16.2 - 2026-11-27
 
 - Fixed: the Dreamer's recommended plan now keeps its promise. Make its changes as it states them, in the order it
