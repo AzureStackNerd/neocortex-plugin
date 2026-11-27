@@ -2,6 +2,14 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.4 - 2026-11-27
+
+- Fixed: when `/neocortex:therapy` gives a memory a new moment, it no longer tells you the memory will now arrive
+  before the mistake. That held only for a call mark on a memory set to be read first, which stops a shell command or
+  another call that changes something once, and for a rule's file patterns, which load before each matching write or
+  edit. Any other call, failure or reply mark brings the memory after the call, the failure or the reply, so Claude
+  can correct the mistake but not prevent it; the sitting's closing words and the README now say so.
+
 ## 0.16.3 - 2026-11-27
 
 - Fixed: when a reply mark brings a memory at the end of a turn, Claude Code no longer prints that memory's full text

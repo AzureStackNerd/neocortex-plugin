@@ -346,8 +346,17 @@ When every offer is answered, or they go on with their work, say per memory what
 words they answered with, and for each change how they will see it worked: what the memory should no longer make
 Claude do. A correction that treated both a memory that did not arrive and one that misled says each for its own
 treatment. For a **moment** change that wrote no wording, say that it changed when the memory arrives and not what it
-says, and how the user will see it worked: the next time such a call, file or reply comes, the memory arrives before
-the mistake. A write that changed the wording too says both, as the write's own answer does (S136). For a
+says, and how the user will see it worked: the memory arrives at its new moment, said as the offer said what that
+moment does (section 3). A mark comes before the mistake only where it stops the call once: a call mark on a memory
+set to be read first, at a shell command or another call that changes something, never at a write, an edit, a read or
+a skill. Otherwise a call, failure or reply mark comes after the mistake ran — beside the call's result, beside a
+failure's error, at the end of the reply — so Claude can correct the mistake but not prevent it; say that, and never
+that such a mark brings the memory before the mistake. A rule's new load moment loads it before Claude acts at that
+moment, with file patterns before each write or edit of a matching file, and a condition brings the memory where
+section 3 says, by what it carries: its index line from the next session start, `/clear` or compaction when it is
+delivered at index, its marks as above, a rule from its next such moment, and nothing on its own when it has none of
+these.
+A write that changed the wording too says both, as the write's own answer does (S136). For a
 **wording** change, say that this changed what the memory says, not when it arrives. For a **form** written in place
 of a moment that hurt, say which moment went and which came, what the new form gives up, and how they will see it
 worked: the next such call runs without the stop, or the memory arrives at fewer prompts, calls or replies — and when

@@ -463,8 +463,14 @@ when it should, said as what the evidence suggests and never as a verdict, from 
 what reached Claude before the mistake (nothing, only its name in a warning, or only its title line cut short, and
 when), and the mistake itself. Its diagnosis opens with that label, in bold, and says where the memory arrives today
 in words: its delivery, the marks of its own, and the condition it applies at, worded the same way here and in the
-write's own answer. It then offers a moment that comes before such a mistake — a call, failure or reply mark's
-tool and pattern, a file rule, or a condition that takes this project in — and nothing changes until you answer. The
+write's own answer. It then offers a moment of its own for such a mistake — a call, failure or reply mark's
+tool and pattern, a file rule, or a condition that takes this project in — and says what that moment does. A mark or
+file rule comes before the mistake only as a call mark on a memory set to be read first, which stops a shell command or
+another call that changes something once (never a write, an edit, a read or a skill), or as a file rule, which loads
+before each write or edit of a matching file; a call, failure or reply mark otherwise brings the memory after the call,
+the failure or the reply, so Claude can correct the mistake but not prevent it. A condition brings the memory by what
+it carries: its index line from the next session start, `/clear` or compaction when it is delivered at index, and its
+marks as above. Nothing changes until you answer. The
 moment is added beside the one the memory already has, never in place of it, and the answer says both. A **rule** is
 offered another moment too, but only at moments at which it still loads, and Claude Code asks you to confirm it with
 what it affects.
