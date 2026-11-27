@@ -46305,7 +46305,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.16.1",
+  version: "0.16.2",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -47770,6 +47770,9 @@ function trackLines(conversation) {
 function onceResetNotice(reason) {
   return `WARNING: NeoCortex could not reset which rules for a kind of file this conversation already has (${truncateReason(reason, 120)}), so such a rule may not arrive again at a read or a search in this conversation. Say so before answering.`;
 }
+function onceResetReserve(section) {
+  return (section === "" ? "## Notices\n" : "\n").length + `- ${onceResetNotice("x".repeat(120))}`.length;
+}
 var NO_PLACE = { firstVisit: false, unsorted: false };
 async function loadPlace(places, session) {
   const place = session.place;
@@ -47897,9 +47900,6 @@ function filesWords(memory) {
   if (files.state !== "judged") return "";
   return `, when the call names a file matching ${files.usable.map((pattern) => `"${shownCut(pattern, 80)}"`).join(" or ")}`;
 }
-function indexParts(input2, budget = HOOK_CAP, options = NO_PLACE) {
-  return indexFill(input2, budget, options).parts;
-}
 function indexFill(input2, budget = HOOK_CAP, options = NO_PLACE) {
   const { projectKey, location, resolution, problems } = input2;
   const line = placeLine(options.place);
@@ -47911,12 +47911,12 @@ ${line}`}${track}`;
   const noticeSection = sectionOf(noticeLines(input2, options));
   const longestSection = (crowd) => sectionOf(noticeLines(input2, options.proposals === void 0 ? options : { ...options, proposals: LONGEST_PROPOSALS }, crowd));
   const roomNotices = longestSection(void 0);
+  const reserveIn = (section) => options.reserveOnceReset !== true || options.onceReset !== void 0 ? 0 : onceResetReserve(section);
   const left = [awaitingNotice(input2.awaiting ?? 0), leftBehindNotice(input2.leftBehind ?? [])].filter((line2) => line2 !== "").map((line2) => `- ${line2}`).join("\n");
-  const withLeft = (notices) => left === "" ? notices : notices === "" ? `## Notices
-${left}` : `${notices}
+  const passNotices = left === "" ? "" : `## Notices
 ${left}`;
   if (resolution.byId.size === 0 && problems.length === 0) {
-    return { parts: [[header, `No memories yet in ${location}.`, withLeft(noticeSection)].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0, arrivals: [[]] };
+    return { parts: [[header, `No memories yet in ${location}.`, noticeSection].filter((section) => section !== "").join("\n\n")], shortened: 0, unshown: 0, arrivals: [[]], notices: passNotices };
   }
   const headerOf = (part) => part === 1 ? header : `# NeoCortex \xB7 index part ${part} \xB7 project ${projectKey}`;
   const partCount = Math.min(options.parts ?? INDEX_PART_BUDGETS.length, INDEX_PART_BUDGETS.length);
@@ -47925,7 +47925,7 @@ ${left}`;
   const short = memories.map((m) => indexLine(m, true));
   const shortenableIndexes = partCount === 1 ? [] : memories.flatMap((m, i) => shortenable(m, full[i], short[i]) ? [i] : []).reverse();
   const fillWith = (whereNotices) => {
-    const roomOf2 = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? whereNotices.length : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
+    const roomOf2 = (part) => Math.min(INDEX_PART_BUDGETS[part - 1], budget) - headerOf(part).length - (part === 1 ? whereNotices.length + reserveIn(whereNotices) : 0) - INDEX_HEADING.length - MORE_LINE_RESERVE - SEPARATORS;
     const fill = (count2) => {
       const cut = new Set(shortenableIndexes.slice(0, count2));
       const parts = [[]];
@@ -47970,29 +47970,33 @@ ${left}`;
     }
     return result;
   };
-  const textOf = (parts, i, unshown, notices, madeRoom = 0) => {
+  const textOf = (parts, i, unshown, notices) => {
     const lines = parts[i];
     const sections = [headerOf(i + 1)];
     const later = parts.slice(i + 1).reduce((count2, part) => count2 + part.length, 0);
-    const moved = madeRoom > 0 ? [`${madeRoom} index ${madeRoom === 1 ? "memory" : "memories"} made room for the notice below; use search_memories.`] : [];
     const last = later > 0 ? [`${later} more in index part ${i + 2}; use search_memories if that part is missing.`] : i === parts.length - 1 && unshown > 0 ? [`${unshown} index memories are not in the start context; use search_memories.`] : [];
-    if (lines.length > 0 || moved.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...moved, ...last].join("\n"));
+    if (lines.length > 0 || last.length > 0) sections.push([INDEX_HEADING, ...lines, ...last].join("\n"));
     if (i === 0 && notices !== "") sections.push(notices);
     return sections.join("\n\n");
   };
   const render = ({ parts, unshown, shortened, arrivals }, notices) => {
     const texts = parts.map((_, i) => textOf(parts, i, unshown, notices));
-    if (left === "") return { parts: texts, shortened, unshown, arrivals };
+    if (partCount !== 1 || passNotices === "") return { parts: texts, shortened, unshown, arrivals, notices: partCount === 1 ? "" : passNotices };
     const cap = Math.min(INDEX_PART_BUDGETS[0], budget);
-    const first2 = [...parts[0]];
+    const kept = [...parts[0]];
     for (let moved = 0; ; moved += 1) {
-      const text = textOf([first2, ...parts.slice(1)], 0, unshown, withLeft(notices), moved);
+      const movedLine = moved > 0 ? [`${moved} index ${moved === 1 ? "memory" : "memories"} made room for the notice below; use search_memories.`] : [];
+      const sections = [headerOf(1)];
+      if (kept.length > 0 || movedLine.length > 0) sections.push([INDEX_HEADING, ...kept, ...movedLine].join("\n"));
+      if (notices !== "") sections.push(notices);
+      sections.push(passNotices);
+      const text = sections.join("\n\n");
       if (text.length <= cap) {
         texts[0] = text;
-        return { parts: texts, shortened, unshown: unshown + moved, arrivals: [arrivals[0].slice(0, first2.length), ...arrivals.slice(1)] };
+        return { parts: texts, shortened, unshown: unshown + moved, arrivals: [arrivals[0].slice(0, kept.length), ...arrivals.slice(1)], notices: "" };
       }
-      if (first2.length === 0) return { parts: texts, shortened, unshown, arrivals };
-      first2.pop();
+      if (kept.length === 0) return { parts: texts, shortened, unshown, arrivals, notices: "" };
+      kept.pop();
     }
   };
   const first = fillWith(roomNotices);
@@ -48004,8 +48008,8 @@ ${left}`;
 }
 function refreshContext(input2, place, proposals) {
   const { active, byId } = input2.resolution;
-  const index = indexParts(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true, proposals });
-  return [...index, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
+  const fill = indexFill(input2, HOOK_CAP, { place, firstVisit: true, unsorted: true, proposals });
+  return [...fill.parts, fill.notices, buildFull(["startup"], active, byId, Number.MAX_SAFE_INTEGER)].filter((t) => t !== "").join("\n\n");
 }
 var NO_FILE = { kind: "no-file" };
 var EVERY_EDIT = { kind: "class", matched: /* @__PURE__ */ new Set() };
@@ -49475,7 +49479,8 @@ function deliveryFor(command, event, input2, extra) {
   switch (command) {
     case "index": {
       const fill = indexMoment(event, input2, extra.place, extra.proposals, extra.onceReset, extra.conversation);
-      return { text: fill.parts[extra.part - 1] ?? "", arrived: fill.arrivals[extra.part - 1] ?? [], ...extra.part === 1 ? { parts: fill.parts.length } : {} };
+      const carried = carriesPassNotices(command, event, extra.part) === true && fill.notices !== "" ? [fill.parts[extra.part - 1] ?? `# NeoCortex \xB7 index part ${extra.part} \xB7 project ${input2.projectKey}`, fill.notices].filter((text) => text !== "").join("\n\n") : fill.parts[extra.part - 1] ?? "";
+      return { text: carried, arrived: fill.arrivals[extra.part - 1] ?? [], ...extra.part === 1 ? { parts: fill.parts.length } : {} };
     }
     case "full": {
       const fill = startupFull(input2);
@@ -49560,8 +49565,12 @@ function editOf(file2, folder) {
 function startupFull(input2) {
   return fullParts(["startup"], input2.resolution.active, input2.resolution.byId, FULL_PART_BUDGETS, { problems: input2.problems });
 }
-function indexMoment(event, input2, place, proposals, onceReset, conversation) {
-  return indexFill(input2, HOOK_CAP, indexOptions("index", event, place, proposals, onceReset, conversation));
+function indexMoment(event, input2, place, proposals, onceReset, conversation, reserve) {
+  return indexFill(
+    input2,
+    HOOK_CAP,
+    { ...indexOptions("index", event, place, proposals, onceReset, conversation ?? input2.conversation), ...reserve === true ? { reserveOnceReset: true } : {} }
+  );
 }
 function indexOptions(command, event, place, proposals, onceReset, conversation) {
   if (place === null) throw new Error(`the place was not read for the ${command} moment`);
@@ -49582,6 +49591,10 @@ function indexOptions(command, event, place, proposals, onceReset, conversation)
 function eventsDelivering(command, event) {
   return event === "SessionStart" && command === "index" ? INDEX_PART_BUDGETS.length : 1;
 }
+function carriesPassNotices(command, event, part) {
+  if (command !== "index" && command !== "startup") return void 0;
+  return part === eventsDelivering(command, event);
+}
 function hookOutput(event, text, systemMessage = "", deny = false) {
   if (text === "" && systemMessage === "") return "";
   return hookJson({
@@ -49591,8 +49604,12 @@ function hookOutput(event, text, systemMessage = "", deny = false) {
 }
 function systemMessageFor(command, event, input2, part, place) {
   const firstPart = command === "index" && part === 1 || command === "startup";
-  if (event !== "SessionStart" || !firstPart) return "";
-  return [updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), awaitingWarning(input2.awaiting ?? 0), recentRulesWarning(input2.recentRules)].filter((text) => text !== "").join(" ");
+  if (event !== "SessionStart") return "";
+  const carries = carriesPassNotices(command, event, part) === true;
+  const parts = [];
+  if (firstPart) parts.push(updateWarning(input2.problems), place === null ? "" : placeUpdateWarning(place), recentRulesWarning(input2.recentRules));
+  if (carries) parts.push(awaitingWarning(input2.awaiting ?? 0));
+  return parts.filter((text) => text !== "").join(" ");
 }
 
 // src/dream/finder.ts
@@ -49944,7 +49961,7 @@ function movableLines(memories) {
     (a, b) => Number(b.moment) - Number(a.moment) || Number(a.memory.scope.kind === "user") - Number(b.memory.scope.kind === "user") || b.line - a.line || compareText3(a.memory.id, b.memory.id)
   );
 }
-function indexBudget(input2, place, plans) {
+function indexBudget(input2, place, plans, reserveOnceReset = false) {
   const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
   const memories = input2.resolution.active.filter((memory) => memory.delivery === "index");
   const moves = movableLines(memories);
@@ -49962,26 +49979,26 @@ function indexBudget(input2, place, plans) {
   });
   if (memories.length === 0) return budgetOf(0, 0, BUDGET_TEXT.noIndex);
   const fitsToday = today.unshown === 0 && today.shortened === 0;
-  const pointerOf = () => (plans ?? indexPlans(input2, place)).fitting.length > 0 ? BUDGET_TEXT.pointer : "";
+  const pointerOf = () => (plans ?? indexPlans(input2, place, reserveOnceReset)).fitting.length > 0 ? BUDGET_TEXT.pointer : "";
   if (moves.length === 0) {
     const blockers = blockersOf(memories);
     return fitsToday ? budgetOf(0, 0, BUDGET_TEXT.noneMayMove(blockers)) : budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockers, pointerOf()));
   }
   if (fitsToday) return budgetOf(0, 0, BUDGET_TEXT.fits);
   if (candidates.length === 0) return budgetOf(null, 0, BUDGET_TEXT.noneMayMoveOver(blockersOf(memories), pointerOf()));
-  const fewest = fewestThatFits(input2, place, candidates);
+  const fewest = fewestThatFits(input2, place, candidates, reserveOnceReset);
   if (fewest === null) return budgetOf(null, 0, BUDGET_TEXT.tooShort(candidates.length, blockersOf(memories), pointerOf()));
   const moved = candidates.slice(0, fewest);
   const freed = freedBy(today.parts, moved);
   const userMoves = userScopeOf(moved);
-  if (userMoves > 0 && (plans ?? indexPlans(input2, place)).fitting.some((plan) => plan.elsewhere === 0)) {
+  if (userMoves > 0 && (plans ?? indexPlans(input2, place, reserveOnceReset)).fitting.some((plan) => plan.elsewhere === 0)) {
     return budgetOf(fewest, freed, BUDGET_TEXT.defer(fewest, freed, userMoves));
   }
   return budgetOf(fewest, freed, BUDGET_TEXT.move(fewest, freed, listed3.length, others, userMoves));
 }
-function fewestThatFits(input2, place, candidates) {
+function fewestThatFits(input2, place, candidates, reserve) {
   const fits = (moves) => {
-    const fill = fillAfter(input2, place, candidates.slice(0, moves));
+    const fill = fillAfter(input2, place, candidates.slice(0, moves), reserve);
     return fill.unshown === 0 && fill.shortened === 0;
   };
   if (!fits(candidates.length)) return null;
@@ -49994,12 +50011,23 @@ function fewestThatFits(input2, place, candidates) {
   }
   return high;
 }
-function startFill(input2, place, active) {
-  return indexMoment("SessionStart", { ...input2, resolution: { ...input2.resolution, active } }, place, NO_PROPOSALS);
+function startFill(input2, place, active, reserve = false) {
+  return indexMoment("SessionStart", { ...input2, resolution: { ...input2.resolution, active } }, place, NO_PROPOSALS, void 0, void 0, reserve);
 }
-function fillAfter(input2, place, moves) {
+function plannedActive(input2, cut, moves, order) {
+  const newest = input2.resolution.active.reduce((latest, memory) => memory.updated > latest ? memory.updated : latest, "");
+  const stamp = new Map(order.map((id, i) => [id, `${newest}${String(i + 1).padStart(4, "0")}`]));
+  return input2.resolution.active.map((memory) => {
+    if (moves.has(memory.id)) return { ...memory, delivery: "on-demand" };
+    const summary = cut.get(memory.id);
+    const updated = stamp.get(memory.id);
+    if (summary === void 0 && updated === void 0) return memory;
+    return { ...memory, ...summary === void 0 ? {} : { summary }, ...updated === void 0 ? {} : { updated } };
+  }).sort(compareForContext);
+}
+function fillAfter(input2, place, moves, reserve) {
   const moved = new Set(moves.map((memory) => memory.id));
-  return startFill(input2, place, input2.resolution.active.map((memory) => moved.has(memory.id) ? { ...memory, delivery: "on-demand" } : memory));
+  return startFill(input2, place, input2.resolution.active.map((memory) => moved.has(memory.id) ? { ...memory, delivery: "on-demand" } : memory), reserve);
 }
 function freedBy(parts, moves) {
   const shown2 = new Set(parts.flatMap((part) => part.split("\n")));
@@ -50062,7 +50090,8 @@ function describePlan(plan) {
     const after = lengthSpan(plan.shorten.map((one) => one.summaryLength.after));
     const tail = "with get_memory for its revision and then update_memory with the shorter summary (the summary it has now stays readable with the memory, so it can be put back by hand)";
     parts.push(
-      plan.shorten.length === 1 ? `rewrite one summary of ${today} so that ${after.text} of it ${after.one ? "remains" : "remain"} (its summaryLength.after), ${tail}` : `rewrite ${plan.shorten.length} summaries of ${today} so that ${after.text} of each ${after.one ? "remains" : "remain"} (each memory's summaryLength.after), each ${tail}`
+      plan.shorten.length === 1 ? `rewrite one summary of ${today} so that at most ${after.text} of it ${after.one ? "remains" : "remain"} (its summaryLength.after), ${tail}` : `rewrite ${plan.shorten.length} summaries of ${today} so that at most ${after.text} of each ${after.one ? "remains" : "remain"} (each memory's summaryLength.after), each ${tail}`,
+      `make these ${plan.shorten.length === 1 ? "" : `${plan.shorten.length} `}rewrites in the order this plan lists them, one call each, because each call makes its memory the newest of its rank in the start`
     );
   }
   if (plan.demote.length > 0) {
@@ -50073,7 +50102,7 @@ function describePlan(plan) {
   return parts.join("; ");
 }
 var INDEX_PLANS_SHOWN = 3;
-function indexPlans(input2, place) {
+function indexPlans(input2, place, reserveOnceReset = false) {
   const today = indexMoment("SessionStart", input2, place, NO_PROPOSALS);
   const charactersOf = (fill) => fill.parts.reduce((sum, part) => sum + part.length, 0);
   const todayParts = { characters: charactersOf(today), shortened: today.shortened, unshown: today.unshown };
@@ -50093,7 +50122,7 @@ function indexPlans(input2, place) {
     if (k + j === 0) return null;
     const rewrite = rewrites.slice(0, k).map((one) => one.memory);
     const moved = movesFor(rewrite).slice(0, j);
-    const { fill, priced } = fillPlanned(input2, place, cap, rewrite, moved);
+    const { fill, priced } = fillPlanned(input2, place, cap, rewrite, moved, reserveOnceReset);
     if (fill.unshown > 0 || fill.shortened > 0) return null;
     if (priced.some(({ summary }) => summary.length < SUMMARY_FLOOR)) return null;
     return {
@@ -50135,7 +50164,7 @@ function indexPlans(input2, place) {
     (other) => other.plan !== plan && other.plan.changes < plan.changes && other.plan.elsewhere <= plan.elsewhere && other.plan.demote.length <= plan.demote.length
   );
   if (found.length === 0) {
-    const fallback = beyondTheCap(input2, place, rewrites, moves, charactersOf);
+    const fallback = beyondTheCap(input2, place, rewrites, moves, charactersOf, reserveOnceReset);
     if (fallback !== null) found.push({ plan: fallback, longestCut: () => fallback });
   }
   const undominated = found.filter(({ plan }) => !dominated(plan));
@@ -50147,7 +50176,7 @@ function indexPlans(input2, place) {
     next: ranked.length === 0 ? PLAN_TEXT.nothing(blockersOf(memories)) : PLAN_TEXT.cheapest(ranked[0], ranked.length - 1) + PLAN_TEXT.elsewhere(ranked[0])
   };
 }
-function beyondTheCap(input2, place, rewrites, moves, charactersOf) {
+function beyondTheCap(input2, place, rewrites, moves, charactersOf, reserveOnceReset = false) {
   const rewritePool = rewrites.filter((one) => !one.moment).map((one) => one.memory);
   const movePool = moves.map((one) => one.memory);
   const floorRoom = (memory) => {
@@ -50163,12 +50192,8 @@ function beyondTheCap(input2, place, rewrites, moves, charactersOf) {
     const moved = movePool.slice(0, j2);
     const cut = new Map(rewrite.map((memory) => [memory.id, cutAt(memory, extra)]));
     const movedIds = new Set(moved.map((memory) => memory.id));
-    const active = input2.resolution.active.map((memory) => {
-      if (movedIds.has(memory.id)) return { ...memory, delivery: "on-demand" };
-      const summary = cut.get(memory.id);
-      return summary === void 0 ? memory : { ...memory, summary };
-    });
-    const fill = startFill(input2, place, active);
+    const active = plannedActive(input2, cut, movedIds, rewrite.map((memory) => memory.id));
+    const fill = startFill(input2, place, active, reserveOnceReset);
     if (fill.unshown > 0 || fill.shortened > 0) return null;
     const priced = rewrite.map((memory) => ({ memory, summary: cut.get(memory.id) }));
     if (priced.some(({ summary }) => summary.length < SUMMARY_FLOOR)) return null;
@@ -50233,7 +50258,7 @@ function floorCap(rewrites) {
 function keepsFloor(memory) {
   return shownText(memory.summary).length > SUMMARY_FLOOR;
 }
-function fillPlanned(input2, place, cap, rewrites, moves) {
+function fillPlanned(input2, place, cap, rewrites, moves, reserve) {
   const moved = new Set(moves.map((memory) => memory.id));
   const priced = rewrites.map((memory) => {
     const shown2 = shownText(memory.summary);
@@ -50241,12 +50266,7 @@ function fillPlanned(input2, place, cap, rewrites, moves) {
     return { memory, summary: shown2.slice(0, Math.max(1, room)).trimEnd() };
   });
   const cut = new Map(priced.map(({ memory, summary }) => [memory.id, summary]));
-  const active = input2.resolution.active.map((memory) => {
-    if (moved.has(memory.id)) return { ...memory, delivery: "on-demand" };
-    const summary = cut.get(memory.id);
-    return summary === void 0 ? memory : { ...memory, summary };
-  });
-  return { fill: startFill(input2, place, active), priced };
+  return { fill: startFill(input2, place, plannedActive(input2, cut, moved, rewrites.map((memory) => memory.id)), reserve), priced };
 }
 
 // src/dream/visibility.ts
@@ -51380,6 +51400,7 @@ function sameLines(a, b) {
 
 // src/server.ts
 var TRACK_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+var LONGEST_TRACK_ID = "x".repeat(128);
 var TRACK_WRITE_MS = 500;
 var TRACK_LOST_LINE = "NOTE: NeoCortex could not note this delivery in its track record, so memories_in_play will report some deliveries of this conversation as unknown.";
 var IN_PLAY_SCOPE = "This names what NeoCortex delivered into this conversation, not memories Claude fetched itself with get_memory or search_memories.";
@@ -51718,9 +51739,24 @@ function createServer(deps) {
   const newId = deps.newId ?? randomUUID2;
   const asked = new AskedMap(now);
   let conversation = { session: "", agent: "" };
+  let sawHook = false;
   const noteConversation = (session, agent) => {
+    sawHook = true;
     const seen2 = given(session);
     if (seen2 !== void 0) conversation = { session: seen2, agent: given(agent) ?? "" };
+  };
+  const startConversation = (ids) => {
+    if (deps.track === void 0) return void 0;
+    const agent = given(ids.agent) ?? "";
+    const session = given(ids.session);
+    if (session === void 0 || !TRACK_ID_RE.test(session) || agent !== "" && !TRACK_ID_RE.test(agent)) return void 0;
+    if (agent === "" && ids.event === "SubagentStart") return void 0;
+    return agent === "" ? session : `${session}/${agent}`;
+  };
+  const pricedConversation = () => {
+    if (deps.track === void 0) return void 0;
+    if (!sawHook) return LONGEST_TRACK_ID;
+    return startConversation({ session: conversation.session === "" ? void 0 : conversation.session, agent: "", event: "SessionStart" });
   };
   const hereNow = () => deps.here !== void 0 ? Promise.resolve(deps.here) : readHere();
   const hereFrom = (read2) => {
@@ -52368,12 +52404,18 @@ ${TRACK_LOST_LINE}`;
       const at = now();
       const place = await loadPlace(deps.places, deps.session);
       const loaded = await reader.load(visibleScopes(deps.session));
-      const input2 = deliveryOf(loaded, reader.location, deps.session, at, CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
+      const base = deliveryOf(loaded, reader.location, deps.session, at, CURRENT_FORMAT, deps.here ?? hereFrom(place.read));
+      const priced = pricedConversation();
+      const input2 = {
+        ...base,
+        ...priced === void 0 ? {} : { conversation: priced }
+      };
       const revisions = new Map(loaded.memories.map((stored) => [stored.memory.id, stored.revision]));
       const measures = placeMeasures(input2, place);
       const pairs = nearPairs(input2.resolution.active);
-      const plans = indexPlans(input2, place);
-      const budget = indexBudget(input2, place, plans);
+      const reserveOnceReset = deps.once !== void 0;
+      const plans = indexPlans(input2, place, reserveOnceReset);
+      const budget = indexBudget(input2, place, plans, reserveOnceReset);
       let dream;
       try {
         dream = await dreamReading();
@@ -52668,8 +52710,8 @@ ${TRACK_LOST_LINE}`;
         noteConversation(session, agent);
         const trackAgent = given(agent) ?? "";
         const trackSession = given(session);
-        const tracked = deps.track !== void 0 && trackSession !== void 0 && TRACK_ID_RE.test(trackSession) && (trackAgent === "" ? event !== "SubagentStart" : TRACK_ID_RE.test(trackAgent)) ? { session: trackSession, agent: trackAgent } : void 0;
-        const conversation2 = tracked === void 0 ? void 0 : tracked.agent === "" ? tracked.session : `${tracked.session}/${tracked.agent}`;
+        const conversation2 = startConversation({ session: trackSession, agent: trackAgent, event });
+        const tracked = conversation2 === void 0 ? void 0 : { session: trackSession, agent: trackAgent };
         const startPart = moment === "index" || moment === "full" || moment === "startup";
         const firstStartPart = moment === "index" && part === 1 || moment === "startup";
         if (deps.track !== void 0 && event === "SessionStart" && firstStartPart) {
@@ -52684,7 +52726,7 @@ ${TRACK_LOST_LINE}`;
         }
         const place = PLACE_MOMENTS.includes(moment) ? await visitPlace(deps.places, deps.session, now()) : null;
         const reuse = event !== "SessionStart";
-        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), PLACE_MOMENTS.includes(moment) && part === 1, reuse);
+        const { view, delivery } = await delivered(place === null ? await hereNow() : hereFrom(place.read), carriesPassNotices(moment, event, part) === true, reuse);
         const proposalNotice = event === "SessionStart" && PLACE_MOMENTS.includes(moment) ? await waitingNotice(view) : void 0;
         const edit = moment === "edit" ? editOf(file2, deps.placeDir) : void 0;
         const named = moment === "read" ? readOf(file2, deps.placeDir) : moment === "search" ? searchOf({ path, glob, type, pattern }, deps.placeDir) : void 0;

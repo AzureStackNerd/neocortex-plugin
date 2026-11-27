@@ -2,6 +2,22 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.2 - 2026-11-27
+
+- Fixed: the Dreamer's recommended plan now keeps its promise. Make its changes as it states them, in the order it
+  lists them, and your next session start shows every index summary, and the next report offers no further round.
+  The plan used to price the start without its first part's track-record and corrections lines, without the order its
+  own rewrites leave (each rewrite makes its memory the newest of its rank), and without room for the warning a failed
+  one-time reset adds, so lines stayed cut after a plan was applied. Its rewrite sentence now states each length as
+  the most a summary may keep and asks for the rewrites in the listed order; plans may name a few more changes than
+  before.
+- Fixed: the number of lines a session start says lost their summaries is now the number the Dreamer report gives for
+  that start. They disagreed by a few lines on any start that keeps a track record. The one exception is a start that
+  warns its one-time reset failed: that warning takes room the report cannot see.
+- Changed: the notices that memories await the upgrade or were left behind in another project no longer take index
+  room in the start's first part, where they pushed index lines out; they now come at the end of the start, in its
+  third part. While one shows, a start can reach 25,843 characters instead of 25,000.
+
 ## 0.16.1 - 2026-11-26
 
 - Fixed (live check only, no change to the plugin's behaviour): the therapy live check's stop path no longer fails a

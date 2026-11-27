@@ -26,7 +26,9 @@ nothing. Otherwise show the user, from its `place` (this place is its `project`)
 - **The start.** Its size (`start`, with `characters`, `indexNotShown`, `indexShortened`, `startupNotFit`) against its
   budget: whether it fits its budget, or how far over it is. With no index line here (an empty store, or every memory
   on demand), say no memory has to move. When it fits, say every index memory shows with its summary and no memory has
-  to move, and offer no move or rewrite.
+  to move, and offer no move or rewrite. `indexShortened` is the start's count, with one exception: a start that warns
+  its one-time reset failed carries that warning's room, which this report cannot see, so that start may show more
+  lines without their summary than `indexShortened` gives; say so rather than calling the number wrong.
 - **The cost at each moment:** `prompt` (`characters`, `questionCharacters`) and `edit` (`characters`).
 - **Near duplicates** (`nearDuplicates`: `pairs` counted, `shown` as pairs `a` and `b` with their `score`), by title.
 - **Repeats** in other places (`repeats`): each copy here with how many other places hold one (`otherPlaces`), counted
@@ -130,10 +132,11 @@ said and passed.
 - **A rewrite** (an entry under `shorten`): show the summary today and a shorter one you propose, of at least 120
   characters and at most the entry's `summaryLength` `after` (its length `today` is the one now), with both lengths.
   It stays at the start with that summary; the summary it has now stays readable with the memory afterwards, so it can
-  be put back by hand. For a user
-  memory every other place shows the shorter summary too. On yes: `update_memory` with `update_memory.summary` and the
-  entry's `revision` as `update_memory.revision`. When the user gives a summary of their own, show it back and write
-  it as given; when it is longer than `after`, say the start may no longer fit.
+  be put back by hand. For a user memory every other place shows the shorter summary too. On yes: `update_memory` with
+  `update_memory.summary` and the entry's `revision` as `update_memory.revision`. When the user gives a summary of their
+  own, show it back and write it as given; when it is longer than `after`, say the start may no longer fit. Make the
+  plan's rewrites in the order the plan lists them, one call each: each call makes its memory the newest of its rank in
+  the start, and the plan was priced on that order.
 
 When the user says no, nothing changes for that memory: say the plan's other changes no longer take the start under
 its budget on their own, and go on with the next. A change declined in this walk is not offered again in it.
