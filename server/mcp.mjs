@@ -46305,7 +46305,7 @@ var EMPTY_COMPLETION_RESULT = {
 // package.json
 var package_default = {
   name: "neocortex",
-  version: "0.16.5",
+  version: "0.16.6",
   private: true,
   license: "UNLICENSED",
   description: "Central memory for Claude Code: an MCP server and hook commands over memory files, delivering each memory at its own moment.",
@@ -50920,30 +50920,30 @@ function parseProposalFile(text) {
 }
 
 // src/instructions.ts
-var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save on your own initiative, unasked, and keep it correct.
+var INSTRUCTIONS = `NeoCortex is the user's memory across sessions, projects and machines. Save on your own initiative, unasked, keeping it correct.
 
 When to save:
-- feedback: the user corrects you or confirms a non-obvious approach. Save the rule and why, so it does not recur.
-- user: the user's role, preferences, way of working.
-- context: decisions, constraints and goals of ongoing work that the code and git history do not show. Make dates absolute.
+- feedback: the user corrects you or confirms a non-obvious approach; save the rule and why, so it does not recur.
+- user: their role, preferences, ways of working.
+- context: decisions, constraints and goals of ongoing work the code and git history do not show; dates absolute.
 - reference: where to find things outside the repo (URLs, dashboards, tickets, folders).
 
 Do not save: what the repository records (code, docs, git history, CLAUDE.md), progress or next steps of a session (those go only into a handoff memory, labelled handoff, when the session is handed off), secrets or tokens, or anything that only matters here.
 
 How to save:
-1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When a memory already covers it, use update_memory rather than saving a duplicate; when the new one replaces an old decision everywhere, set supersedes.
-2. One rule per memory. The summary is the rule in one sentence of at most 300 characters. It loads at every start of an index memory, so acting on it alone must be right.
-3. why is required: the reason or incident. userWords: the user's words. The body: the detail.
+1. Call search_memories first. In any search, use the user's own words; each must match, so one of yours hides memories. Only if that finds too little, swap one of theirs for a synonym or broader word; say which. When one covers it, use update_memory instead of a duplicate; when the new one replaces an old decision everywhere, set supersedes.
+2. One rule per memory. The summary is the rule in one sentence, at most 300 characters; it loads at every start of an index memory, so acting on it alone must be right.
+3. why is required: the reason or incident. userWords: the user's words. body: the detail.
 4. Labels: exactly one of feedback, user, context or reference, plus topic labels. Call list_labels, reuse a label, never invent a near-duplicate.
-5. Use scope project when it only applies here, scope user when everywhere. A memory about a failure takes failure: {tool, pattern}; one about a call's input callInput: {tool, pattern}.
-6. delivery: index is the default, for a memory that must fire on its own without being asked for. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving a memory to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
-7. When a memory is wrong or outdated, update it. Delete only with the user's agreement.
+5. Use scope project when it only applies here, scope user when everywhere. A user-scope save naming this place or its parts is refused; use scope project. A memory about a failure takes failure: {tool, pattern}; one about a call's input callInput: {tool, pattern}.
+6. delivery: index is the default, for a memory that must fire on its own without asking. Choose on-demand for reference memories and for any memory whose summary alone is not actionable; that choice needs no one's confirmation. Moving one to on-demand is the user's call. Handoffs stay at index, because the next session starts from them. search_memories and get_memory reach an on-demand memory. startup only for rules that must be read in full at every start. prompt, question, subagent and edit only when the user asks for one; a rule about one kind of file is edit with appliesWhen.files. A rule, a memory that is enforced or delivered at startup, prompt, question, subagent or edit, and any save, change, delete or label change that makes a rule start or stop loading, goes only through the rule tool its refusal names, which the user confirms: call it only for a change the user asked for, with its affects.
+7. When a memory is wrong or outdated, update it; delete only with the user's agreement.
 
 Context labels: in a repository or a folder outside one, the index header shows its context labels, each marked proposed until the user confirms it. Change them with set_context_labels, always with the complete list; set confirmed true only for a label the user confirmed.
 
 When two memories differ without contradicting, follow the more specific one. When two contradict and neither is more specific, name both and ask the user which leads, then record the answer with update_memory. When you save or promote a shared memory, propose its condition and show it in your answer: a context label when it belongs to one kind of place, inRepo when it fits code work alone.
 
-At session start the index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before you act on a memory whose detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
+The index shows "[scope] title \u2014 summary \xB7 id". Call get_memory before acting where detail matters. A line whose summary shows as \u2026 has no summary at this start, so call get_memory with its id before you act on it. update_memory and delete_memory need the revision from the last response that showed the memory; read again only when a write is refused because the revision changed, and call get_memory first for a memory you know only from the index.
 
 When a start says its index is crowded, offer what dream_report prices as movable; on the user's yes call update_memory with delivery on-demand, one per call.`;
 
@@ -52158,7 +52158,15 @@ ${TRACK_LOST_LINE}`;
       // its question is the refusal's, and its answer arrives as an entry of userWords (How lines 5 and 6).
       ...keptWords(args2.userWords) === void 0 ? {} : { userWords: keptWords(args2.userWords) }
     };
-    const errors = [...conditionProblems(memory, void 0, resolution.current, memories), ...markProblems(memory, void 0, true, memories), ...unusableMarkProblems(args2), ...validateLinks(memory, memories)];
+    const leak = memory.scope.kind === "user" ? await placeLeak(memoryText(memory)) : void 0;
+    if (leak === "unknown") return fail(SAVE_TEXT.unreadable);
+    const errors = [
+      ...leak === void 0 ? [] : [SAVE_TEXT.names(leak)],
+      ...conditionProblems(memory, void 0, resolution.current, memories),
+      ...markProblems(memory, void 0, true, memories),
+      ...unusableMarkProblems(args2),
+      ...validateLinks(memory, memories)
+    ];
     if (errors.length > 0) return fail(errors.join("; "));
     let revision;
     try {
@@ -52216,8 +52224,15 @@ ${TRACK_LOST_LINE}`;
     const own2 = session.kind === "project" ? [{ labels: [], organisation: session.organisation, repo: session.repo }] : [];
     const { read: read2 } = await deps.places.readPlace(placeRefOf(session));
     if (read2.state === "unreadable") return void 0;
+    if (read2.state === "none" && read2.pending === true) return void 0;
     const stored = read2.state === "stored" ? [{ labels: read2.stored.record.labels, organisation: read2.stored.record.organisation, repo: read2.stored.record.repo }] : [];
     return [...stored, ...own2];
+  };
+  const placeLeak = async (text) => {
+    const places = await placeNames();
+    if (places === void 0) return "unknown";
+    const kinds = leakedKinds(text, places);
+    return kinds.length === 0 ? void 0 : kinds;
   };
   const moveProblem = async (memory, previous, args2, memories) => {
     if (!(previous.scope.kind === "project" && memory.scope.kind === "user")) return void 0;
@@ -52228,6 +52243,12 @@ ${TRACK_LOST_LINE}`;
     const others = Object.keys(args2).some((field) => field !== "id" && field !== "revision" && field !== "scope");
     const way = others && wayPasses({ ...memory, scope: previous.scope }, previous, memories);
     return MOVE_TEXT.names(kinds, way) + MOVE_TEXT.reworded;
+  };
+  const rewordProblem = async (memory, previous, args2) => {
+    if (!(previous.scope.kind === "user" && memory.scope.kind === "user")) return void 0;
+    const text = writtenText(args2, previous);
+    if (text === void 0) return void 0;
+    return placeLeak(text);
   };
   const updateCall = async (args2, confirmation) => {
     if (args2.reading !== void 0 && !asked.claimed(AskedMap.key(conversation.session, `update:${args2.id}`, args2.reading))) {
@@ -52285,7 +52306,10 @@ ${TRACK_LOST_LINE}`;
       if (over !== void 0) return fail(over);
     }
     const move2 = await moveProblem(memory, previous, args2, memories);
+    const reword = await rewordProblem(memory, previous, args2);
+    if (reword === "unknown") return fail(REWORD_TEXT.unreadable);
     const errors = [
+      ...reword === void 0 ? [] : [REWORD_TEXT.names(reword)],
       ...conditionProblems(memory, previous, resolution.current, memories),
       ...move2 === void 0 ? [] : [move2],
       ...markProblems(memory, previous),
@@ -53410,17 +53434,31 @@ var CHANGE_TEXT = {
   staleDelete: (id, revision) => `conflict: memory ${id} changed since revision ${revision} and was not deleted; "current" is the memory as it is now: show the user what changed and ask before you delete it with delete_memory and its revision`,
   gone: (id) => `memory ${id} was moved or deleted after it was read; nothing was changed. Call get_memory ${id} to see whether it still exists, and ask the user before saving it as a new memory`
 };
+var kindsPhrase = (kinds) => {
+  const words = kinds.map((kind) => kind === "label" ? "context label" : kind);
+  return words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+};
 var MOVE_TEXT = {
   /** The kinds as one phrase: "a context label", "a context label and an organisation", "a context label, an organisation and a repository". */
   names: (kinds, way) => {
-    const words = kinds.map((kind) => kind === "label" ? "context label" : kind);
-    const phrase = words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+    const phrase = kindsPhrase(kinds);
     return `scope: this memory names this place's ${phrase} as a word, in its title, summary, why, body, kept words or an earlier wording, and in user scope it would reach every project; nothing was changed, and it stays in this project` + (way ? "; to make this call's other changes, send it again without scope" : "");
   },
   /** How line 5's open point 2, settled 2026-11-25: the ending that names a way out that works on this call. */
   reworded: ". Rewording does not clear this: an earlier wording and the user's kept words stay with the memory, and only deleting it removes them; to share the rule in every project, ask the user before saving it as a new memory in user scope, worded without this place's names",
   /** How line 5's open point 1, settled 2026-11-25: a place that cannot be read is refused, failing closed (memory ea98b6b1). */
   unreadable: `scope: this place's context labels cannot be read now, so whether this memory names one cannot be checked; nothing was changed, and it stays in this project`
+};
+var SAVE_TEXT = {
+  /** The kinds as one phrase, never the name (AC1): a save words its own way out, which is not a reword of a stored record. */
+  names: (kinds) => `scope: this memory names this place's ${kindsPhrase(kinds)} as a word, in its title, summary, why, body or kept words, and in user scope it would reach every project; nothing was saved. Save it in this project instead (scope project), or send it again with its title, summary, why and body worded without this place's names and without kept words that name it` + (kinds.includes("label") ? "; a condition on that label does not clear it" : ""),
+  /** An unreadable place on a save: the move's answer says "it stays in this project", which a save never stored (How line 8). */
+  unreadable: `scope: this place's context labels cannot be read now, so whether this memory names one cannot be checked; nothing was saved. Save it in this project instead (scope project)`
+};
+var REWORD_TEXT = {
+  names: (kinds) => `scope: this change words this memory with this place's ${kindsPhrase(kinds)}, and in user scope it would reach every project; nothing was changed. Send this change again without those words, or with its title, summary, why and body worded without them`,
+  /** The move's "it stays in this project" is false for a memory already in user scope (How line 14). */
+  unreadable: `scope: this place's context labels cannot be read now, so whether this change's words name one cannot be checked; nothing was changed. Send this change again without new words in its title, summary, why, body or kept words`
 };
 function stale(error62, base, resolution) {
   return { content: [{ type: "text", text: JSON.stringify({ error: error62, current: shownMemory(base, resolution) }) }], isError: true };
@@ -53839,6 +53877,23 @@ function joinedWords(stored, added) {
   return kept.length === 0 ? void 0 : kept;
 }
 var TRAIL_FIELDS = ["title", "summary", "why", "body"];
+function writtenText(args2, previous) {
+  const writes = (field) => args2[field] !== void 0 && args2[field] !== previous[field];
+  const held = previous.userWords ?? [];
+  const words = (keptWords(args2.userWords) ?? []).filter((entry) => !held.includes(entry));
+  const written = {
+    ...previous,
+    title: writes("title") ? args2.title : "",
+    summary: writes("summary") ? args2.summary : "",
+    why: writes("why") ? args2.why : "",
+    body: writes("body") ? args2.body : "",
+    // Only this call's new words: the stored ones are already in user scope, so a check over them would refuse a memory
+    // this fix never touched (S15).
+    userWords: words
+  };
+  const text = memoryText({ ...written, trail: [] });
+  return text.trim() === "" ? void 0 : text;
+}
 function trailedWords(previous, memory) {
   const changed = TRAIL_FIELDS.filter((field) => memory[field] !== previous[field]);
   if (changed.length === 0) return previous.trail;
@@ -54612,7 +54667,7 @@ var FileStore = class {
     try {
       text = await this.readSettled(path, this.readPlaceListed);
     } catch (error62) {
-      if (isNotFound(error62) && await isGone(path)) return { state: "none" };
+      if (isNotFound(error62) && await isGone(path)) return await this.freshTempLists(stem) ? { state: "none", pending: true } : { state: "none" };
       return { state: "unreadable", problem: { file: file2, reason: systemErrorCode(error62) ?? messageOf2(error62) } };
     }
     try {
@@ -54959,6 +55014,29 @@ var FileStore = class {
     } catch {
       return false;
     }
+  }
+  /**
+   * Whether a fresh temp file names this place's stem, read the way `placeFiles` reads one (#530 How line 10): a temp
+   * older than the write budget was left by a writer that stopped and names nothing.
+   *
+   * A listing that fails never turns a problem into absence (#530 fix round 1, F1). The folder being gone (ENOENT) means
+   * no temp can list, so the answer is false, as `placeFiles` reads a missing folder. Any other failure (EPERM, EBUSY,
+   * EMFILE, ...) means a temp may be there and could not be seen, so the answer is true: the read is pending and the
+   * caller refuses as unreadable, exactly as it does for a record it cannot read, rather than judging this place on the
+   * session's own remote alone.
+   */
+  async freshTempLists(stem) {
+    let names;
+    try {
+      names = await readdir3(join5(this.root, PLACES));
+    } catch (error62) {
+      return !isNotFound(error62);
+    }
+    for (const name of names) {
+      if (PLACE_TEMP_RE.exec(name)?.[1] !== stem) continue;
+      if (!await this.isStaleTemp(join5(this.root, PLACES, name))) return true;
+    }
+    return false;
   }
   /** Every scope that can hold a record: the user, then each project folder by key. A listing that fails is busy. */
   async scopesFor(id) {

@@ -2,6 +2,16 @@
 
 The sections up to 0.3.1 were written afterwards from the history.
 
+## 0.16.6 - 2026-11-28
+
+- Fixed: a memory saved straight into user scope, or a change to a memory already there, is now refused when its words
+  name this place's organisation, repository or context label, as a move to user scope already was; the refusal names
+  the kind of name, never the name, and says to save it in this project or word it without the name (#530). Any part of
+  a multi-part name counts on its own, so a place labelled `mcp-server` refuses a memory that says "server". When this
+  place's record cannot be read, the save, the move and a change that writes new words are refused too.
+- Fixed: a move to user scope is now also refused while another session is rewriting this place's record, where it
+  went through with the labels unchecked (#530).
+
 ## 0.16.5 - 2026-11-27
 
 - Fixed: a memory that is moving between project and user scope on this machine no longer goes missing from a session

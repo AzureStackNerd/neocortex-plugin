@@ -657,6 +657,9 @@ These are open and will be fixed in a later version:
   wrote to. They hold no memories; you can delete the empty ones.
 - A memory moved three times within one load (a few milliseconds) can be missing from that one load's answer; the next
   load finds it.
+- A session start that meets another session rewriting this place's record waits up to a quarter of a second for it;
+  if the rewrite takes longer, that start shows the place without its context labels, as a first visit. The next start
+  finds them.
 - While a memory moves between scopes, a load can rarely report it as a second copy ("same id as a memory in another
   folder"). It is the same memory, and deleting either one deletes it; a delete keeps it in the deleted area, where you
   can restore it by hand.
